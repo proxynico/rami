@@ -1,11 +1,24 @@
 use crate::model::{MemoryPressure, MemorySnapshot};
 use libc::{
-    c_void, host_statistics64, mach_msg_type_number_t, size_t, sysctlbyname, vm_page_size,
-    vm_statistics64, HOST_VM_INFO64, HOST_VM_INFO64_COUNT,
+    boolean_t, c_int, c_void, host_statistics64, mach_msg_type_number_t, size_t, sysctlbyname,
+    vm_page_size, vm_statistics64, HOST_VM_INFO64, HOST_VM_INFO64_COUNT,
 };
 use std::io;
-use std::mem::size_of;
-use std::ptr;
+use std::mem::{size_of, MaybeUninit};
+
+pub const VM_PRESSURE_NORMAL: i32 = 1;
+pub const VM_PRESSURE_WARN: i32 = 2;
+pub const VM_PRESSURE_CRITICAL: i32 = 4;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct XswUsage {
+    xsu_total: u64,
+    xsu_avail: u64,
+    xsu_used: u64,
+    xsu_pagesize: u32,
+    xsu_encrypted: boolean_t,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryCounts {
@@ -16,7 +29,21 @@ pub struct MemoryCounts {
     pub compressed_pages: u64,
 }
 
-pub fn snapshot_from_counts(counts: MemoryCounts) -> MemorySnapshot {
+pub fn pressure_from_raw(raw: i32) -> MemoryPressure {
+    if raw & VM_PRESSURE_CRITICAL != 0 {
+        MemoryPressure::High
+    } else if raw & VM_PRESSURE_WARN != 0 {
+        MemoryPressure::Elevated
+    } else {
+        MemoryPressure::Normal
+    }
+}
+
+pub fn snapshot_from_counts(
+    counts: MemoryCounts,
+    pressure: MemoryPressure,
+    swap_used_bytes: u64,
+) -> MemorySnapshot {
     let used_bytes =
         (counts.active_pages + counts.wired_pages + counts.compressed_pages) * counts.page_size;
 
@@ -32,8 +59,8 @@ pub fn snapshot_from_counts(counts: MemoryCounts) -> MemorySnapshot {
         used_bytes,
         total_bytes: counts.total_bytes,
         used_percent,
-        pressure: MemoryPressure::Normal,
-        swap_used_bytes: 0,
+        pressure,
+        swap_used_bytes,
     }
 }
 
@@ -88,28 +115,33 @@ impl MemorySampler {
         }
 
         validate_stats_count(count)?;
+        let pressure = read_pressure_level()?;
+        let swap_used_bytes = read_swap_used_bytes()?;
 
-        Ok(snapshot_from_counts(MemoryCounts {
-            total_bytes: self.total_bytes,
-            page_size: self.page_size,
-            active_pages: stats.active_count as u64,
-            wired_pages: stats.wire_count as u64,
-            compressed_pages: stats.compressor_page_count as u64,
-        }))
+        Ok(snapshot_from_counts(
+            MemoryCounts {
+                total_bytes: self.total_bytes,
+                page_size: self.page_size,
+                active_pages: stats.active_count as u64,
+                wired_pages: stats.wire_count as u64,
+                compressed_pages: stats.compressor_page_count as u64,
+            },
+            pressure,
+            swap_used_bytes,
+        ))
     }
 }
 
-fn total_memory_bytes() -> io::Result<u64> {
-    let mut value: u64 = 0;
-    let mut size = size_of::<u64>() as size_t;
-    let name = b"hw.memsize\0";
+fn read_sysctl_value<T: Copy>(name: &[u8]) -> io::Result<T> {
+    let mut value = MaybeUninit::<T>::uninit();
+    let mut size = size_of::<T>() as size_t;
 
     let rc = unsafe {
         sysctlbyname(
             name.as_ptr() as *const i8,
-            &mut value as *mut _ as *mut c_void,
+            value.as_mut_ptr() as *mut c_void,
             &mut size,
-            ptr::null_mut(),
+            std::ptr::null_mut(),
             0,
         )
     };
@@ -118,7 +150,21 @@ fn total_memory_bytes() -> io::Result<u64> {
         return Err(io::Error::last_os_error());
     }
 
-    Ok(value)
+    Ok(unsafe { value.assume_init() })
+}
+
+fn read_pressure_level() -> io::Result<MemoryPressure> {
+    let raw: c_int = read_sysctl_value(b"kern.memorystatus_vm_pressure_level\0")?;
+    Ok(pressure_from_raw(raw))
+}
+
+fn read_swap_used_bytes() -> io::Result<u64> {
+    let usage: XswUsage = read_sysctl_value(b"vm.swapusage\0")?;
+    Ok(usage.xsu_used)
+}
+
+fn total_memory_bytes() -> io::Result<u64> {
+    read_sysctl_value(b"hw.memsize\0")
 }
 
 fn page_size_bytes() -> io::Result<u64> {
