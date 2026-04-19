@@ -1,0 +1,47 @@
+[package]
+name = "rami"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rami"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rami"
+path = "src/main.rs"
+
+[dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = [
+  "NSApplication",
+  "NSAttributedString",
+  "NSButton",
+  "NSControl",
+  "NSImage",
+  "NSMenu",
+  "NSMenuItem",
+  "NSResponder",
+  "NSStatusBar",
+  "NSStatusBarButton",
+  "NSStatusItem",
+  "NSView",
+  "NSWorkspace",
+  "NSTextAttachment",
+] }
+objc2-foundation = { version = "0.3", features = [
+  "NSDictionary",
+  "NSAttributedString",
+  "NSObject",
+  "NSString",
+  "NSTimer",
+  "NSNotification",
+] }
+mach2 = "0.4"
+libc = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
