@@ -9,31 +9,33 @@ pub struct TrayController {
 }
 
 impl TrayController {
-    pub fn new() -> Self {
+    pub fn new(mtm: MainThreadMarker) -> Self {
         let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
         let controller = Self { status_item };
-        controller.set_label(&placeholder_text());
-        controller.set_menu_rows(&DropdownRows {
+        controller.set_label(&placeholder_text(), mtm);
+        controller.set_menu_rows(
+            &DropdownRows {
             ram_used: "RAM Used: 0.0 GB".to_string(),
             ram_total: "RAM Total: 0.0 GB".to_string(),
             temperature: None,
             refresh: "Refresh".to_string(),
             quit: "Quit".to_string(),
-        });
+            },
+            mtm,
+        );
         controller
     }
 
-    pub fn set_snapshot(&self, snapshot: MemorySnapshot) {
-        self.set_label(&menu_bar_text(snapshot.used_percent));
-        self.set_menu_rows(&dropdown_rows(snapshot, None));
+    pub fn set_snapshot(&self, snapshot: MemorySnapshot, mtm: MainThreadMarker) {
+        self.set_label(&menu_bar_text(snapshot.used_percent), mtm);
+        self.set_menu_rows(&dropdown_rows(snapshot, None), mtm);
     }
 
-    pub fn set_placeholder(&self) {
-        self.set_label(&placeholder_text());
+    pub fn set_placeholder(&self, mtm: MainThreadMarker) {
+        self.set_label(&placeholder_text(), mtm);
     }
 
-    fn set_label(&self, text: &str) {
-        let mtm = MainThreadMarker::new().expect("tray label must be updated on the main thread");
+    fn set_label(&self, text: &str, mtm: MainThreadMarker) {
         if let Some(button) = self.status_item.button(mtm) {
             let full = format!("{text} ▣");
             let title = NSString::from_str(&full);
@@ -41,8 +43,7 @@ impl TrayController {
         }
     }
 
-    fn set_menu_rows(&self, rows: &DropdownRows) {
-        let mtm = MainThreadMarker::new().expect("tray menu must be updated on the main thread");
+    fn set_menu_rows(&self, rows: &DropdownRows, mtm: MainThreadMarker) {
         let menu = NSMenu::new(mtm);
         let empty = NSString::from_str("");
         let used = unsafe {
@@ -53,6 +54,7 @@ impl TrayController {
                 &empty,
             )
         };
+        used.setEnabled(false);
         let total = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
@@ -61,6 +63,7 @@ impl TrayController {
                 &empty,
             )
         };
+        total.setEnabled(false);
         let quit = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
