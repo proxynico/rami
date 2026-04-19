@@ -26,8 +26,11 @@ fn pressure_text(pressure: MemoryPressure) -> &'static str {
 
 pub fn dropdown_rows(snapshot: MemorySnapshot) -> DropdownRows {
     DropdownRows {
-        ram_used: format!("RAM Used: {}", gb_text(snapshot.used_bytes)),
-        ram_total: format!("RAM Total: {}", gb_text(snapshot.total_bytes)),
+        ram_summary: format!(
+            "RAM: {} of {}",
+            gb_text(snapshot.used_bytes),
+            gb_text(snapshot.total_bytes)
+        ),
         memory_pressure: format!("Memory Pressure: {}", pressure_text(snapshot.pressure)),
         swap_used: format!("Swap Used: {}", gb_text(snapshot.swap_used_bytes)),
         refresh: "Refresh".to_string(),
@@ -37,8 +40,7 @@ pub fn dropdown_rows(snapshot: MemorySnapshot) -> DropdownRows {
 
 pub fn placeholder_dropdown_rows() -> DropdownRows {
     DropdownRows {
-        ram_used: "RAM Used: 0.0 GB".to_string(),
-        ram_total: "RAM Total: 0.0 GB".to_string(),
+        ram_summary: "RAM: 0.0 GB of 0.0 GB".to_string(),
         memory_pressure: "Memory Pressure: Normal".to_string(),
         swap_used: "Swap Used: 0.0 GB".to_string(),
         refresh: "Refresh".to_string(),

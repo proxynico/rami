@@ -18,8 +18,7 @@ fn placeholder_is_double_dash_percent() {
 fn placeholder_dropdown_rows_match_the_v2_menu_shape() {
     let rows = placeholder_dropdown_rows();
 
-    assert_eq!(rows.ram_used, "RAM Used: 0.0 GB");
-    assert_eq!(rows.ram_total, "RAM Total: 0.0 GB");
+    assert_eq!(rows.ram_summary, "RAM: 0.0 GB of 0.0 GB");
     assert_eq!(rows.memory_pressure, "Memory Pressure: Normal");
     assert_eq!(rows.swap_used, "Swap Used: 0.0 GB");
 }
@@ -57,8 +56,7 @@ fn dropdown_rows_include_pressure_and_swap_usage() {
 
     let rows = dropdown_rows(snapshot);
 
-    assert_eq!(rows.ram_used, "RAM Used: 9.0 GB");
-    assert_eq!(rows.ram_total, "RAM Total: 17.2 GB");
+    assert_eq!(rows.ram_summary, "RAM: 9.0 GB of 17.2 GB");
     assert_eq!(rows.memory_pressure, "Memory Pressure: Elevated");
     assert_eq!(rows.swap_used, "Swap Used: 4.4 GB");
     assert_eq!(rows.refresh, "Refresh");

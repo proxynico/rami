@@ -25,10 +25,9 @@ enum MenuEntry<'a> {
     Quit(&'a str),
 }
 
-fn menu_entries(rows: &DropdownRows, launch_at_login_status: LaunchAtLoginStatus) -> [MenuEntry<'_>; 9] {
+fn menu_entries(rows: &DropdownRows, launch_at_login_status: LaunchAtLoginStatus) -> [MenuEntry<'_>; 8] {
     [
-        MenuEntry::Disabled(&rows.ram_used),
-        MenuEntry::Disabled(&rows.ram_total),
+        MenuEntry::Disabled(&rows.ram_summary),
         MenuEntry::Disabled(&rows.memory_pressure),
         MenuEntry::Disabled(&rows.swap_used),
         MenuEntry::Separator,
@@ -166,8 +165,7 @@ mod tests {
         assert_eq!(
             entries,
             [
-                MenuEntry::Disabled("RAM Used: 0.0 GB"),
-                MenuEntry::Disabled("RAM Total: 0.0 GB"),
+                MenuEntry::Disabled("RAM: 0.0 GB of 0.0 GB"),
                 MenuEntry::Disabled("Memory Pressure: Normal"),
                 MenuEntry::Disabled("Swap Used: 0.0 GB"),
                 MenuEntry::Separator,
@@ -184,6 +182,6 @@ mod tests {
         let rows = placeholder_dropdown_rows();
         let entries = menu_entries(&rows, LaunchAtLoginStatus::Enabled);
 
-        assert_eq!(entries[6], MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Enabled));
+        assert_eq!(entries[5], MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Enabled));
     }
 }

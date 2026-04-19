@@ -16,8 +16,7 @@ pub struct MemorySnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DropdownRows {
-    pub ram_used: String,
-    pub ram_total: String,
+    pub ram_summary: String,
     pub memory_pressure: String,
     pub swap_used: String,
     pub refresh: String,

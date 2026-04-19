@@ -13,8 +13,7 @@ How much memory is this Mac using right now?
 - shows RAM percentage in the menu bar
 - flips to a tiny warning cue when memory pressure is elevated or high
 - opens a plain native dropdown with:
-  - `RAM Used`
-  - `RAM Total`
+  - `RAM`
   - `Memory Pressure`
   - `Swap Used`
   - `Refresh`
