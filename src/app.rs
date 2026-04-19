@@ -80,11 +80,7 @@ impl App {
 
         let mtm = MainThreadMarker::new().expect("app must start on the main thread");
         let app = NSApplication::sharedApplication(mtm);
-        let accessory_mode_set = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-        assert!(
-            accessory_mode_set,
-            "failed to enter accessory activation policy"
-        );
+        let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         let refresh_target = RefreshTarget::new(mtm);
         let refresh_target: Retained<AnyObject> = refresh_target.into();
         let tray = TrayController::new(mtm, refresh_target.clone());

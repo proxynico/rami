@@ -12,3 +12,12 @@ V1 shows:
 - Quit
 
 CPU temperature is intentionally deferred until a clean Apple Silicon path is proven.
+
+## Local build
+
+```sh
+./scripts/build-app.sh
+open rami.app
+```
+
+`rami.app` is an accessory app, so it should stay out of the Dock while the live RAM value remains visible in the menu bar.
