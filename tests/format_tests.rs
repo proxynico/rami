@@ -1,5 +1,6 @@
 use rami::format::{
-    dropdown_rows, gb_text, menu_bar_icon, menu_bar_text, placeholder_text,
+    dropdown_rows, gb_text, menu_bar_icon, menu_bar_text, placeholder_dropdown_rows,
+    placeholder_text,
 };
 use rami::model::{MemoryPressure, MemorySnapshot};
 
@@ -11,6 +12,16 @@ fn menu_bar_text_uses_integer_percent() {
 #[test]
 fn placeholder_is_double_dash_percent() {
     assert_eq!(placeholder_text(), "--%");
+}
+
+#[test]
+fn placeholder_dropdown_rows_match_the_v2_menu_shape() {
+    let rows = placeholder_dropdown_rows();
+
+    assert_eq!(rows.ram_used, "RAM Used: 0.0 GB");
+    assert_eq!(rows.ram_total, "RAM Total: 0.0 GB");
+    assert_eq!(rows.memory_pressure, "Memory Pressure: Normal");
+    assert_eq!(rows.swap_used, "Swap Used: 0.0 GB");
 }
 
 #[test]

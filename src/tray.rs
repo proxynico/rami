@@ -1,4 +1,6 @@
-use crate::format::{dropdown_rows, menu_bar_icon, menu_bar_text, placeholder_text};
+use crate::format::{
+    dropdown_rows, menu_bar_icon, menu_bar_text, placeholder_dropdown_rows, placeholder_text,
+};
 use crate::model::{DropdownRows, MemoryPressure, MemorySnapshot};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -19,17 +21,7 @@ impl TrayController {
             refresh_target,
         };
         controller.set_label(&placeholder_text(), menu_bar_icon(MemoryPressure::Normal), mtm);
-        controller.set_menu_rows(
-            &DropdownRows {
-                ram_used: "RAM Used: 0.0 GB".to_string(),
-                ram_total: "RAM Total: 0.0 GB".to_string(),
-                memory_pressure: "Memory Pressure: Normal".to_string(),
-                swap_used: "Swap Used: 0.0 GB".to_string(),
-                refresh: "Refresh".to_string(),
-                quit: "Quit".to_string(),
-            },
-            mtm,
-        );
+        controller.set_menu_rows(&placeholder_dropdown_rows(), mtm);
         controller
     }
 
@@ -75,6 +67,24 @@ impl TrayController {
             )
         };
         total.setEnabled(false);
+        let pressure = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&rows.memory_pressure),
+                None,
+                &empty,
+            )
+        };
+        pressure.setEnabled(false);
+        let swap = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&rows.swap_used),
+                None,
+                &empty,
+            )
+        };
+        swap.setEnabled(false);
         let refresh = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
@@ -97,6 +107,8 @@ impl TrayController {
 
         menu.addItem(&used);
         menu.addItem(&total);
+        menu.addItem(&pressure);
+        menu.addItem(&swap);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&refresh);
         menu.addItem(&NSMenuItem::separatorItem(mtm));

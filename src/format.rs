@@ -35,6 +35,17 @@ pub fn dropdown_rows(snapshot: MemorySnapshot) -> DropdownRows {
     }
 }
 
+pub fn placeholder_dropdown_rows() -> DropdownRows {
+    DropdownRows {
+        ram_used: "RAM Used: 0.0 GB".to_string(),
+        ram_total: "RAM Total: 0.0 GB".to_string(),
+        memory_pressure: "Memory Pressure: Normal".to_string(),
+        swap_used: "Swap Used: 0.0 GB".to_string(),
+        refresh: "Refresh".to_string(),
+        quit: "Quit".to_string(),
+    }
+}
+
 pub fn placeholder_text() -> String {
     "--%".to_string()
 }
