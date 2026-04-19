@@ -17,7 +17,11 @@ impl AppLock {
         let home = std::env::var("HOME")
             .map(PathBuf::from)
             .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "HOME not set"))?;
-        let path = lock_file_path(&home);
+        Self::acquire_at_home(&home)
+    }
+
+    pub fn acquire_at_home(home: &Path) -> io::Result<Option<Self>> {
+        let path = lock_file_path(home);
         let parent = path
             .parent()
             .expect("lock file should have a parent directory");
@@ -33,7 +37,11 @@ impl AppLock {
         if rc == 0 {
             Ok(Some(Self { _file: file }))
         } else {
-            Ok(None)
+            let err = io::Error::last_os_error();
+            match err.raw_os_error() {
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => Ok(None),
+                _ => Err(err),
+            }
         }
     }
 }
