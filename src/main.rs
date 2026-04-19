@@ -1,1 +1,6 @@
-fn main() {}
+use rami::app::App;
+
+fn main() {
+    let mut app = App::new();
+    app.run();
+}
