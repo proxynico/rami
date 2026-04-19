@@ -1,6 +1,6 @@
 use rami::memory::{
-    pressure_from_raw, snapshot_from_counts, validate_stats_count, MemoryCounts,
-    VM_PRESSURE_CRITICAL, VM_PRESSURE_NORMAL, VM_PRESSURE_WARN,
+    pressure_from_raw, snapshot_from_counts, validate_stats_count, validate_sysctl_size,
+    MemoryCounts, VM_PRESSURE_CRITICAL, VM_PRESSURE_NORMAL, VM_PRESSURE_WARN,
 };
 use rami::model::MemoryPressure;
 
@@ -121,4 +121,15 @@ fn pressure_from_raw_maps_dispatch_compatible_levels() {
         pressure_from_raw(VM_PRESSURE_WARN | VM_PRESSURE_CRITICAL),
         MemoryPressure::High
     );
+}
+
+#[test]
+fn validate_sysctl_size_rejects_mismatched_byte_count() {
+    let error =
+        validate_sysctl_size(4, 8, "vm.swapusage").expect_err("size mismatch should be rejected");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("vm.swapusage"));
+    assert!(error.to_string().contains("expected 8 bytes"));
+    assert!(error.to_string().contains("got 4"));
 }

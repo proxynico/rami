@@ -78,6 +78,20 @@ pub fn validate_stats_count(count: u32) -> io::Result<()> {
     Ok(())
 }
 
+pub fn validate_sysctl_size(actual: size_t, expected: usize, name: &str) -> io::Result<()> {
+    if actual != expected as size_t {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "sysctl {} returned unexpected size: expected {} bytes, got {}",
+                name, expected, actual
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 pub struct MemorySampler {
     total_bytes: u64,
     page_size: u64,
@@ -134,7 +148,8 @@ impl MemorySampler {
 
 fn read_sysctl_value<T: Copy>(name: &[u8]) -> io::Result<T> {
     let mut value = MaybeUninit::<T>::uninit();
-    let mut size = size_of::<T>() as size_t;
+    let expected_size = size_of::<T>();
+    let mut size = expected_size as size_t;
 
     let rc = unsafe {
         sysctlbyname(
@@ -149,6 +164,12 @@ fn read_sysctl_value<T: Copy>(name: &[u8]) -> io::Result<T> {
     if rc != 0 {
         return Err(io::Error::last_os_error());
     }
+
+    let name = std::str::from_utf8(name)
+        .ok()
+        .and_then(|name| name.strip_suffix('\0'))
+        .unwrap_or("<sysctl>");
+    validate_sysctl_size(size, expected_size, name)?;
 
     Ok(unsafe { value.assume_init() })
 }
