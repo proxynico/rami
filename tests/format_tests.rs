@@ -1,4 +1,4 @@
-use rami::format::{dropdown_rows, gib_text, menu_bar_text, placeholder_text};
+use rami::format::{dropdown_rows, gb_text, menu_bar_text, placeholder_text};
 use rami::model::MemorySnapshot;
 
 #[test]
@@ -12,8 +12,13 @@ fn placeholder_is_double_dash_percent() {
 }
 
 #[test]
-fn gib_text_rounds_to_one_decimal_place() {
-    assert_eq!(gib_text(9_019_437_056), "9.0 GB");
+fn gb_text_rounds_to_one_decimal_place() {
+    assert_eq!(gb_text(9_019_437_056), "9.0 GB");
+}
+
+#[test]
+fn gb_text_rounds_decimal_boundary_to_one_gb() {
+    assert_eq!(gb_text(999_999_999), "1.0 GB");
 }
 
 #[test]
