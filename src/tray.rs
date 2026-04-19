@@ -1,5 +1,5 @@
-use crate::format::{dropdown_rows, menu_bar_text, placeholder_text};
-use crate::model::{DropdownRows, MemorySnapshot};
+use crate::format::{dropdown_rows, menu_bar_icon, menu_bar_text, placeholder_text};
+use crate::model::{DropdownRows, MemoryPressure, MemorySnapshot};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{sel, MainThreadMarker, MainThreadOnly};
@@ -23,7 +23,8 @@ impl TrayController {
             &DropdownRows {
                 ram_used: "RAM Used: 0.0 GB".to_string(),
                 ram_total: "RAM Total: 0.0 GB".to_string(),
-                temperature: None,
+                memory_pressure: "Memory Pressure: Normal".to_string(),
+                swap_used: "Swap Used: 0.0 GB".to_string(),
                 refresh: "Refresh".to_string(),
                 quit: "Quit".to_string(),
             },
@@ -34,7 +35,7 @@ impl TrayController {
 
     pub fn set_snapshot(&self, snapshot: MemorySnapshot, mtm: MainThreadMarker) {
         self.set_label(&menu_bar_text(snapshot.used_percent), mtm);
-        self.set_menu_rows(&dropdown_rows(snapshot, None), mtm);
+        self.set_menu_rows(&dropdown_rows(snapshot), mtm);
     }
 
     pub fn set_placeholder(&self, mtm: MainThreadMarker) {
@@ -43,7 +44,7 @@ impl TrayController {
 
     fn set_label(&self, text: &str, mtm: MainThreadMarker) {
         if let Some(button) = self.status_item.button(mtm) {
-            let full = format!("{text} ▣");
+            let full = format!("{text} {}", menu_bar_icon(MemoryPressure::Normal));
             let title = NSString::from_str(&full);
             button.setTitle(&title);
         }

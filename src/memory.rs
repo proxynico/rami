@@ -1,4 +1,4 @@
-use crate::model::MemorySnapshot;
+use crate::model::{MemoryPressure, MemorySnapshot};
 use libc::{
     c_void, host_statistics64, mach_msg_type_number_t, size_t, sysctlbyname, vm_page_size,
     vm_statistics64, HOST_VM_INFO64, HOST_VM_INFO64_COUNT,
@@ -32,6 +32,8 @@ pub fn snapshot_from_counts(counts: MemoryCounts) -> MemorySnapshot {
         used_bytes,
         total_bytes: counts.total_bytes,
         used_percent,
+        pressure: MemoryPressure::Normal,
+        swap_used_bytes: 0,
     }
 }
 
