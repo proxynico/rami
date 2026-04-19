@@ -17,9 +17,17 @@ fn second_acquire_on_same_path_reports_contention() {
     let home = std::env::temp_dir().join(format!("rami-lock-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
 
-    let first = AppLock::acquire_at_home(&home).unwrap();
+    let original_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+
+    let first = AppLock::acquire().unwrap();
     assert!(first.is_some());
 
-    let second = AppLock::acquire_at_home(&home).unwrap();
+    let second = AppLock::acquire().unwrap();
     assert!(second.is_none());
+
+    match original_home {
+        Some(value) => std::env::set_var("HOME", value),
+        None => std::env::remove_var("HOME"),
+    }
 }
