@@ -55,7 +55,9 @@ fn classify_flock_result(rc: libc::c_int, err: io::Error) -> io::Result<FlockOut
     }
 
     match err.raw_os_error() {
-        Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => Ok(FlockOutcome::Contended),
+        Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => {
+            Ok(FlockOutcome::Contended)
+        }
         _ => Err(err),
     }
 }
@@ -67,19 +69,16 @@ mod tests {
 
     #[test]
     fn classify_flock_result_maps_contention_to_contended() {
-        let result = classify_flock_result(
-            -1,
-            io::Error::from_raw_os_error(libc::EWOULDBLOCK),
-        )
-        .unwrap();
+        let result =
+            classify_flock_result(-1, io::Error::from_raw_os_error(libc::EWOULDBLOCK)).unwrap();
 
         assert!(matches!(result, FlockOutcome::Contended));
     }
 
     #[test]
     fn classify_flock_result_preserves_real_errors() {
-        let err = classify_flock_result(-1, io::Error::from_raw_os_error(libc::ENOENT))
-            .unwrap_err();
+        let err =
+            classify_flock_result(-1, io::Error::from_raw_os_error(libc::ENOENT)).unwrap_err();
 
         assert_eq!(err.raw_os_error(), Some(libc::ENOENT));
     }

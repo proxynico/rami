@@ -123,7 +123,10 @@ fn page_size_bytes() -> io::Result<u64> {
     let page_size = unsafe { vm_page_size as u64 };
 
     if page_size == 0 {
-        return Err(io::Error::new(io::ErrorKind::Other, "vm_page_size unavailable"));
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "vm_page_size unavailable",
+        ));
     }
 
     Ok(page_size)

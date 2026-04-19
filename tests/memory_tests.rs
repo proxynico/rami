@@ -70,5 +70,7 @@ fn validate_stats_count_rejects_incomplete_host_stats() {
     let error = validate_stats_count(0).expect_err("count should be rejected");
 
     assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
-    assert!(error.to_string().contains("insufficient host statistics count"));
+    assert!(error
+        .to_string()
+        .contains("insufficient host statistics count"));
 }
