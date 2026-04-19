@@ -8,6 +8,8 @@
 	<string>6.0</string>
 	<key>CFBundleExecutable</key>
 	<string>rami</string>
+	<key>CFBundleIconFile</key>
+	<string>rami</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.nicomontero.rami</string>
 	<key>CFBundleName</key>

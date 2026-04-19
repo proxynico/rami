@@ -18,6 +18,7 @@ How much memory is this Mac using right now?
   - `Memory Pressure`
   - `Swap Used`
   - `Refresh`
+  - `Launch at Login`
   - `Quit`
 - refreshes automatically every 5 seconds
 
@@ -51,7 +52,8 @@ open rami.app
 ```
 
 The build script creates a signed local `rami.app` bundle that launches as a
-menu bar utility without a Dock icon.
+menu bar utility without a Dock icon. The built app bundle also carries the
+generated app icon and enables the `Launch at Login` menu item.
 
 ## How it works
 
@@ -74,4 +76,5 @@ To keep the app simple and cheap to run:
 
 - `scripts/build-app.sh` builds the release binary and assembles `rami.app`
 - `macos/Info.plist` configures accessory-app behavior with `LSUIElement`
+- `scripts/generate-icon.swift` draws the app icon and emits the `.icns` file used by the bundle build
 - the app bundle target is aligned to macOS 14.0

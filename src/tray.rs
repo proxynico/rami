@@ -1,11 +1,14 @@
 use crate::format::{
     dropdown_rows, menu_bar_icon, menu_bar_text, placeholder_dropdown_rows, placeholder_text,
 };
+use crate::login_item::LaunchAtLoginStatus;
 use crate::model::{DropdownRows, MemoryPressure, MemorySnapshot};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{sel, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSMenu, NSMenuItem, NSStatusBar, NSStatusItem};
+use objc2_app_kit::{
+    NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+};
 use objc2_foundation::NSString;
 
 pub struct TrayController {
@@ -18,10 +21,11 @@ enum MenuEntry<'a> {
     Disabled(&'a str),
     Separator,
     Refresh(&'a str),
+    LaunchAtLogin(LaunchAtLoginStatus),
     Quit(&'a str),
 }
 
-fn menu_entries(rows: &DropdownRows) -> [MenuEntry<'_>; 8] {
+fn menu_entries(rows: &DropdownRows, launch_at_login_status: LaunchAtLoginStatus) -> [MenuEntry<'_>; 9] {
     [
         MenuEntry::Disabled(&rows.ram_used),
         MenuEntry::Disabled(&rows.ram_total),
@@ -29,6 +33,7 @@ fn menu_entries(rows: &DropdownRows) -> [MenuEntry<'_>; 8] {
         MenuEntry::Disabled(&rows.swap_used),
         MenuEntry::Separator,
         MenuEntry::Refresh(&rows.refresh),
+        MenuEntry::LaunchAtLogin(launch_at_login_status),
         MenuEntry::Separator,
         MenuEntry::Quit(&rows.quit),
     ]
@@ -42,22 +47,27 @@ impl TrayController {
             refresh_target,
         };
         controller.set_label(&placeholder_text(), menu_bar_icon(MemoryPressure::Normal), mtm);
-        controller.set_menu_rows(&placeholder_dropdown_rows(), mtm);
+        controller.set_menu_rows(&placeholder_dropdown_rows(), LaunchAtLoginStatus::Disabled, mtm);
         controller
     }
 
-    pub fn set_snapshot(&self, snapshot: MemorySnapshot, mtm: MainThreadMarker) {
+    pub fn set_snapshot(
+        &self,
+        snapshot: MemorySnapshot,
+        launch_at_login_status: LaunchAtLoginStatus,
+        mtm: MainThreadMarker,
+    ) {
         self.set_label(
             &menu_bar_text(snapshot.used_percent),
             menu_bar_icon(snapshot.pressure),
             mtm,
         );
-        self.set_menu_rows(&dropdown_rows(snapshot), mtm);
+        self.set_menu_rows(&dropdown_rows(snapshot), launch_at_login_status, mtm);
     }
 
-    pub fn set_placeholder(&self, mtm: MainThreadMarker) {
+    pub fn set_placeholder(&self, launch_at_login_status: LaunchAtLoginStatus, mtm: MainThreadMarker) {
         self.set_label(&placeholder_text(), menu_bar_icon(MemoryPressure::Normal), mtm);
-        self.set_menu_rows(&placeholder_dropdown_rows(), mtm);
+        self.set_menu_rows(&placeholder_dropdown_rows(), launch_at_login_status, mtm);
     }
 
     fn set_label(&self, text: &str, icon: &str, mtm: MainThreadMarker) {
@@ -68,10 +78,15 @@ impl TrayController {
         }
     }
 
-    fn set_menu_rows(&self, rows: &DropdownRows, mtm: MainThreadMarker) {
+    fn set_menu_rows(
+        &self,
+        rows: &DropdownRows,
+        launch_at_login_status: LaunchAtLoginStatus,
+        mtm: MainThreadMarker,
+    ) {
         let menu = NSMenu::new(mtm);
         let empty = NSString::from_str("");
-        for entry in menu_entries(rows) {
+        for entry in menu_entries(rows, launch_at_login_status) {
             match entry {
                 MenuEntry::Disabled(title) => {
                     let item = unsafe {
@@ -100,6 +115,26 @@ impl TrayController {
                     }
                     menu.addItem(&item);
                 }
+                MenuEntry::LaunchAtLogin(status) => {
+                    let item = unsafe {
+                        NSMenuItem::initWithTitle_action_keyEquivalent(
+                            NSMenuItem::alloc(mtm),
+                            &NSString::from_str(status.menu_title()),
+                            Some(sel!(toggleLaunchAtLogin:)),
+                            &empty,
+                        )
+                    };
+                    unsafe {
+                        item.setTarget(Some(&self.refresh_target));
+                    }
+                    item.setState(if status.should_show_checked_state() {
+                        NSControlStateValueOn
+                    } else {
+                        NSControlStateValueOff
+                    });
+                    item.setEnabled(status.should_enable_menu_item());
+                    menu.addItem(&item);
+                }
                 MenuEntry::Quit(title) => {
                     let item = unsafe {
                         NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -121,13 +156,15 @@ impl TrayController {
 mod tests {
     use super::{menu_entries, MenuEntry};
     use crate::format::placeholder_dropdown_rows;
+    use crate::login_item::LaunchAtLoginStatus;
 
     #[test]
-    fn menu_entries_keep_the_v2_row_and_action_order() {
+    fn menu_entries_include_launch_at_login_before_quit() {
         let rows = placeholder_dropdown_rows();
+        let entries = menu_entries(&rows, LaunchAtLoginStatus::Disabled);
 
         assert_eq!(
-            menu_entries(&rows),
+            entries,
             [
                 MenuEntry::Disabled("RAM Used: 0.0 GB"),
                 MenuEntry::Disabled("RAM Total: 0.0 GB"),
@@ -135,9 +172,18 @@ mod tests {
                 MenuEntry::Disabled("Swap Used: 0.0 GB"),
                 MenuEntry::Separator,
                 MenuEntry::Refresh("Refresh"),
+                MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Disabled),
                 MenuEntry::Separator,
                 MenuEntry::Quit("Quit"),
             ]
         );
+    }
+
+    #[test]
+    fn menu_entries_mark_launch_at_login_as_enabled_when_requested() {
+        let rows = placeholder_dropdown_rows();
+        let entries = menu_entries(&rows, LaunchAtLoginStatus::Enabled);
+
+        assert_eq!(entries[6], MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Enabled));
     }
 }

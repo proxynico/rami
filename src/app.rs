@@ -1,3 +1,4 @@
+use crate::login_item::LaunchAtLoginController;
 use crate::lock::AppLock;
 use crate::memory::MemorySampler;
 use crate::tray::TrayController;
@@ -17,15 +18,24 @@ thread_local! {
 struct AppState {
     tray: TrayController,
     sampler: MemorySampler,
+    launch_at_login: LaunchAtLoginController,
 }
 
 impl AppState {
     fn refresh(&self) {
         let mtm = MainThreadMarker::new().expect("refreshes must stay on the main thread");
+        let launch_at_login_status = self.launch_at_login.status();
         match self.sampler.sample() {
-            Ok(snapshot) => self.tray.set_snapshot(snapshot, mtm),
+            Ok(snapshot) => self.tray.set_snapshot(snapshot, launch_at_login_status, mtm),
             Err(err) => eprintln!("failed to refresh RAM snapshot: {err}"),
         }
+    }
+
+    fn toggle_launch_at_login(&self) {
+        if let Err(err) = self.launch_at_login.toggle() {
+            eprintln!("failed to update launch at login: {err}");
+        }
+        self.refresh();
     }
 }
 
@@ -51,6 +61,14 @@ define_class!(
         #[unsafe(method(refreshNow:))]
         fn refresh_now(&self, _sender: &AnyObject) {
             refresh_current_app();
+        }
+
+        #[unsafe(method(toggleLaunchAtLogin:))]
+        fn toggle_launch_at_login(&self, _sender: &AnyObject) {
+            let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+            if let Some(state) = state {
+                state.toggle_launch_at_login();
+            }
         }
     }
 
@@ -87,6 +105,7 @@ impl App {
         let state = Rc::new(AppState {
             tray,
             sampler: MemorySampler::new()?,
+            launch_at_login: LaunchAtLoginController::new(),
         });
         install_app_state(&state);
         app.finishLaunching();
