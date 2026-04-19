@@ -11,24 +11,24 @@ How much memory is this Mac using right now?
 ## What it does
 
 - shows RAM percentage in the menu bar
-- keeps the label minimal: `53% ▣`
+- flips to a tiny warning cue when memory pressure is elevated or high
 - opens a plain native dropdown with:
   - `RAM Used`
   - `RAM Total`
+  - `Memory Pressure`
+  - `Swap Used`
   - `Refresh`
   - `Quit`
 - refreshes automatically every 5 seconds
-- supports manual refresh from the menu
-- runs as a single-instance accessory app
 
 ## Current scope
 
-This is intentionally a RAM-only v1.
+This is intentionally still a tiny menu bar utility.
 
-- no CPU temperature yet
+- no CPU temperature
 - no graphs
 - no custom popover UI
-- no always-visible extra stats
+- no settings panel
 
 ## Platform
 
