@@ -4,10 +4,12 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>rami</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
 	<key>CFBundleExecutable</key>
 	<string>rami</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.nicolasmontero.rami</string>
+	<string>com.nicomontero.rami</string>
 	<key>CFBundleName</key>
 	<string>rami</string>
 	<key>CFBundlePackageType</key>
@@ -17,8 +19,10 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>13.0</string>
+	<string>14.0</string>
 	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>
 </plist>

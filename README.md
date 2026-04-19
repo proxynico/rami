@@ -2,22 +2,25 @@
 
 Tiny macOS menu bar RAM monitor for Nico's M1 Pro MacBook.
 
-## Scope
+## What v1 does
 
-V1 shows:
+RAM-only v1 intentionally:
 
-- RAM percentage in the menu bar
-- RAM used and total in a native dropdown
-- Refresh
-- Quit
+- shows RAM percentage in the menu bar
+- uses a plain dropdown for RAM used / total
+- includes Refresh and Quit
+- stays RAM-only for v1 on purpose
 
-CPU temperature is intentionally deferred until a clean Apple Silicon path is proven.
+## Dev
 
-## Local build
+```sh
+cargo test
+cargo run
+```
+
+## Build the .app
 
 ```sh
 ./scripts/build-app.sh
 open rami.app
 ```
-
-`rami.app` is an accessory app, so it should stay out of the Dock while the live RAM value remains visible in the menu bar.
