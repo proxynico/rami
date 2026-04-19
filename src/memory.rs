@@ -35,6 +35,20 @@ pub fn snapshot_from_counts(counts: MemoryCounts) -> MemorySnapshot {
     }
 }
 
+pub fn validate_stats_count(count: u32) -> io::Result<()> {
+    if count < HOST_VM_INFO64_COUNT {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!(
+                "insufficient host statistics count: expected at least {}, got {}",
+                HOST_VM_INFO64_COUNT, count
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 pub struct MemorySampler {
     total_bytes: u64,
     page_size: u64,
@@ -67,9 +81,11 @@ impl MemorySampler {
         if result != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                "host_statistics64 failed",
+                format!("host_statistics64 failed with kern_return_t {}", result),
             ));
         }
+
+        validate_stats_count(count)?;
 
         Ok(snapshot_from_counts(MemoryCounts {
             total_bytes: self.total_bytes,
