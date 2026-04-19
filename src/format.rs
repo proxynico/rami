@@ -5,8 +5,8 @@ pub fn menu_bar_text(percent: u8) -> String {
 }
 
 pub fn gib_text(bytes: u64) -> String {
-    let gib = bytes as f64 / 1024_f64.powi(3);
-    format!("{gib:.1} GB")
+    let gb = bytes as f64 / 1_000_000_000_f64;
+    format!("{gb:.1} GB")
 }
 
 pub fn dropdown_rows(snapshot: MemorySnapshot, temperature_c: Option<i32>) -> DropdownRows {

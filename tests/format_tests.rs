@@ -13,7 +13,7 @@ fn placeholder_is_double_dash_percent() {
 
 #[test]
 fn gib_text_rounds_to_one_decimal_place() {
-    assert_eq!(gib_text(9_019_437_056), "8.4 GB");
+    assert_eq!(gib_text(9_019_437_056), "9.0 GB");
 }
 
 #[test]
@@ -26,8 +26,8 @@ fn dropdown_rows_include_ram_values_and_actions() {
 
     let rows = dropdown_rows(snapshot, None);
 
-    assert_eq!(rows.ram_used, "RAM Used: 8.4 GB");
-    assert_eq!(rows.ram_total, "RAM Total: 16.0 GB");
+    assert_eq!(rows.ram_used, "RAM Used: 9.0 GB");
+    assert_eq!(rows.ram_total, "RAM Total: 17.2 GB");
     assert_eq!(rows.temperature, None);
     assert_eq!(rows.refresh, "Refresh");
     assert_eq!(rows.quit, "Quit");
