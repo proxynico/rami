@@ -78,7 +78,7 @@ pub fn validate_stats_count(count: u32) -> io::Result<()> {
     Ok(())
 }
 
-pub fn validate_sysctl_size(actual: size_t, expected: usize, name: &str) -> io::Result<()> {
+fn validate_sysctl_size(actual: size_t, expected: usize, name: &str) -> io::Result<()> {
     if actual != expected as size_t {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -199,4 +199,20 @@ fn page_size_bytes() -> io::Result<u64> {
     }
 
     Ok(page_size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_sysctl_size;
+
+    #[test]
+    fn validate_sysctl_size_rejects_mismatched_byte_count() {
+        let error = validate_sysctl_size(4, 8, "vm.swapusage")
+            .expect_err("size mismatch should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("vm.swapusage"));
+        assert!(error.to_string().contains("expected 8 bytes"));
+        assert!(error.to_string().contains("got 4"));
+    }
 }
