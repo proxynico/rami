@@ -9,6 +9,7 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 BINARY_PATH="$ROOT_DIR/target/release/$APP_NAME"
+MACOSX_DEPLOYMENT_TARGET_VALUE="14.0"
 
 if command -v cargo >/dev/null 2>&1; then
   cargo_bin="$(command -v cargo)"
@@ -20,7 +21,7 @@ else
 fi
 
 toolchain_bin="$(dirname "$cargo_bin")"
-PATH="$toolchain_bin:$PATH" "$cargo_bin" build --release --manifest-path "$ROOT_DIR/Cargo.toml"
+MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET_VALUE" PATH="$toolchain_bin:$PATH" "$cargo_bin" build --release --manifest-path "$ROOT_DIR/Cargo.toml"
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
