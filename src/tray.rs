@@ -18,7 +18,7 @@ impl TrayController {
             status_item,
             refresh_target,
         };
-        controller.set_label(&placeholder_text(), mtm);
+        controller.set_label(&placeholder_text(), menu_bar_icon(MemoryPressure::Normal), mtm);
         controller.set_menu_rows(
             &DropdownRows {
                 ram_used: "RAM Used: 0.0 GB".to_string(),
@@ -34,17 +34,21 @@ impl TrayController {
     }
 
     pub fn set_snapshot(&self, snapshot: MemorySnapshot, mtm: MainThreadMarker) {
-        self.set_label(&menu_bar_text(snapshot.used_percent), mtm);
+        self.set_label(
+            &menu_bar_text(snapshot.used_percent),
+            menu_bar_icon(snapshot.pressure),
+            mtm,
+        );
         self.set_menu_rows(&dropdown_rows(snapshot), mtm);
     }
 
     pub fn set_placeholder(&self, mtm: MainThreadMarker) {
-        self.set_label(&placeholder_text(), mtm);
+        self.set_label(&placeholder_text(), menu_bar_icon(MemoryPressure::Normal), mtm);
     }
 
-    fn set_label(&self, text: &str, mtm: MainThreadMarker) {
+    fn set_label(&self, text: &str, icon: &str, mtm: MainThreadMarker) {
         if let Some(button) = self.status_item.button(mtm) {
-            let full = format!("{text} {}", menu_bar_icon(MemoryPressure::Normal));
+            let full = format!("{text} {icon}");
             let title = NSString::from_str(&full);
             button.setTitle(&title);
         }

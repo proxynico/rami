@@ -1,4 +1,5 @@
 use rami::memory::{snapshot_from_counts, validate_stats_count, MemoryCounts};
+use rami::model::MemoryPressure;
 
 #[test]
 fn snapshot_uses_active_wired_and_compressed_bytes() {
@@ -15,6 +16,8 @@ fn snapshot_uses_active_wired_and_compressed_bytes() {
     assert_eq!(snapshot.used_bytes, 600);
     assert_eq!(snapshot.total_bytes, 1000);
     assert_eq!(snapshot.used_percent, 60);
+    assert_eq!(snapshot.pressure, MemoryPressure::Normal);
+    assert_eq!(snapshot.swap_used_bytes, 0);
 }
 
 #[test]
@@ -46,6 +49,8 @@ fn snapshot_clamps_when_used_exceeds_total() {
 
     assert_eq!(snapshot.used_bytes, 130);
     assert_eq!(snapshot.used_percent, 100);
+    assert_eq!(snapshot.pressure, MemoryPressure::Normal);
+    assert_eq!(snapshot.swap_used_bytes, 0);
 }
 
 #[test]
@@ -63,6 +68,8 @@ fn snapshot_returns_zero_percent_when_total_bytes_is_zero() {
     assert_eq!(snapshot.used_bytes, 130);
     assert_eq!(snapshot.total_bytes, 0);
     assert_eq!(snapshot.used_percent, 0);
+    assert_eq!(snapshot.pressure, MemoryPressure::Normal);
+    assert_eq!(snapshot.swap_used_bytes, 0);
 }
 
 #[test]
