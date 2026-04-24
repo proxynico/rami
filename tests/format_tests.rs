@@ -6,7 +6,7 @@ use rami::model::{MemoryPressure, MemorySnapshot};
 
 #[test]
 fn menu_bar_text_uses_integer_percent() {
-    assert_eq!(menu_bar_text(53), "53%");
+    assert_eq!(menu_bar_text(53), "▅ 53%");
 }
 
 #[test]
@@ -35,13 +35,13 @@ fn gb_text_rounds_decimal_boundary_to_one_gb() {
 
 #[test]
 fn menu_bar_icon_is_quiet_when_pressure_is_normal() {
-    assert_eq!(menu_bar_icon(MemoryPressure::Normal), "▣");
+    assert_eq!(menu_bar_icon(MemoryPressure::Normal), "");
 }
 
 #[test]
 fn menu_bar_icon_warns_when_pressure_is_elevated_or_high() {
     assert_eq!(menu_bar_icon(MemoryPressure::Elevated), "!");
-    assert_eq!(menu_bar_icon(MemoryPressure::High), "!");
+    assert_eq!(menu_bar_icon(MemoryPressure::High), "!!");
 }
 
 #[test]

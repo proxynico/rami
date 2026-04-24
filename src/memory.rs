@@ -3,6 +3,7 @@ use libc::{
     boolean_t, c_int, c_void, host_statistics64, mach_msg_type_number_t, size_t, sysctlbyname,
     vm_page_size, vm_statistics64, HOST_VM_INFO64, HOST_VM_INFO64_COUNT,
 };
+use std::cell::Cell;
 use std::io;
 use std::mem::{size_of, MaybeUninit};
 
@@ -95,15 +96,21 @@ fn validate_sysctl_size(actual: size_t, expected: usize, name: &str) -> io::Resu
 pub struct MemorySampler {
     total_bytes: u64,
     page_size: u64,
+    cached_swap_used_bytes: Cell<u64>,
+    ticks_until_swap_refresh: Cell<u8>,
 }
 
 impl MemorySampler {
+    const SWAP_REFRESH_INTERVAL_TICKS: u8 = 6;
+
     pub fn new() -> io::Result<Self> {
         let total_bytes = total_memory_bytes()?;
         let page_size = page_size_bytes()?;
         Ok(Self {
             total_bytes,
             page_size,
+            cached_swap_used_bytes: Cell::new(0),
+            ticks_until_swap_refresh: Cell::new(0),
         })
     }
 
@@ -130,7 +137,7 @@ impl MemorySampler {
 
         validate_stats_count(count)?;
         let pressure = read_pressure_level()?;
-        let swap_used_bytes = read_swap_used_bytes()?;
+        let swap_used_bytes = self.swap_used_bytes()?;
 
         Ok(snapshot_from_counts(
             MemoryCounts {
@@ -143,6 +150,20 @@ impl MemorySampler {
             pressure,
             swap_used_bytes,
         ))
+    }
+
+    fn swap_used_bytes(&self) -> io::Result<u64> {
+        if self.ticks_until_swap_refresh.get() == 0 {
+            let swap_used_bytes = read_swap_used_bytes()?;
+            self.cached_swap_used_bytes.set(swap_used_bytes);
+            self.ticks_until_swap_refresh
+                .set(Self::SWAP_REFRESH_INTERVAL_TICKS.saturating_sub(1));
+            return Ok(swap_used_bytes);
+        }
+
+        self.ticks_until_swap_refresh
+            .set(self.ticks_until_swap_refresh.get() - 1);
+        Ok(self.cached_swap_used_bytes.get())
     }
 }
 

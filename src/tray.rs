@@ -1,5 +1,6 @@
 use crate::format::{
-    dropdown_rows, menu_bar_icon, menu_bar_text, placeholder_dropdown_rows, placeholder_text,
+    dropdown_rows, menu_bar_icon, menu_bar_text, menu_bar_tooltip, placeholder_dropdown_rows,
+    placeholder_text,
 };
 use crate::login_item::LaunchAtLoginStatus;
 use crate::model::{DropdownRows, MemoryPressure, MemorySnapshot};
@@ -10,12 +11,32 @@ use objc2_app_kit::{
     NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
 };
 use objc2_foundation::NSString;
+use std::cell::{Cell, RefCell};
 
 pub struct TrayController {
     status_item: objc2::rc::Retained<NSStatusItem>,
-    refresh_target: Retained<AnyObject>,
+    menu: Retained<NSMenu>,
+    ram_item: Retained<NSMenuItem>,
+    pressure_item: Retained<NSMenuItem>,
+    swap_item: Retained<NSMenuItem>,
+    refresh_item: Retained<NSMenuItem>,
+    auto_refresh_item: Retained<NSMenuItem>,
+    launch_at_login_item: Retained<NSMenuItem>,
+    quit_item: Retained<NSMenuItem>,
+    last_label: RefCell<String>,
+    last_tooltip: RefCell<String>,
+    last_ram_title: RefCell<String>,
+    last_pressure_title: RefCell<String>,
+    last_swap_title: RefCell<String>,
+    last_refresh_title: RefCell<String>,
+    last_quit_title: RefCell<String>,
+    last_auto_refresh_enabled: Cell<bool>,
+    last_launch_title: RefCell<String>,
+    last_launch_checked: Cell<bool>,
+    last_launch_enabled: Cell<bool>,
 }
 
+#[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 enum MenuEntry<'a> {
     Disabled(&'a str),
@@ -25,7 +46,11 @@ enum MenuEntry<'a> {
     Quit(&'a str),
 }
 
-fn menu_entries(rows: &DropdownRows, launch_at_login_status: LaunchAtLoginStatus) -> [MenuEntry<'_>; 8] {
+#[cfg(test)]
+fn menu_entries(
+    rows: &DropdownRows,
+    launch_at_login_status: LaunchAtLoginStatus,
+) -> [MenuEntry<'_>; 8] {
     [
         MenuEntry::Disabled(&rows.ram_summary),
         MenuEntry::Disabled(&rows.memory_pressure),
@@ -41,12 +66,124 @@ fn menu_entries(rows: &DropdownRows, launch_at_login_status: LaunchAtLoginStatus
 impl TrayController {
     pub fn new(mtm: MainThreadMarker, refresh_target: Retained<AnyObject>) -> Self {
         let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
+        let menu = NSMenu::new(mtm);
+        let rows = placeholder_dropdown_rows();
+        let empty = NSString::from_str("");
+
+        let ram_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&rows.ram_summary),
+                None,
+                &empty,
+            )
+        };
+        ram_item.setEnabled(false);
+        menu.addItem(&ram_item);
+
+        let pressure_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&rows.memory_pressure),
+                None,
+                &empty,
+            )
+        };
+        pressure_item.setEnabled(false);
+        menu.addItem(&pressure_item);
+
+        let swap_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&rows.swap_used),
+                None,
+                &empty,
+            )
+        };
+        swap_item.setEnabled(false);
+        menu.addItem(&swap_item);
+
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+        let refresh_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&rows.refresh),
+                Some(sel!(refreshNow:)),
+                &empty,
+            )
+        };
+        unsafe {
+            refresh_item.setTarget(Some(&refresh_target));
+        }
+        menu.addItem(&refresh_item);
+
+        let auto_refresh_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Pause Auto Refresh"),
+                Some(sel!(toggleAutoRefresh:)),
+                &empty,
+            )
+        };
+        unsafe {
+            auto_refresh_item.setTarget(Some(&refresh_target));
+        }
+        auto_refresh_item.setState(NSControlStateValueOn);
+        menu.addItem(&auto_refresh_item);
+
+        let launch_at_login_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(LaunchAtLoginStatus::Disabled.menu_title()),
+                Some(sel!(toggleLaunchAtLogin:)),
+                &empty,
+            )
+        };
+        unsafe {
+            launch_at_login_item.setTarget(Some(&refresh_target));
+        }
+        launch_at_login_item.setState(NSControlStateValueOff);
+        launch_at_login_item.setEnabled(false);
+        menu.addItem(&launch_at_login_item);
+
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+        let quit_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&rows.quit),
+                Some(sel!(terminate:)),
+                &empty,
+            )
+        };
+        menu.addItem(&quit_item);
+        status_item.setMenu(Some(&menu));
+
         let controller = Self {
             status_item,
-            refresh_target,
+            menu,
+            ram_item,
+            pressure_item,
+            swap_item,
+            refresh_item,
+            auto_refresh_item,
+            launch_at_login_item,
+            quit_item,
+            last_label: RefCell::new(String::new()),
+            last_tooltip: RefCell::new(String::new()),
+            last_ram_title: RefCell::new(String::new()),
+            last_pressure_title: RefCell::new(String::new()),
+            last_swap_title: RefCell::new(String::new()),
+            last_refresh_title: RefCell::new(String::new()),
+            last_quit_title: RefCell::new(String::new()),
+            last_auto_refresh_enabled: Cell::new(true),
+            last_launch_title: RefCell::new(String::new()),
+            last_launch_checked: Cell::new(false),
+            last_launch_enabled: Cell::new(false),
         };
         controller.set_label(&placeholder_text(), menu_bar_icon(MemoryPressure::Normal), mtm);
-        controller.set_menu_rows(&placeholder_dropdown_rows(), LaunchAtLoginStatus::Disabled, mtm);
+        controller.set_menu_rows(&rows, LaunchAtLoginStatus::Disabled, true, mtm);
         controller
     }
 
@@ -54,6 +191,7 @@ impl TrayController {
         &self,
         snapshot: MemorySnapshot,
         launch_at_login_status: LaunchAtLoginStatus,
+        auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
     ) {
         self.set_label(
@@ -61,19 +199,42 @@ impl TrayController {
             menu_bar_icon(snapshot.pressure),
             mtm,
         );
-        self.set_menu_rows(&dropdown_rows(snapshot), launch_at_login_status, mtm);
+        self.set_tooltip(&menu_bar_tooltip(snapshot), mtm);
+        self.set_menu_rows(
+            &dropdown_rows(snapshot),
+            launch_at_login_status,
+            auto_refresh_enabled,
+            mtm,
+        );
     }
 
     pub fn set_placeholder(&self, launch_at_login_status: LaunchAtLoginStatus, mtm: MainThreadMarker) {
         self.set_label(&placeholder_text(), menu_bar_icon(MemoryPressure::Normal), mtm);
-        self.set_menu_rows(&placeholder_dropdown_rows(), launch_at_login_status, mtm);
+        self.set_tooltip("RAM data is loading...", mtm);
+        self.set_menu_rows(&placeholder_dropdown_rows(), launch_at_login_status, true, mtm);
     }
 
     fn set_label(&self, text: &str, icon: &str, mtm: MainThreadMarker) {
         if let Some(button) = self.status_item.button(mtm) {
-            let full = format!("{text} {icon}");
-            let title = NSString::from_str(&full);
-            button.setTitle(&title);
+            let full = if icon.is_empty() {
+                text.to_string()
+            } else {
+                format!("{text} {icon}")
+            };
+            if *self.last_label.borrow() != full {
+                let title = NSString::from_str(&full);
+                button.setTitle(&title);
+                *self.last_label.borrow_mut() = full;
+            }
+        }
+    }
+
+    fn set_tooltip(&self, tooltip: &str, mtm: MainThreadMarker) {
+        if let Some(button) = self.status_item.button(mtm) {
+            if *self.last_tooltip.borrow() != tooltip {
+                button.setToolTip(Some(&NSString::from_str(tooltip)));
+                *self.last_tooltip.borrow_mut() = tooltip.to_string();
+            }
         }
     }
 
@@ -81,73 +242,63 @@ impl TrayController {
         &self,
         rows: &DropdownRows,
         launch_at_login_status: LaunchAtLoginStatus,
-        mtm: MainThreadMarker,
+        auto_refresh_enabled: bool,
+        _mtm: MainThreadMarker,
     ) {
-        let menu = NSMenu::new(mtm);
-        let empty = NSString::from_str("");
-        for entry in menu_entries(rows, launch_at_login_status) {
-            match entry {
-                MenuEntry::Disabled(title) => {
-                    let item = unsafe {
-                        NSMenuItem::initWithTitle_action_keyEquivalent(
-                            NSMenuItem::alloc(mtm),
-                            &NSString::from_str(title),
-                            None,
-                            &empty,
-                        )
-                    };
-                    item.setEnabled(false);
-                    menu.addItem(&item);
-                }
-                MenuEntry::Separator => menu.addItem(&NSMenuItem::separatorItem(mtm)),
-                MenuEntry::Refresh(title) => {
-                    let item = unsafe {
-                        NSMenuItem::initWithTitle_action_keyEquivalent(
-                            NSMenuItem::alloc(mtm),
-                            &NSString::from_str(title),
-                            Some(sel!(refreshNow:)),
-                            &empty,
-                        )
-                    };
-                    unsafe {
-                        item.setTarget(Some(&self.refresh_target));
-                    }
-                    menu.addItem(&item);
-                }
-                MenuEntry::LaunchAtLogin(status) => {
-                    let item = unsafe {
-                        NSMenuItem::initWithTitle_action_keyEquivalent(
-                            NSMenuItem::alloc(mtm),
-                            &NSString::from_str(status.menu_title()),
-                            Some(sel!(toggleLaunchAtLogin:)),
-                            &empty,
-                        )
-                    };
-                    unsafe {
-                        item.setTarget(Some(&self.refresh_target));
-                    }
-                    item.setState(if status.should_show_checked_state() {
-                        NSControlStateValueOn
-                    } else {
-                        NSControlStateValueOff
-                    });
-                    item.setEnabled(status.should_enable_menu_item());
-                    menu.addItem(&item);
-                }
-                MenuEntry::Quit(title) => {
-                    let item = unsafe {
-                        NSMenuItem::initWithTitle_action_keyEquivalent(
-                            NSMenuItem::alloc(mtm),
-                            &NSString::from_str(title),
-                            Some(sel!(terminate:)),
-                            &empty,
-                        )
-                    };
-                    menu.addItem(&item);
-                }
-            }
+        set_menu_item_title_if_changed(&self.ram_item, &self.last_ram_title, &rows.ram_summary);
+        set_menu_item_title_if_changed(
+            &self.pressure_item,
+            &self.last_pressure_title,
+            &rows.memory_pressure,
+        );
+        set_menu_item_title_if_changed(&self.swap_item, &self.last_swap_title, &rows.swap_used);
+        set_menu_item_title_if_changed(&self.refresh_item, &self.last_refresh_title, &rows.refresh);
+        set_menu_item_title_if_changed(&self.quit_item, &self.last_quit_title, &rows.quit);
+
+        let auto_refresh_title = if auto_refresh_enabled {
+            "Pause Auto Refresh"
+        } else {
+            "Resume Auto Refresh"
+        };
+        if self.last_auto_refresh_enabled.get() != auto_refresh_enabled {
+            self.auto_refresh_item
+                .setTitle(&NSString::from_str(auto_refresh_title));
+            self.auto_refresh_item.setState(if auto_refresh_enabled {
+                NSControlStateValueOn
+            } else {
+                NSControlStateValueOff
+            });
+            self.last_auto_refresh_enabled.set(auto_refresh_enabled);
         }
-        self.status_item.setMenu(Some(&menu));
+
+        let launch_title = launch_at_login_status.menu_title();
+        set_menu_item_title_if_changed(
+            &self.launch_at_login_item,
+            &self.last_launch_title,
+            launch_title,
+        );
+        let launch_checked = launch_at_login_status.should_show_checked_state();
+        if self.last_launch_checked.get() != launch_checked {
+            self.launch_at_login_item.setState(if launch_checked {
+                NSControlStateValueOn
+            } else {
+                NSControlStateValueOff
+            });
+            self.last_launch_checked.set(launch_checked);
+        }
+        let launch_enabled = launch_at_login_status.should_enable_menu_item();
+        if self.last_launch_enabled.get() != launch_enabled {
+            self.launch_at_login_item.setEnabled(launch_enabled);
+            self.last_launch_enabled.set(launch_enabled);
+        }
+        self.status_item.setMenu(Some(&self.menu));
+    }
+}
+
+fn set_menu_item_title_if_changed(item: &NSMenuItem, cache: &RefCell<String>, value: &str) {
+    if *cache.borrow() != value {
+        item.setTitle(&NSString::from_str(value));
+        *cache.borrow_mut() = value.to_string();
     }
 }
 
