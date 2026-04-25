@@ -59,84 +59,64 @@ func drawIcon(size: CGFloat) -> NSImage {
     background.lineWidth = max(2, size * 0.018)
     background.stroke()
 
-    let glowRect = rect.insetBy(dx: size * 0.12, dy: size * 0.18)
-    let glow = NSBezierPath(
-        roundedRect: glowRect,
-        xRadius: size * 0.18,
-        yRadius: size * 0.18
-    )
-    NSColor(calibratedRed: 0.17, green: 0.80, blue: 0.82, alpha: 0.16).setFill()
-    glow.fill()
+    let cx = rect.midX
+    let cy = rect.midY - size * 0.04
+    let radius = size * 0.30
+    let arcStroke = max(4, size * 0.042)
 
-    let chipRect = rect.insetBy(dx: size * 0.20, dy: size * 0.20)
-    let chip = NSBezierPath(
-        roundedRect: chipRect,
-        xRadius: size * 0.14,
-        yRadius: size * 0.14
+    let startDeg: CGFloat = 210
+    let endDeg: CGFloat = -30
+
+    let arc = NSBezierPath()
+    arc.appendArc(
+        withCenter: NSPoint(x: cx, y: cy),
+        radius: radius,
+        startAngle: startDeg,
+        endAngle: endDeg,
+        clockwise: true
     )
     NSColor(calibratedRed: 0.62, green: 0.95, blue: 0.92, alpha: 0.95).setStroke()
-    chip.lineWidth = max(3, size * 0.026)
-    chip.stroke()
+    arc.lineWidth = arcStroke
+    arc.lineCapStyle = .round
+    arc.stroke()
 
-    let coreRect = chipRect.insetBy(dx: chipRect.width * 0.24, dy: chipRect.height * 0.24)
-    let core = NSBezierPath(
-        roundedRect: coreRect,
-        xRadius: size * 0.08,
-        yRadius: size * 0.08
-    )
-    let coreGradient = NSGradient(colors: [
-        NSColor(calibratedRed: 0.46, green: 0.92, blue: 0.90, alpha: 0.98),
-        NSColor(calibratedRed: 0.28, green: 0.78, blue: 0.80, alpha: 0.92),
-    ])!
-    coreGradient.draw(in: core, angle: -90)
-
-    NSColor(calibratedWhite: 1, alpha: 0.16).setStroke()
-    core.lineWidth = max(2, size * 0.014)
-    core.stroke()
-
-    let traceInsetX = chipRect.width * 0.15
-    let traceInsetY = chipRect.height * 0.15
-    let leftTraceX = chipRect.minX + traceInsetX
-    let rightTraceX = chipRect.maxX - traceInsetX
-    let bottomTraceY = chipRect.minY + traceInsetY
-    let topTraceY = chipRect.maxY - traceInsetY
-
-    let traceColor = NSColor(calibratedRed: 0.54, green: 0.92, blue: 0.90, alpha: 0.90)
-    traceColor.setStroke()
-
-    let traceWidth = max(3, size * 0.020)
-    let socketRadius = max(3, size * 0.026)
-    let coreMidX = coreRect.midX
-    let coreMidY = coreRect.midY
-    let coreMinX = coreRect.minX
-    let coreMaxX = coreRect.maxX
-    let coreMinY = coreRect.minY
-    let coreMaxY = coreRect.maxY
-
-    let segments = [
-        (NSPoint(x: leftTraceX, y: coreMidY), NSPoint(x: coreMinX, y: coreMidY)),
-        (NSPoint(x: coreMaxX, y: coreMidY), NSPoint(x: rightTraceX, y: coreMidY)),
-        (NSPoint(x: coreMidX, y: topTraceY), NSPoint(x: coreMidX, y: coreMaxY)),
-        (NSPoint(x: coreMidX, y: bottomTraceY), NSPoint(x: coreMidX, y: coreMinY)),
-    ]
-
-    for (start, end) in segments {
-        let path = NSBezierPath()
-        path.move(to: start)
-        path.line(to: end)
-        path.lineWidth = traceWidth
-        path.lineCapStyle = .round
-        path.stroke()
-
-        let socket = NSBezierPath(ovalIn: NSRect(
-            x: start.x - socketRadius / 2,
-            y: start.y - socketRadius / 2,
-            width: socketRadius,
-            height: socketRadius
+    let dotRadius = size * 0.032
+    for i in 0..<5 {
+        let t = CGFloat(i) / 4.0
+        let deg = startDeg + (endDeg - startDeg) * t
+        let rad = deg * .pi / 180
+        let x = cx + cos(rad) * radius
+        let y = cy + sin(rad) * radius
+        let dot = NSBezierPath(ovalIn: NSRect(
+            x: x - dotRadius, y: y - dotRadius,
+            width: dotRadius * 2, height: dotRadius * 2
         ))
-        traceColor.setFill()
-        socket.fill()
+        NSColor(calibratedRed: 0.46, green: 0.92, blue: 0.90, alpha: 1).setFill()
+        dot.fill()
     }
+
+    let needleT: CGFloat = 0.75
+    let needleDeg = startDeg + (endDeg - startDeg) * needleT
+    let needleRad = needleDeg * .pi / 180
+    let needleLen = radius * 0.92
+    let needle = NSBezierPath()
+    needle.move(to: NSPoint(x: cx, y: cy))
+    needle.line(to: NSPoint(
+        x: cx + cos(needleRad) * needleLen,
+        y: cy + sin(needleRad) * needleLen
+    ))
+    needle.lineWidth = max(4, size * 0.046)
+    needle.lineCapStyle = .round
+    NSColor.white.setStroke()
+    needle.stroke()
+
+    let hubRadius = size * 0.04
+    let hub = NSBezierPath(ovalIn: NSRect(
+        x: cx - hubRadius, y: cy - hubRadius,
+        width: hubRadius * 2, height: hubRadius * 2
+    ))
+    NSColor.white.setFill()
+    hub.fill()
 
     return image
 }
