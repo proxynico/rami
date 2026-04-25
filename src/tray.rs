@@ -42,7 +42,8 @@ pub struct TrayController {
 #[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 enum MenuEntry<'a> {
-    Disabled(&'a str),
+    /// Read-only summary line (enabled for legibility; no action).
+    Summary(&'a str),
     Separator,
     Refresh(&'a str),
     LaunchAtLogin(LaunchAtLoginStatus),
@@ -55,9 +56,9 @@ fn menu_entries(
     launch_at_login_status: LaunchAtLoginStatus,
 ) -> [MenuEntry<'_>; 8] {
     [
-        MenuEntry::Disabled(&rows.ram_summary),
-        MenuEntry::Disabled(&rows.memory_pressure),
-        MenuEntry::Disabled(&rows.swap_used),
+        MenuEntry::Summary(&rows.ram_summary),
+        MenuEntry::Summary(&rows.memory_pressure),
+        MenuEntry::Summary(&rows.swap_used),
         MenuEntry::Separator,
         MenuEntry::Refresh(&rows.refresh),
         MenuEntry::LaunchAtLogin(launch_at_login_status),
@@ -81,7 +82,8 @@ impl TrayController {
                 &empty,
             )
         };
-        ram_item.setEnabled(false);
+        // Enabled + no selector: full `labelColor` contrast on dark menus. Disabled items are
+        // drawn too dim for read-only stats rows.
         menu.addItem(&ram_item);
 
         let pressure_item = unsafe {
@@ -92,7 +94,6 @@ impl TrayController {
                 &empty,
             )
         };
-        pressure_item.setEnabled(false);
         menu.addItem(&pressure_item);
 
         let swap_item = unsafe {
@@ -103,7 +104,6 @@ impl TrayController {
                 &empty,
             )
         };
-        swap_item.setEnabled(false);
         menu.addItem(&swap_item);
 
         menu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -384,9 +384,9 @@ mod tests {
         assert_eq!(
             entries,
             [
-                MenuEntry::Disabled("RAM: 0.0 GB of 0.0 GB"),
-                MenuEntry::Disabled("Memory Pressure: Normal"),
-                MenuEntry::Disabled("Swap Used: 0.0 GB"),
+                MenuEntry::Summary("RAM: 0.0 GB of 0.0 GB"),
+                MenuEntry::Summary("Memory Pressure: Normal"),
+                MenuEntry::Summary("Swap Used: 0.0 GB"),
                 MenuEntry::Separator,
                 MenuEntry::Refresh("Refresh"),
                 MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Disabled),
