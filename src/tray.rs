@@ -8,10 +8,10 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSControlStateValueOff, NSControlStateValueOn, NSImageSymbolConfiguration, NSImageSymbolScale,
-    NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+    NSColor, NSControlStateValueOff, NSControlStateValueOn, NSForegroundColorAttributeName,
+    NSImageSymbolConfiguration, NSImageSymbolScale, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
 };
-use objc2_foundation::NSString;
+use objc2_foundation::{NSDictionary, NSAttributedString, NSString};
 use std::cell::{Cell, RefCell};
 
 pub struct TrayController {
@@ -313,13 +313,13 @@ impl TrayController {
         auto_refresh_enabled: bool,
         _mtm: MainThreadMarker,
     ) {
-        set_menu_item_title_if_changed(&self.ram_item, &self.last_ram_title, &rows.ram_summary);
-        set_menu_item_title_if_changed(
+        set_dropdown_summary_if_changed(&self.ram_item, &self.last_ram_title, &rows.ram_summary);
+        set_dropdown_summary_if_changed(
             &self.pressure_item,
             &self.last_pressure_title,
             &rows.memory_pressure,
         );
-        set_menu_item_title_if_changed(&self.swap_item, &self.last_swap_title, &rows.swap_used);
+        set_dropdown_summary_if_changed(&self.swap_item, &self.last_swap_title, &rows.swap_used);
         set_menu_item_title_if_changed(&self.refresh_item, &self.last_refresh_title, &rows.refresh);
         set_menu_item_title_if_changed(&self.quit_item, &self.last_quit_title, &rows.quit);
 
@@ -367,6 +367,28 @@ fn set_menu_item_title_if_changed(item: &NSMenuItem, cache: &RefCell<String>, va
     if *cache.borrow() != value {
         item.setTitle(&NSString::from_str(value));
         *cache.borrow_mut() = value.to_string();
+    }
+}
+
+/// Read-only stats use `NSColor::secondaryLabelColor` so they read as supporting text, not as
+/// clickable commands (full `labelColor`) or as nearly invisible disabled rows.
+fn dropdown_summary_attributed(title: &str) -> Retained<NSAttributedString> {
+    unsafe {
+        let string = NSString::from_str(title);
+        let color = Retained::cast_unchecked::<AnyObject>(NSColor::secondaryLabelColor());
+        let attrs = NSDictionary::from_retained_objects(
+            &[NSForegroundColorAttributeName],
+            &[color],
+        );
+        NSAttributedString::new_with_attributes(&string, &attrs)
+    }
+}
+
+fn set_dropdown_summary_if_changed(item: &NSMenuItem, cache: &RefCell<String>, text: &str) {
+    if *cache.borrow() != text {
+        let attr = dropdown_summary_attributed(text);
+        item.setAttributedTitle(Some(&attr));
+        *cache.borrow_mut() = text.to_string();
     }
 }
 
