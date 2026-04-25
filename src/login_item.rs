@@ -73,6 +73,12 @@ pub struct LaunchAtLoginController {
     service: Retained<SMAppService>,
 }
 
+impl Default for LaunchAtLoginController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LaunchAtLoginController {
     pub fn new() -> Self {
         Self {

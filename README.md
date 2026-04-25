@@ -1,7 +1,7 @@
 # rami
 
 `rami` is a tiny macOS menu bar app that shows current RAM usage as a single
-percentage in the menu bar.
+SF Symbol gauge in the menu bar.
 
 The goal is not to be a full system monitor. It is meant to stay lightweight,
 stay out of the Dock, and answer one question quickly:
@@ -10,16 +10,18 @@ How much memory is this Mac using right now?
 
 ## What it does
 
-- shows RAM percentage in the menu bar
-- flips to a tiny warning cue when memory pressure is elevated or high
+- shows a template-tinted gauge glyph in the menu bar, bucketed across
+  `0% / 33% / 50% / 67% / 100%`
+- tints the glyph red when kernel memory pressure is `High`
 - opens a plain native dropdown with:
-  - `RAM`
-  - `Memory Pressure`
-  - `Swap Used`
+  - `RAM: NN% — used of total`
+  - `Memory Pressure: Normal | Elevated | High`
+  - `Swap Used: N.N GB`
   - `Refresh`
+  - `Pause Auto Refresh`
   - `Launch at Login`
   - `Quit`
-- refreshes automatically every 5 seconds
+- refreshes automatically every 5 seconds (toggle with `Pause Auto Refresh`)
 
 ## Current scope
 

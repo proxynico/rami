@@ -30,24 +30,22 @@ impl AppState {
         }
         let mtm = MainThreadMarker::new().expect("refreshes must stay on the main thread");
         let launch_at_login_status = self.launch_at_login_status.get();
-        match self.sampler.sample() {
-            Ok(snapshot) => self.tray.set_snapshot(
+        if let Ok(snapshot) = self.sampler.sample() {
+            self.tray.set_snapshot(
                 snapshot,
                 launch_at_login_status,
                 self.auto_refresh_enabled.get(),
                 mtm,
-            ),
-            Err(err) => eprintln!("failed to refresh RAM snapshot: {err}"),
+            );
         }
     }
 
     fn toggle_launch_at_login(&self) {
         match self.launch_at_login.toggle() {
             Ok(status) => self.launch_at_login_status.set(status),
-            Err(err) => {
-                eprintln!("failed to update launch at login: {err}");
-                self.launch_at_login_status.set(self.launch_at_login.status());
-            }
+            Err(_) => self
+                .launch_at_login_status
+                .set(self.launch_at_login.status()),
         }
         self.refresh(true);
     }

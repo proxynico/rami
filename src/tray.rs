@@ -220,7 +220,7 @@ impl TrayController {
 
         if let Some(button) = self.status_item.button(mtm) {
             let warning = matches!(pressure, MemoryPressure::High);
-            match self.make_symbol_image(name, mtm) {
+            match self.make_symbol_image(name) {
                 Some(image) => {
                     image.setTemplate(!warning);
                     button.setImage(Some(&image));
@@ -240,11 +240,7 @@ impl TrayController {
         }
     }
 
-    fn make_symbol_image(
-        &self,
-        name: &'static str,
-        _mtm: MainThreadMarker,
-    ) -> Option<Retained<NSImage>> {
+    fn make_symbol_image(&self, name: &'static str) -> Option<Retained<NSImage>> {
         let desc = NSString::from_str("RAM usage");
         let symbol_name = NSString::from_str(name);
         let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(

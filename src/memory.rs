@@ -129,10 +129,10 @@ impl MemorySampler {
         };
 
         if result != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("host_statistics64 failed with kern_return_t {}", result),
-            ));
+            return Err(io::Error::other(format!(
+                "host_statistics64 failed with kern_return_t {}",
+                result
+            )));
         }
 
         validate_stats_count(count)?;
@@ -213,10 +213,7 @@ fn page_size_bytes() -> io::Result<u64> {
     let page_size = unsafe { vm_page_size as u64 };
 
     if page_size == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "vm_page_size unavailable",
-        ));
+        return Err(io::Error::other("vm_page_size unavailable"));
     }
 
     Ok(page_size)
