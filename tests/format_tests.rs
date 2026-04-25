@@ -1,12 +1,14 @@
 use rami::format::{
-    dropdown_rows, gb_text, menu_bar_icon, menu_bar_text, placeholder_dropdown_rows,
+    dropdown_rows, gb_text, menu_bar_text, placeholder_dropdown_rows, pressure_tint, PressureTint,
     placeholder_text,
 };
 use rami::model::{MemoryPressure, MemorySnapshot};
 
 #[test]
-fn menu_bar_text_uses_integer_percent() {
-    assert_eq!(menu_bar_text(53), "▅ 53%");
+fn menu_bar_text_returns_percent_only() {
+    for n in [0_u8, 19, 20, 53, 79, 80, 100] {
+        assert_eq!(menu_bar_text(n), format!("{n}%"));
+    }
 }
 
 #[test]
@@ -34,14 +36,14 @@ fn gb_text_rounds_decimal_boundary_to_one_gb() {
 }
 
 #[test]
-fn menu_bar_icon_is_quiet_when_pressure_is_normal() {
-    assert_eq!(menu_bar_icon(MemoryPressure::Normal), "");
+fn pressure_tint_uses_template_for_normal_pressure() {
+    assert_eq!(pressure_tint(MemoryPressure::Normal), PressureTint::Template);
 }
 
 #[test]
-fn menu_bar_icon_warns_when_pressure_is_elevated_or_high() {
-    assert_eq!(menu_bar_icon(MemoryPressure::Elevated), "!");
-    assert_eq!(menu_bar_icon(MemoryPressure::High), "!!");
+fn pressure_tint_warns_with_yellow_and_red() {
+    assert_eq!(pressure_tint(MemoryPressure::Elevated), PressureTint::Yellow);
+    assert_eq!(pressure_tint(MemoryPressure::High), PressureTint::Red);
 }
 
 #[test]
