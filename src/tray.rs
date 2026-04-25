@@ -1,17 +1,15 @@
-use crate::format::{
-    dropdown_rows, menu_bar_text, menu_bar_tooltip, placeholder_dropdown_rows, placeholder_text,
-    pressure_tint, PressureTint,
-};
+use crate::format::{dropdown_rows, gauge_symbol_name, placeholder_dropdown_rows};
 use crate::login_item::LaunchAtLoginStatus;
-use crate::model::{DropdownRows, MemorySnapshot};
+use crate::model::{DropdownRows, MemoryPressure, MemorySnapshot};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSColor, NSControlStateValueOff, NSControlStateValueOn, NSForegroundColorAttributeName,
-    NSImageSymbolConfiguration, NSImageSymbolScale, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn,
+    NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
+    NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
 };
-use objc2_foundation::{NSDictionary, NSAttributedString, NSString};
+use objc2_foundation::{NSAttributedString, NSDictionary, NSString};
 use std::cell::{Cell, RefCell};
 
 pub struct TrayController {
@@ -24,10 +22,8 @@ pub struct TrayController {
     auto_refresh_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
     quit_item: Retained<NSMenuItem>,
-    last_label: RefCell<String>,
-    last_tooltip: RefCell<String>,
     last_image_name: RefCell<Option<&'static str>>,
-    last_tint: Cell<PressureTint>,
+    last_pressure: Cell<MemoryPressure>,
     last_ram_title: RefCell<String>,
     last_pressure_title: RefCell<String>,
     last_swap_title: RefCell<String>,
@@ -82,8 +78,6 @@ impl TrayController {
                 &empty,
             )
         };
-        // Enabled + no selector: full `labelColor` contrast on dark menus. Disabled items are
-        // drawn too dim for read-only stats rows.
         menu.addItem(&ram_item);
 
         let pressure_item = unsafe {
@@ -163,6 +157,11 @@ impl TrayController {
         menu.addItem(&quit_item);
         status_item.setMenu(Some(&menu));
 
+        if let Some(button) = status_item.button(mtm) {
+            button.setTitle(&empty);
+            button.setImagePosition(NSCellImagePosition::ImageOnly);
+        }
+
         let controller = Self {
             status_item,
             menu,
@@ -173,10 +172,8 @@ impl TrayController {
             auto_refresh_item,
             launch_at_login_item,
             quit_item,
-            last_label: RefCell::new(String::new()),
-            last_tooltip: RefCell::new(String::new()),
             last_image_name: RefCell::new(None),
-            last_tint: Cell::new(PressureTint::Template),
+            last_pressure: Cell::new(MemoryPressure::Normal),
             last_ram_title: RefCell::new(String::new()),
             last_pressure_title: RefCell::new(String::new()),
             last_swap_title: RefCell::new(String::new()),
@@ -187,8 +184,7 @@ impl TrayController {
             last_launch_checked: Cell::new(false),
             last_launch_enabled: Cell::new(false),
         };
-        controller.set_image(PressureTint::Template, mtm);
-        controller.set_label(&placeholder_text(), mtm);
+        controller.set_gauge(0, MemoryPressure::Normal, mtm);
         controller.set_menu_rows(&rows, LaunchAtLoginStatus::Disabled, true, mtm);
         controller
     }
@@ -200,9 +196,7 @@ impl TrayController {
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
     ) {
-        self.set_image(pressure_tint(snapshot.pressure), mtm);
-        self.set_label(&menu_bar_text(snapshot.used_percent), mtm);
-        self.set_tooltip(&menu_bar_tooltip(snapshot), mtm);
+        self.set_gauge(snapshot.used_percent, snapshot.pressure, mtm);
         self.set_menu_rows(
             &dropdown_rows(snapshot),
             launch_at_login_status,
@@ -212,73 +206,37 @@ impl TrayController {
     }
 
     pub fn set_placeholder(&self, launch_at_login_status: LaunchAtLoginStatus, mtm: MainThreadMarker) {
-        self.set_image(PressureTint::Template, mtm);
-        self.set_label(&placeholder_text(), mtm);
-        self.set_tooltip("RAM data is loading...", mtm);
+        self.set_gauge(0, MemoryPressure::Normal, mtm);
         self.set_menu_rows(&placeholder_dropdown_rows(), launch_at_login_status, true, mtm);
     }
 
-    fn set_label(&self, text: &str, mtm: MainThreadMarker) {
-        if let Some(button) = self.status_item.button(mtm) {
-            if *self.last_label.borrow() != text {
-                let title = NSString::from_str(text);
-                button.setTitle(&title);
-                *self.last_label.borrow_mut() = text.to_string();
-            }
-        }
-    }
-
-    fn set_image(&self, tint: PressureTint, mtm: MainThreadMarker) {
-        let preferred = "memorychip.fill";
-        let fallback = "memorychip";
-        let current_name = *self.last_image_name.borrow();
-        let current_tint = self.last_tint.get();
-        if current_name == Some(preferred) && current_tint == tint {
+    fn set_gauge(&self, percent: u8, pressure: MemoryPressure, mtm: MainThreadMarker) {
+        let name = gauge_symbol_name(percent);
+        let name_unchanged = *self.last_image_name.borrow() == Some(name);
+        let pressure_unchanged = self.last_pressure.get() == pressure;
+        if name_unchanged && pressure_unchanged {
             return;
         }
 
         if let Some(button) = self.status_item.button(mtm) {
-            let symbol_name = self
-                .make_symbol_image(preferred, mtm)
-                .map(|image| {
+            let warning = matches!(pressure, MemoryPressure::High);
+            match self.make_symbol_image(name, mtm) {
+                Some(image) => {
+                    image.setTemplate(!warning);
                     button.setImage(Some(&image));
-                    preferred
-                })
-                .or_else(|| {
-                    self.make_symbol_image(fallback, mtm).map(|image| {
-                        button.setImage(Some(&image));
-                        fallback
-                    })
-                });
-
-            if symbol_name.is_none() {
-                button.setImage(None);
-            }
-
-            button.setImagePosition(objc2_app_kit::NSCellImagePosition::ImageLeading);
-            match tint {
-                PressureTint::Template => {
-                    if let Some(image) = button.image() {
-                        image.setTemplate(true);
-                    }
-                    button.setContentTintColor(None);
+                    *self.last_image_name.borrow_mut() = Some(name);
                 }
-                PressureTint::Yellow => {
-                    if let Some(image) = button.image() {
-                        image.setTemplate(false);
-                    }
-                    button.setContentTintColor(Some(&objc2_app_kit::NSColor::systemYellowColor()));
-                }
-                PressureTint::Red => {
-                    if let Some(image) = button.image() {
-                        image.setTemplate(false);
-                    }
-                    button.setContentTintColor(Some(&objc2_app_kit::NSColor::systemRedColor()));
+                None => {
+                    button.setImage(None);
+                    *self.last_image_name.borrow_mut() = None;
                 }
             }
-
-            *self.last_image_name.borrow_mut() = symbol_name;
-            self.last_tint.set(tint);
+            if warning {
+                button.setContentTintColor(Some(&NSColor::systemRedColor()));
+            } else {
+                button.setContentTintColor(None);
+            }
+            self.last_pressure.set(pressure);
         }
     }
 
@@ -286,24 +244,15 @@ impl TrayController {
         &self,
         name: &'static str,
         _mtm: MainThreadMarker,
-    ) -> Option<Retained<objc2_app_kit::NSImage>> {
-        let desc = NSString::from_str("Memory usage");
+    ) -> Option<Retained<NSImage>> {
+        let desc = NSString::from_str("RAM usage");
         let symbol_name = NSString::from_str(name);
-        let base = objc2_app_kit::NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(
             &symbol_name,
             Some(&desc),
         )?;
         let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Large);
         base.imageWithSymbolConfiguration(&config)
-    }
-
-    fn set_tooltip(&self, tooltip: &str, mtm: MainThreadMarker) {
-        if let Some(button) = self.status_item.button(mtm) {
-            if *self.last_tooltip.borrow() != tooltip {
-                button.setToolTip(Some(&NSString::from_str(tooltip)));
-                *self.last_tooltip.borrow_mut() = tooltip.to_string();
-            }
-        }
     }
 
     fn set_menu_rows(
@@ -370,8 +319,6 @@ fn set_menu_item_title_if_changed(item: &NSMenuItem, cache: &RefCell<String>, va
     }
 }
 
-/// Read-only stats use `NSColor::secondaryLabelColor` so they read as supporting text, not as
-/// clickable commands (full `labelColor`) or as nearly invisible disabled rows.
 fn dropdown_summary_attributed(title: &str) -> Retained<NSAttributedString> {
     unsafe {
         let string = NSString::from_str(title);
@@ -406,7 +353,7 @@ mod tests {
         assert_eq!(
             entries,
             [
-                MenuEntry::Summary("RAM: 0.0 GB of 0.0 GB"),
+                MenuEntry::Summary("RAM: --% — 0.0 GB of 0.0 GB"),
                 MenuEntry::Summary("Memory Pressure: Normal"),
                 MenuEntry::Summary("Swap Used: 0.0 GB"),
                 MenuEntry::Separator,

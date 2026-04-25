@@ -1,26 +1,30 @@
-use rami::format::{
-    dropdown_rows, gb_text, menu_bar_text, placeholder_dropdown_rows, pressure_tint, PressureTint,
-    placeholder_text,
-};
+use rami::format::{dropdown_rows, gauge_symbol_name, gb_text, placeholder_dropdown_rows};
 use rami::model::{MemoryPressure, MemorySnapshot};
 
 #[test]
-fn menu_bar_text_returns_percent_only() {
-    for n in [0_u8, 19, 20, 53, 79, 80, 100] {
-        assert_eq!(menu_bar_text(n), format!("{n}%"));
+fn gauge_symbol_name_returns_expected_variant_for_each_bucket() {
+    let cases = [
+        (0_u8, "gauge.with.dots.needle.0percent"),
+        (19, "gauge.with.dots.needle.0percent"),
+        (20, "gauge.with.dots.needle.33percent"),
+        (39, "gauge.with.dots.needle.33percent"),
+        (40, "gauge.with.dots.needle.50percent"),
+        (59, "gauge.with.dots.needle.50percent"),
+        (60, "gauge.with.dots.needle.67percent"),
+        (79, "gauge.with.dots.needle.67percent"),
+        (80, "gauge.with.dots.needle.100percent"),
+        (100, "gauge.with.dots.needle.100percent"),
+    ];
+    for (percent, expected) in cases {
+        assert_eq!(gauge_symbol_name(percent), expected, "percent {percent}");
     }
-}
-
-#[test]
-fn placeholder_is_double_dash_percent() {
-    assert_eq!(placeholder_text(), "--%");
 }
 
 #[test]
 fn placeholder_dropdown_rows_match_the_v2_menu_shape() {
     let rows = placeholder_dropdown_rows();
 
-    assert_eq!(rows.ram_summary, "RAM: 0.0 GB of 0.0 GB");
+    assert_eq!(rows.ram_summary, "RAM: --% — 0.0 GB of 0.0 GB");
     assert_eq!(rows.memory_pressure, "Memory Pressure: Normal");
     assert_eq!(rows.swap_used, "Swap Used: 0.0 GB");
 }
@@ -36,17 +40,6 @@ fn gb_text_rounds_decimal_boundary_to_one_gb() {
 }
 
 #[test]
-fn pressure_tint_uses_template_for_normal_pressure() {
-    assert_eq!(pressure_tint(MemoryPressure::Normal), PressureTint::Template);
-}
-
-#[test]
-fn pressure_tint_warns_with_yellow_and_red() {
-    assert_eq!(pressure_tint(MemoryPressure::Elevated), PressureTint::Yellow);
-    assert_eq!(pressure_tint(MemoryPressure::High), PressureTint::Red);
-}
-
-#[test]
 fn dropdown_rows_include_pressure_and_swap_usage() {
     let snapshot = MemorySnapshot {
         used_bytes: 9_019_437_056,
@@ -58,7 +51,7 @@ fn dropdown_rows_include_pressure_and_swap_usage() {
 
     let rows = dropdown_rows(snapshot);
 
-    assert_eq!(rows.ram_summary, "RAM: 9.0 GB of 17.2 GB");
+    assert_eq!(rows.ram_summary, "RAM: 53% — 9.0 GB of 17.2 GB");
     assert_eq!(rows.memory_pressure, "Memory Pressure: Elevated");
     assert_eq!(rows.swap_used, "Swap Used: 4.4 GB");
     assert_eq!(rows.refresh, "Refresh");
