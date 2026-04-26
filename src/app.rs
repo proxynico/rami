@@ -1,7 +1,7 @@
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::lock::AppLock;
 use crate::memory::MemorySampler;
-use crate::process_memory::AppMemorySnapshot;
+use crate::process_memory::{AppMemorySnapshot, ProcessMemorySampler};
 use crate::tray::TrayController;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -19,10 +19,17 @@ thread_local! {
 struct AppState {
     tray: TrayController,
     sampler: MemorySampler,
+    process_sampler: ProcessMemorySampler,
     launch_at_login: LaunchAtLoginController,
     launch_at_login_status: Cell<LaunchAtLoginStatus>,
     auto_refresh_enabled: Cell<bool>,
+    show_app_usage: Cell<bool>,
+    app_memory: RefCell<AppMemorySnapshot>,
+    ticks_until_app_refresh: Cell<u8>,
 }
+
+const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
+const TOP_APP_ROWS: usize = 5;
 
 impl AppState {
     fn refresh(&self, manual: bool) {
@@ -31,15 +38,37 @@ impl AppState {
         }
         let mtm = MainThreadMarker::new().expect("refreshes must stay on the main thread");
         let launch_at_login_status = self.launch_at_login_status.get();
+
+        if self.show_app_usage.get() {
+            let should_scan = manual || self.ticks_until_app_refresh.get() == 0;
+            if should_scan {
+                self.sample_apps();
+                self.ticks_until_app_refresh
+                    .set(APP_REFRESH_INTERVAL_TICKS.saturating_sub(1));
+            } else {
+                self.ticks_until_app_refresh
+                    .set(self.ticks_until_app_refresh.get() - 1);
+            }
+        }
+
         if let Ok(snapshot) = self.sampler.sample() {
+            let apps = self.app_memory.borrow();
             self.tray.set_snapshot(
                 snapshot,
-                &AppMemorySnapshot::Hidden,
+                &apps,
                 launch_at_login_status,
                 self.auto_refresh_enabled.get(),
                 mtm,
             );
         }
+    }
+
+    fn sample_apps(&self) {
+        let next = match self.process_sampler.sample(TOP_APP_ROWS) {
+            Ok(rows) => AppMemorySnapshot::Loaded(rows),
+            Err(_) => AppMemorySnapshot::Unavailable,
+        };
+        *self.app_memory.borrow_mut() = next;
     }
 
     fn toggle_launch_at_login(&self) {
@@ -55,6 +84,19 @@ impl AppState {
     fn toggle_auto_refresh(&self) {
         self.auto_refresh_enabled
             .set(!self.auto_refresh_enabled.get());
+        self.refresh(true);
+    }
+
+    fn toggle_show_app_usage(&self) {
+        let on = !self.show_app_usage.get();
+        self.show_app_usage.set(on);
+        if on {
+            *self.app_memory.borrow_mut() = AppMemorySnapshot::Loading;
+            self.ticks_until_app_refresh.set(0);
+        } else {
+            *self.app_memory.borrow_mut() = AppMemorySnapshot::Hidden;
+        }
+        self.tray.set_show_app_usage(on);
         self.refresh(true);
     }
 }
@@ -110,6 +152,14 @@ define_class!(
                 state.toggle_auto_refresh();
             }
         }
+
+        #[unsafe(method(toggleShowAppUsage:))]
+        fn toggle_show_app_usage(&self, _sender: &AnyObject) {
+            let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+            if let Some(state) = state {
+                state.toggle_show_app_usage();
+            }
+        }
     }
 
     unsafe impl NSObjectProtocol for RefreshTarget {}
@@ -147,9 +197,13 @@ impl App {
         let state = Rc::new(AppState {
             tray,
             sampler: MemorySampler::new()?,
+            process_sampler: ProcessMemorySampler::new(),
             launch_at_login,
             launch_at_login_status: Cell::new(launch_at_login_status),
             auto_refresh_enabled: Cell::new(true),
+            show_app_usage: Cell::new(false),
+            app_memory: RefCell::new(AppMemorySnapshot::Hidden),
+            ticks_until_app_refresh: Cell::new(0),
         });
         install_app_state(&state);
         app.finishLaunching();

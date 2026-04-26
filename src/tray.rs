@@ -50,6 +50,7 @@ pub struct TrayController {
     app_items: Vec<Retained<NSMenuItem>>,
     refresh_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
+    show_app_usage_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
     quit_item: Retained<NSMenuItem>,
     pause_icon: Option<Retained<NSImage>>,
@@ -133,6 +134,20 @@ impl TrayController {
             auto_refresh_item.setImage(Some(img));
         }
 
+        let show_app_usage_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Show App Usage"),
+                Some(sel!(toggleShowAppUsage:)),
+                &empty,
+            )
+        };
+        unsafe {
+            show_app_usage_item.setTarget(Some(&refresh_target));
+        }
+        show_app_usage_item.setEnabled(true);
+        show_app_usage_item.setState(NSControlStateValueOff);
+
         let launch_at_login_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
@@ -180,6 +195,7 @@ impl TrayController {
             app_items,
             refresh_item,
             auto_refresh_item,
+            show_app_usage_item,
             launch_at_login_item,
             quit_item,
             pause_icon,
@@ -221,6 +237,14 @@ impl TrayController {
             auto_refresh_enabled,
             mtm,
         );
+    }
+
+    pub fn set_show_app_usage(&self, enabled: bool) {
+        self.show_app_usage_item.setState(if enabled {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
     }
 
     pub fn set_placeholder(
@@ -386,6 +410,7 @@ impl TrayController {
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
         self.menu.addItem(&self.refresh_item);
         self.menu.addItem(&self.auto_refresh_item);
+        self.menu.addItem(&self.show_app_usage_item);
         self.menu.addItem(&self.launch_at_login_item);
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
         self.menu.addItem(&self.quit_item);
@@ -564,6 +589,7 @@ pub(crate) enum MenuEntry<'a> {
     Separator,
     Refresh,
     AutoRefresh { enabled: bool },
+    ShowAppUsage { enabled: bool },
     LaunchAtLogin(LaunchAtLoginStatus),
     Quit,
 }
@@ -573,6 +599,16 @@ pub(crate) fn loaded_menu_entries<'a>(
     model: &'a DropdownModel,
     launch_at_login_status: LaunchAtLoginStatus,
     auto_refresh_enabled: bool,
+) -> Vec<MenuEntry<'a>> {
+    loaded_menu_entries_with_app_usage(model, launch_at_login_status, auto_refresh_enabled, false)
+}
+
+#[cfg(test)]
+pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
+    model: &'a DropdownModel,
+    launch_at_login_status: LaunchAtLoginStatus,
+    auto_refresh_enabled: bool,
+    show_app_usage: bool,
 ) -> Vec<MenuEntry<'a>> {
     let mut entries = Vec::new();
     match model {
@@ -626,6 +662,9 @@ pub(crate) fn loaded_menu_entries<'a>(
     entries.push(MenuEntry::AutoRefresh {
         enabled: auto_refresh_enabled,
     });
+    entries.push(MenuEntry::ShowAppUsage {
+        enabled: show_app_usage,
+    });
     entries.push(MenuEntry::LaunchAtLogin(launch_at_login_status));
     entries.push(MenuEntry::Separator);
     entries.push(MenuEntry::Quit);
@@ -662,6 +701,7 @@ mod tests {
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
                 MenuEntry::AutoRefresh { enabled: true },
+                MenuEntry::ShowAppUsage { enabled: false },
                 MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Disabled),
                 MenuEntry::Separator,
                 MenuEntry::Quit,
@@ -710,12 +750,13 @@ mod tests {
         assert_eq!(entries[6], MenuEntry::Separator);
         assert_eq!(entries[7], MenuEntry::Refresh);
         assert_eq!(entries[8], MenuEntry::AutoRefresh { enabled: true });
+        assert_eq!(entries[9], MenuEntry::ShowAppUsage { enabled: false });
         assert_eq!(
-            entries[9],
+            entries[10],
             MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Enabled)
         );
-        assert_eq!(entries[10], MenuEntry::Separator);
-        assert_eq!(entries[11], MenuEntry::Quit);
+        assert_eq!(entries[11], MenuEntry::Separator);
+        assert_eq!(entries[12], MenuEntry::Quit);
     }
 
     #[test]
@@ -761,6 +802,31 @@ mod tests {
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
         assert_eq!(entries[2], MenuEntry::SectionHeader("Apps"));
         assert_eq!(entries[3], MenuEntry::AppUnavailable);
+    }
+
+    #[test]
+    fn show_app_usage_state_reflects_toggle() {
+        use super::loaded_menu_entries_with_app_usage;
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
+        let on = loaded_menu_entries_with_app_usage(
+            &model,
+            LaunchAtLoginStatus::Disabled,
+            true,
+            true,
+        );
+        assert!(on
+            .iter()
+            .any(|e| matches!(e, MenuEntry::ShowAppUsage { enabled: true })));
+
+        let off = loaded_menu_entries_with_app_usage(
+            &model,
+            LaunchAtLoginStatus::Disabled,
+            true,
+            false,
+        );
+        assert!(off
+            .iter()
+            .any(|e| matches!(e, MenuEntry::ShowAppUsage { enabled: false })));
     }
 
     #[test]

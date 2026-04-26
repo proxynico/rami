@@ -326,4 +326,23 @@ mod tests {
         assert!(should_skip_pid(0, 42));
         assert!(should_skip_pid(-1, 42));
     }
+
+    #[test]
+    #[ignore]
+    fn smoke_sample_against_real_processes() {
+        let sampler = ProcessMemorySampler::new();
+        let started = std::time::Instant::now();
+        let rows = sampler.sample(5).expect("sample");
+        let elapsed = started.elapsed();
+        eprintln!("scan took {elapsed:?}, returned {} rows:", rows.len());
+        for row in &rows {
+            eprintln!(
+                "  {:30} {:>8} bytes",
+                row.name,
+                row.footprint_bytes / 1_000_000
+            );
+        }
+        assert!(!rows.is_empty());
+        assert!(rows.len() <= 5);
+    }
 }
