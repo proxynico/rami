@@ -267,7 +267,7 @@ impl TrayController {
             self.last_swap_row.borrow_mut().take();
         }
 
-        if let DropdownModel::Loaded { memory, pressure, swap } = model {
+        if let DropdownModel::Loaded { memory, pressure, swap, .. } = model {
             if self.last_memory_row.borrow().as_ref() != Some(memory) {
                 self.memory_item.setAttributedTitle(Some(&stat_row_attributed(
                     memory,
@@ -480,7 +480,7 @@ pub(crate) fn loaded_menu_entries<'a>(
             entries.push(MenuEntry::SectionHeader("Memory"));
             entries.push(MenuEntry::Loading);
         }
-        DropdownModel::Loaded { memory, pressure, swap } => {
+        DropdownModel::Loaded { memory, pressure, swap, .. } => {
             entries.push(MenuEntry::SectionHeader("Memory"));
             entries.push(MenuEntry::Stat {
                 primary: &memory.primary,

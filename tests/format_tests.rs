@@ -53,7 +53,7 @@ fn dropdown_model_splits_memory_into_primary_and_tail() {
         swap_used_bytes: 4_414_120_000,
     };
 
-    let DropdownModel::Loaded { memory, pressure, swap } = dropdown_model(snapshot) else {
+    let DropdownModel::Loaded { memory, pressure, swap, .. } = dropdown_model(snapshot) else {
         panic!("expected Loaded model");
     };
 
