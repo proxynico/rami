@@ -19,9 +19,27 @@ How much memory is this Mac using right now?
   - `Swap Used: N.N GB`
   - `Refresh`
   - `Pause Auto Refresh`
+  - `Show App Usage` (optional, see below)
   - `Launch at Login`
   - `Quit`
 - refreshes automatically every 5 seconds (toggle with `Pause Auto Refresh`)
+
+## Show App Usage (optional)
+
+Toggle `Show App Usage` to add an `Apps` section between Memory and Pressure
+that lists the top five processes by physical memory footprint, grouped under
+their parent `.app` bundle. Refreshes every 30 seconds while visible (and
+immediately on `Refresh`).
+
+Caveats worth knowing:
+
+- macOS only lets a process inspect other processes owned by the same user,
+  so root-owned daemons (`WindowServer`, `kernel_task`, `mds`, `launchd`)
+  never appear. This is expected, not a bug.
+- Per-process footprint includes compressed and swapped pages, so the app
+  rows can sum to more than the global Memory percentage. Activity Monitor
+  reports the same way.
+- `rami` filters its own pid out of the list.
 
 ## Current scope
 
