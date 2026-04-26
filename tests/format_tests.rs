@@ -1,4 +1,7 @@
-use rami::format::{dropdown_rows, gauge_symbol_name, gb_text, placeholder_dropdown_rows};
+use rami::format::{
+    dropdown_model, gauge_symbol_name, gb_pair, gb_text, placeholder_dropdown_model,
+    DropdownModel,
+};
 use rami::model::{MemoryPressure, MemorySnapshot};
 
 #[test]
@@ -21,15 +24,6 @@ fn gauge_symbol_name_returns_expected_variant_for_each_bucket() {
 }
 
 #[test]
-fn placeholder_dropdown_rows_match_the_v2_menu_shape() {
-    let rows = placeholder_dropdown_rows();
-
-    assert_eq!(rows.ram_summary, "RAM: --% — 0.0 GB of 0.0 GB");
-    assert_eq!(rows.memory_pressure, "Memory Pressure: Normal");
-    assert_eq!(rows.swap_used, "Swap Used: 0.0 GB");
-}
-
-#[test]
 fn gb_text_rounds_to_one_decimal_place() {
     assert_eq!(gb_text(9_019_437_056), "9.0 GB");
 }
@@ -40,7 +34,17 @@ fn gb_text_rounds_decimal_boundary_to_one_gb() {
 }
 
 #[test]
-fn dropdown_rows_include_pressure_and_swap_usage() {
+fn gb_pair_renders_used_over_total() {
+    assert_eq!(gb_pair(5_700_000_000, 16_000_000_000), "5.7 / 16.0 GB");
+}
+
+#[test]
+fn placeholder_model_is_loading() {
+    assert_eq!(placeholder_dropdown_model(), DropdownModel::Loading);
+}
+
+#[test]
+fn dropdown_model_splits_memory_into_primary_and_tail() {
     let snapshot = MemorySnapshot {
         used_bytes: 9_019_437_056,
         total_bytes: 17_179_869_184,
@@ -49,11 +53,32 @@ fn dropdown_rows_include_pressure_and_swap_usage() {
         swap_used_bytes: 4_414_120_000,
     };
 
-    let rows = dropdown_rows(snapshot);
+    let DropdownModel::Loaded { memory, pressure, swap } = dropdown_model(snapshot) else {
+        panic!("expected Loaded model");
+    };
 
-    assert_eq!(rows.ram_summary, "RAM: 53% — 9.0 GB of 17.2 GB");
-    assert_eq!(rows.memory_pressure, "Memory Pressure: Elevated");
-    assert_eq!(rows.swap_used, "Swap Used: 4.4 GB");
-    assert_eq!(rows.refresh, "Refresh");
-    assert_eq!(rows.quit, "Quit");
+    assert_eq!(memory.primary, "53%");
+    assert_eq!(memory.tail.as_deref(), Some("9.0 / 17.2 GB"));
+    assert_eq!(pressure.text, "Elevated");
+    assert!(!pressure.is_high);
+    assert_eq!(swap.primary, "4.4 GB");
+    assert_eq!(swap.tail, None);
+}
+
+#[test]
+fn dropdown_model_marks_high_pressure_for_red_rendering() {
+    let snapshot = MemorySnapshot {
+        used_bytes: 14_000_000_000,
+        total_bytes: 16_000_000_000,
+        used_percent: 88,
+        pressure: MemoryPressure::High,
+        swap_used_bytes: 6_000_000_000,
+    };
+
+    let DropdownModel::Loaded { pressure, .. } = dropdown_model(snapshot) else {
+        panic!("expected Loaded model");
+    };
+
+    assert_eq!(pressure.text, "High");
+    assert!(pressure.is_high);
 }

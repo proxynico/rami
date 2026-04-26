@@ -1,4 +1,4 @@
-use crate::model::{DropdownRows, MemoryPressure, MemorySnapshot};
+use crate::model::{MemoryPressure, MemorySnapshot};
 
 pub fn gauge_symbol_name(percent: u8) -> &'static str {
     match percent {
@@ -15,42 +15,66 @@ pub fn gb_text(bytes: u64) -> String {
     format!("{gb:.1} GB")
 }
 
-fn pressure_text(pressure: MemoryPressure) -> &'static str {
-    match pressure {
+pub fn gb_pair(used_bytes: u64, total_bytes: u64) -> String {
+    let used = used_bytes as f64 / 1_000_000_000_f64;
+    let total = total_bytes as f64 / 1_000_000_000_f64;
+    format!("{used:.1} / {total:.1} GB")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatRow {
+    pub primary: String,
+    pub tail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PressureDisplay {
+    pub text: String,
+    pub is_high: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DropdownModel {
+    Loading,
+    Loaded {
+        memory: StatRow,
+        pressure: PressureDisplay,
+        swap: StatRow,
+    },
+}
+
+fn pressure_text(p: MemoryPressure) -> &'static str {
+    match p {
         MemoryPressure::Normal => "Normal",
         MemoryPressure::Elevated => "Elevated",
         MemoryPressure::High => "High",
     }
 }
 
-pub fn dropdown_rows(snapshot: MemorySnapshot) -> DropdownRows {
-    DropdownRows {
-        ram_summary: format!(
-            "RAM: {}% — {} of {}",
-            snapshot.used_percent,
-            gb_text(snapshot.used_bytes),
-            gb_text(snapshot.total_bytes)
-        ),
-        memory_pressure: format!("Memory Pressure: {}", pressure_text(snapshot.pressure)),
-        swap_used: format!("Swap Used: {}", gb_text(snapshot.swap_used_bytes)),
-        refresh: "Refresh".to_string(),
-        quit: "Quit".to_string(),
+pub fn dropdown_model(snapshot: MemorySnapshot) -> DropdownModel {
+    DropdownModel::Loaded {
+        memory: StatRow {
+            primary: format!("{}%", snapshot.used_percent),
+            tail: Some(gb_pair(snapshot.used_bytes, snapshot.total_bytes)),
+        },
+        pressure: PressureDisplay {
+            text: pressure_text(snapshot.pressure).to_string(),
+            is_high: matches!(snapshot.pressure, MemoryPressure::High),
+        },
+        swap: StatRow {
+            primary: gb_text(snapshot.swap_used_bytes),
+            tail: None,
+        },
     }
 }
 
-pub fn placeholder_dropdown_rows() -> DropdownRows {
-    DropdownRows {
-        ram_summary: "RAM: --% — 0.0 GB of 0.0 GB".to_string(),
-        memory_pressure: "Memory Pressure: Normal".to_string(),
-        swap_used: "Swap Used: 0.0 GB".to_string(),
-        refresh: "Refresh".to_string(),
-        quit: "Quit".to_string(),
-    }
+pub fn placeholder_dropdown_model() -> DropdownModel {
+    DropdownModel::Loading
 }
 
 #[cfg(test)]
 mod tests {
-    use super::gauge_symbol_name;
+    use super::*;
 
     #[test]
     fn gauge_symbol_name_buckets_by_percent() {
