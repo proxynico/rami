@@ -4,4 +4,5 @@ pub mod login_item;
 pub mod lock;
 pub mod memory;
 pub mod model;
+pub mod process_memory;
 pub mod tray;
