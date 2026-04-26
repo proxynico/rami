@@ -1,9 +1,10 @@
 use crate::format::{
-    dropdown_model, gauge_symbol_name, placeholder_dropdown_model, DropdownModel, PressureDisplay,
-    StatRow,
+    dropdown_model_with_apps, gauge_symbol_name, placeholder_dropdown_model, AppSectionDisplay,
+    DropdownModel, PressureDisplay, StatRow,
 };
 use crate::login_item::LaunchAtLoginStatus;
 use crate::model::{MemoryPressure, MemorySnapshot};
+use crate::process_memory::AppMemorySnapshot;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{sel, MainThreadMarker, MainThreadOnly};
@@ -19,22 +20,34 @@ use objc2_foundation::{
 use std::cell::{Cell, RefCell};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppShape {
+    Loading,
+    Unavailable,
+    Rows(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuShape {
     Uninitialized,
     Loading,
-    Loaded,
+    LoadedNoApps,
+    LoadedWithApps(AppShape),
 }
 
 pub struct TrayController {
     status_item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
     memory_section: Retained<NSMenuItem>,
+    apps_section: Retained<NSMenuItem>,
     pressure_section: Retained<NSMenuItem>,
     swap_section: Retained<NSMenuItem>,
     memory_item: Retained<NSMenuItem>,
     pressure_item: Retained<NSMenuItem>,
     swap_item: Retained<NSMenuItem>,
     loading_item: Retained<NSMenuItem>,
+    app_loading_item: Retained<NSMenuItem>,
+    app_unavailable_item: Retained<NSMenuItem>,
+    app_items: Vec<Retained<NSMenuItem>>,
     refresh_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
@@ -47,11 +60,14 @@ pub struct TrayController {
     last_memory_row: RefCell<Option<StatRow>>,
     last_pressure_display: RefCell<Option<PressureDisplay>>,
     last_swap_row: RefCell<Option<StatRow>>,
+    last_app_section: RefCell<Option<AppSectionDisplay>>,
     last_auto_refresh_enabled: Cell<bool>,
     last_launch_title: RefCell<String>,
     last_launch_checked: Cell<bool>,
     last_launch_enabled: Cell<bool>,
 }
+
+const APP_ROW_POOL: usize = 5;
 
 impl TrayController {
     pub fn new(mtm: MainThreadMarker, refresh_target: Retained<AnyObject>) -> Self {
@@ -62,6 +78,7 @@ impl TrayController {
 
         let memory_section =
             NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Memory"), mtm);
+        let apps_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Apps"), mtm);
         let pressure_section =
             NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Pressure"), mtm);
         let swap_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Swap"), mtm);
@@ -71,6 +88,13 @@ impl TrayController {
         let swap_item = make_stat_item(mtm);
         let loading_item = make_stat_item(mtm);
         loading_item.setAttributedTitle(Some(&loading_attributed_title()));
+        let app_loading_item = make_stat_item(mtm);
+        app_loading_item.setAttributedTitle(Some(&loading_attributed_title()));
+        let app_unavailable_item = make_stat_item(mtm);
+        app_unavailable_item
+            .setAttributedTitle(Some(&unavailable_attributed_title()));
+        let app_items: Vec<Retained<NSMenuItem>> =
+            (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
 
         let refresh_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -144,12 +168,16 @@ impl TrayController {
             status_item,
             menu,
             memory_section,
+            apps_section,
             pressure_section,
             swap_section,
             memory_item,
             pressure_item,
             swap_item,
             loading_item,
+            app_loading_item,
+            app_unavailable_item,
+            app_items,
             refresh_item,
             auto_refresh_item,
             launch_at_login_item,
@@ -162,6 +190,7 @@ impl TrayController {
             last_memory_row: RefCell::new(None),
             last_pressure_display: RefCell::new(None),
             last_swap_row: RefCell::new(None),
+            last_app_section: RefCell::new(None),
             last_auto_refresh_enabled: Cell::new(true),
             last_launch_title: RefCell::new(String::new()),
             last_launch_checked: Cell::new(false),
@@ -180,13 +209,14 @@ impl TrayController {
     pub fn set_snapshot(
         &self,
         snapshot: MemorySnapshot,
+        apps: &AppMemorySnapshot,
         launch_at_login_status: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
     ) {
         self.set_gauge(snapshot.used_percent, snapshot.pressure, mtm);
         self.apply_model(
-            &dropdown_model(snapshot),
+            &dropdown_model_with_apps(snapshot, apps),
             launch_at_login_status,
             auto_refresh_enabled,
             mtm,
@@ -255,19 +285,23 @@ impl TrayController {
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
     ) {
-        let new_shape = match model {
-            DropdownModel::Loading => MenuShape::Loading,
-            DropdownModel::Loaded { .. } => MenuShape::Loaded,
-        };
+        let new_shape = menu_shape_for(model);
         if self.shape.get() != new_shape {
             self.rebuild_menu(new_shape, mtm);
             self.shape.set(new_shape);
             self.last_memory_row.borrow_mut().take();
             self.last_pressure_display.borrow_mut().take();
             self.last_swap_row.borrow_mut().take();
+            self.last_app_section.borrow_mut().take();
         }
 
-        if let DropdownModel::Loaded { memory, pressure, swap, .. } = model {
+        if let DropdownModel::Loaded {
+            memory,
+            apps,
+            pressure,
+            swap,
+        } = model
+        {
             if self.last_memory_row.borrow().as_ref() != Some(memory) {
                 self.memory_item.setAttributedTitle(Some(&stat_row_attributed(
                     memory,
@@ -275,6 +309,7 @@ impl TrayController {
                 )));
                 *self.last_memory_row.borrow_mut() = Some(memory.clone());
             }
+            self.update_app_section(apps);
             if self.last_pressure_display.borrow().as_ref() != Some(pressure) {
                 self.pressure_item
                     .setAttributedTitle(Some(&pressure_attributed(pressure)));
@@ -294,6 +329,21 @@ impl TrayController {
         self.status_item.setMenu(Some(&self.menu));
     }
 
+    fn update_app_section(&self, apps: &AppSectionDisplay) {
+        if self.last_app_section.borrow().as_ref() == Some(apps) {
+            return;
+        }
+        if let AppSectionDisplay::Rows(rows) = apps {
+            for (item, row) in self.app_items.iter().zip(rows.iter()) {
+                item.setAttributedTitle(Some(&stat_row_attributed(
+                    row,
+                    NSColor::labelColor(),
+                )));
+            }
+        }
+        *self.last_app_section.borrow_mut() = Some(apps.clone());
+    }
+
     fn rebuild_menu(&self, shape: MenuShape, mtm: MainThreadMarker) {
         self.menu.removeAllItems();
         match shape {
@@ -302,9 +352,31 @@ impl TrayController {
                 self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.loading_item);
             }
-            MenuShape::Loaded => {
+            MenuShape::LoadedNoApps => {
                 self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.memory_item);
+                self.menu.addItem(&self.pressure_section);
+                self.menu.addItem(&self.pressure_item);
+                self.menu.addItem(&self.swap_section);
+                self.menu.addItem(&self.swap_item);
+            }
+            MenuShape::LoadedWithApps(app_shape) => {
+                self.menu.addItem(&self.memory_section);
+                self.menu.addItem(&self.memory_item);
+                self.menu.addItem(&self.apps_section);
+                match app_shape {
+                    AppShape::Loading => {
+                        self.menu.addItem(&self.app_loading_item);
+                    }
+                    AppShape::Unavailable => {
+                        self.menu.addItem(&self.app_unavailable_item);
+                    }
+                    AppShape::Rows(n) => {
+                        for item in self.app_items.iter().take(n) {
+                            self.menu.addItem(item);
+                        }
+                    }
+                }
                 self.menu.addItem(&self.pressure_section);
                 self.menu.addItem(&self.pressure_item);
                 self.menu.addItem(&self.swap_section);
@@ -360,6 +432,21 @@ impl TrayController {
             self.launch_at_login_item.setEnabled(enabled);
             self.last_launch_enabled.set(enabled);
         }
+    }
+}
+
+fn menu_shape_for(model: &DropdownModel) -> MenuShape {
+    match model {
+        DropdownModel::Loading => MenuShape::Loading,
+        DropdownModel::Loaded { apps, .. } => match apps {
+            AppSectionDisplay::Hidden => MenuShape::LoadedNoApps,
+            AppSectionDisplay::Loading => MenuShape::LoadedWithApps(AppShape::Loading),
+            AppSectionDisplay::Unavailable => MenuShape::LoadedWithApps(AppShape::Unavailable),
+            AppSectionDisplay::Rows(rows) => {
+                let n = rows.len().min(APP_ROW_POOL);
+                MenuShape::LoadedWithApps(AppShape::Rows(n))
+            }
+        },
     }
 }
 
@@ -455,12 +542,25 @@ fn loading_attributed_title() -> Retained<NSAttributedString> {
     )
 }
 
+fn unavailable_attributed_title() -> Retained<NSAttributedString> {
+    stat_row_attributed(
+        &StatRow {
+            primary: "Unavailable".to_string(),
+            tail: None,
+        },
+        NSColor::secondaryLabelColor(),
+    )
+}
+
 #[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MenuEntry<'a> {
     SectionHeader(&'a str),
     Stat { primary: &'a str, tail: Option<&'a str>, is_high: bool },
     Loading,
+    AppLoading,
+    AppUnavailable,
+    AppRow { primary: &'a str, tail: Option<&'a str> },
     Separator,
     Refresh,
     AutoRefresh { enabled: bool },
@@ -480,13 +580,33 @@ pub(crate) fn loaded_menu_entries<'a>(
             entries.push(MenuEntry::SectionHeader("Memory"));
             entries.push(MenuEntry::Loading);
         }
-        DropdownModel::Loaded { memory, pressure, swap, .. } => {
+        DropdownModel::Loaded { memory, apps, pressure, swap } => {
             entries.push(MenuEntry::SectionHeader("Memory"));
             entries.push(MenuEntry::Stat {
                 primary: &memory.primary,
                 tail: memory.tail.as_deref(),
                 is_high: false,
             });
+            match apps {
+                AppSectionDisplay::Hidden => {}
+                AppSectionDisplay::Loading => {
+                    entries.push(MenuEntry::SectionHeader("Apps"));
+                    entries.push(MenuEntry::AppLoading);
+                }
+                AppSectionDisplay::Unavailable => {
+                    entries.push(MenuEntry::SectionHeader("Apps"));
+                    entries.push(MenuEntry::AppUnavailable);
+                }
+                AppSectionDisplay::Rows(rows) => {
+                    entries.push(MenuEntry::SectionHeader("Apps"));
+                    for row in rows.iter().take(APP_ROW_POOL) {
+                        entries.push(MenuEntry::AppRow {
+                            primary: &row.primary,
+                            tail: row.tail.as_deref(),
+                        });
+                    }
+                }
+            }
             entries.push(MenuEntry::SectionHeader("Pressure"));
             entries.push(MenuEntry::Stat {
                 primary: &pressure.text,
@@ -515,9 +635,20 @@ pub(crate) fn loaded_menu_entries<'a>(
 #[cfg(test)]
 mod tests {
     use super::{loaded_menu_entries, MenuEntry};
-    use crate::format::{dropdown_model, placeholder_dropdown_model};
+    use crate::format::{dropdown_model, dropdown_model_with_apps, placeholder_dropdown_model};
     use crate::login_item::LaunchAtLoginStatus;
     use crate::model::{MemoryPressure, MemorySnapshot};
+    use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
+
+    fn snapshot() -> MemorySnapshot {
+        MemorySnapshot {
+            used_bytes: 5_700_000_000,
+            total_bytes: 16_000_000_000,
+            used_percent: 47,
+            pressure: MemoryPressure::Normal,
+            swap_used_bytes: 1_200_000_000,
+        }
+    }
 
     #[test]
     fn loading_layout_omits_pressure_and_swap_sections() {
@@ -607,5 +738,63 @@ mod tests {
             }
         );
         assert_eq!(entries[8], MenuEntry::AutoRefresh { enabled: false });
+    }
+
+    #[test]
+    fn loaded_with_apps_hidden_omits_apps_section() {
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
+        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        assert!(!entries.iter().any(|e| matches!(e, MenuEntry::SectionHeader("Apps"))));
+    }
+
+    #[test]
+    fn loaded_with_apps_loading_renders_loading_row() {
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading);
+        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        assert_eq!(entries[2], MenuEntry::SectionHeader("Apps"));
+        assert_eq!(entries[3], MenuEntry::AppLoading);
+    }
+
+    #[test]
+    fn loaded_with_apps_unavailable_renders_one_row() {
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable);
+        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        assert_eq!(entries[2], MenuEntry::SectionHeader("Apps"));
+        assert_eq!(entries[3], MenuEntry::AppUnavailable);
+    }
+
+    #[test]
+    fn loaded_with_apps_rows_inserts_between_memory_and_pressure() {
+        let usage = vec![
+            AppMemoryUsage {
+                name: "Cursor".to_string(),
+                footprint_bytes: 2_000_000_000,
+            },
+            AppMemoryUsage {
+                name: "Chrome".to_string(),
+                footprint_bytes: 1_200_000_000,
+            },
+        ];
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage));
+        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+
+        assert_eq!(entries[0], MenuEntry::SectionHeader("Memory"));
+        assert!(matches!(entries[1], MenuEntry::Stat { .. }));
+        assert_eq!(entries[2], MenuEntry::SectionHeader("Apps"));
+        assert_eq!(
+            entries[3],
+            MenuEntry::AppRow {
+                primary: "Cursor",
+                tail: Some("2.0 GB  13%"),
+            }
+        );
+        assert_eq!(
+            entries[4],
+            MenuEntry::AppRow {
+                primary: "Chrome",
+                tail: Some("1.2 GB  8%"),
+            }
+        );
+        assert_eq!(entries[5], MenuEntry::SectionHeader("Pressure"));
     }
 }

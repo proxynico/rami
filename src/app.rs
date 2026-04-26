@@ -1,6 +1,7 @@
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::lock::AppLock;
 use crate::memory::MemorySampler;
+use crate::process_memory::AppMemorySnapshot;
 use crate::tray::TrayController;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -33,6 +34,7 @@ impl AppState {
         if let Ok(snapshot) = self.sampler.sample() {
             self.tray.set_snapshot(
                 snapshot,
+                &AppMemorySnapshot::Hidden,
                 launch_at_login_status,
                 self.auto_refresh_enabled.get(),
                 mtm,
