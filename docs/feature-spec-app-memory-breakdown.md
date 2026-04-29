@@ -150,20 +150,14 @@ Public model:
 pub struct AppMemoryUsage {
     pub name: String,
     pub footprint_bytes: u64,
-    pub total_percent_tenths: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppMemorySnapshot {
     Hidden,
     Loading,
-    Loaded {
-        rows: Vec<AppMemoryUsage>,
-        skipped_processes: usize,
-    },
-    Unavailable {
-        message: String,
-    },
+    Loaded(Vec<AppMemoryUsage>),
+    Unavailable,
 }
 ```
 
@@ -198,11 +192,10 @@ outermost app bundle path. For non-app processes it is the executable name.
      becomes `Cursor`
    - otherwise group by executable name, for example `WindowServer`
 4. Sum footprints by group.
-5. Compute `total_percent_tenths` from `total_memory_bytes`.
-6. Sort by `footprint_bytes` descending, then name ascending for stability.
-7. Keep the top five rows.
-8. Track skipped processes for diagnostics and tests, but do not show skipped
-   counts in the dropdown unless all rows fail.
+5. Sort by `footprint_bytes` descending, then name ascending for stability.
+6. Keep the top five rows.
+7. Compute percent of installed RAM in the formatting layer from each row's
+   `footprint_bytes` and the current `total_memory_bytes`.
 
 Important: the app rows do not need to sum to the global `Memory` row. macOS
 global memory accounting and per-process footprint accounting are different,
@@ -246,13 +239,8 @@ pub enum DropdownModel {
 pub enum AppSectionDisplay {
     Hidden,
     Loading,
-    Rows(Vec<AppRowDisplay>),
-    Unavailable(StatRow),
-}
-
-pub struct AppRowDisplay {
-    pub name: String,
-    pub tail: String,
+    Rows(Vec<StatRow>),
+    Unavailable,
 }
 ```
 
@@ -314,7 +302,7 @@ Unavailable row:
 
 ```text
 APPS
-  Unavailable   Try Refresh
+  Unavailable
 ```
 
 No alerts, no permission prompts, no logs in release builds.
@@ -323,7 +311,7 @@ No alerts, no permission prompts, no logs in release builds.
 
 Add unit tests around pure logic first.
 
-`tests/process_memory_tests.rs`:
+`src/process_memory.rs` tests:
 
 - groups helper paths under the outer `.app`
 - falls back to process name for non-app paths
@@ -332,14 +320,13 @@ Add unit tests around pure logic first.
 - limits to five rows
 - formats percent as `<1%` below one percent
 - formats percent as whole rounded values at one percent and above
-- tracks skipped process count without rendering it in normal rows
 
 `tests/format_tests.rs`:
 
 - hidden app section does not add menu entries
 - loading app section renders one loading row under `Apps`
 - app rows split name and tail correctly
-- unavailable app section renders `Unavailable` with `Try Refresh`
+- unavailable app section renders `Unavailable`
 
 `src/tray.rs` test helpers:
 

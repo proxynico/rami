@@ -337,7 +337,7 @@ mod tests {
         eprintln!("scan took {elapsed:?}, returned {} rows:", rows.len());
         for row in &rows {
             eprintln!(
-                "  {:30} {:>8} bytes",
+                "  {:30} {:>8} MB",
                 row.name,
                 row.footprint_bytes / 1_000_000
             );
