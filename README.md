@@ -74,6 +74,62 @@ The build script creates a signed local `rami.app` bundle that launches as a
 menu bar utility without a Dock icon. The built app bundle also carries the
 generated app icon and enables the `Launch at Login` menu item.
 
+By default the bundle is ad-hoc signed (fine for local use). To build a
+distribution-signed bundle with hardened runtime, set `RAMI_SIGNING_IDENTITY`
+to a `Developer ID Application` identity from your keychain:
+
+```sh
+RAMI_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+  ./scripts/build-app.sh
+```
+
+## Release a notarized DMG
+
+`scripts/release.sh` builds, signs, packages, notarizes, and staples a
+distributable DMG.
+
+One-time setup:
+
+1. Mint a `Developer ID Application` certificate from
+   developer.apple.com → Certificates and install it in your login keychain.
+2. Create an app-specific password at appleid.apple.com → Sign-In and Security.
+3. Store credentials for `notarytool`:
+   ```sh
+   xcrun notarytool store-credentials rami-notary \
+     --apple-id <your-apple-id> \
+     --team-id <YOUR_TEAM_ID> \
+     --password <app-specific-password>
+   ```
+
+Build a release:
+
+```sh
+RAMI_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+  ./scripts/release.sh
+```
+
+Output lands at `dist/rami-<version>.dmg`, fully notarized and stapled. Set
+`RAMI_SKIP_NOTARIZE=1` to dry-run the build + DMG flow without contacting
+Apple's notary service.
+
+## Release via GitHub Actions
+
+`.github/workflows/release.yml` builds, signs, notarizes, and uploads a DMG to
+a GitHub Release whenever a `v*` tag is pushed. Required repository secrets:
+
+| Secret | Purpose |
+|---|---|
+| `MACOS_CERTIFICATE_P12_BASE64` | base64 of the exported `.p12` containing the Developer ID Application cert + private key |
+| `MACOS_CERTIFICATE_P12_PASSWORD` | password used during the `.p12` export |
+| `MACOS_SIGNING_IDENTITY` | full identity string, e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `MACOS_NOTARY_APPLE_ID` | Apple ID email |
+| `MACOS_NOTARY_TEAM_ID` | Apple developer team ID |
+| `MACOS_NOTARY_APP_PASSWORD` | app-specific password |
+
+Export the `.p12` from Keychain Access (right-click the cert → Export) and
+encode with `base64 -i cert.p12 | pbcopy`. The workflow runs on `macos-14`
+(Apple Silicon), so the resulting DMG is `arm64`-only.
+
 ## How it works
 
 `rami` reads macOS VM statistics and computes used RAM from:
@@ -94,6 +150,9 @@ To keep the app simple and cheap to run:
 ## Repo notes
 
 - `scripts/build-app.sh` builds the release binary and assembles `rami.app`
+- `scripts/release.sh` builds a notarized, stapled DMG for distribution
 - `macos/Info.plist` configures accessory-app behavior with `LSUIElement`
+- `macos/rami.entitlements` carries the hardened-runtime entitlements used by `release.sh`
 - `scripts/generate-icon.swift` draws the app icon and emits the `.icns` file used by the bundle build
 - the app bundle target is aligned to macOS 14.0
+- `CFBundleShortVersionString` and `CFBundleVersion` are templated from `Cargo.toml` at build time
