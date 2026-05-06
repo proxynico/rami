@@ -1,27 +1,33 @@
 use crate::format::{
-    dropdown_model_with_apps, gauge_symbol_name, placeholder_dropdown_model, AppSectionDisplay,
-    DropdownModel, PressureDisplay, StatRow,
+    dropdown_model_with_apps_and_trend, gauge_symbol_name, placeholder_dropdown_model,
+    AppSectionDisplay, DropdownModel, PressureDisplay, StatRow,
 };
 use crate::login_item::LaunchAtLoginStatus;
 use crate::model::{MemoryPressure, MemorySnapshot};
 use crate::process_memory::AppMemorySnapshot;
+use crate::sparkline;
+use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{sel, MainThreadMarker, MainThreadOnly};
+use objc2::{sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn,
-    NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontWeightRegular,
+    NSCellImagePosition, NSColor, NSCompositingOperation, NSControlStateValueOff,
+    NSControlStateValueOn, NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
-    NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+    NSMenu, NSMenuItem, NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSStatusBar,
+    NSStatusItem, NSTextAlignment, NSTextTab, NSWorkspace,
 };
-use objc2_foundation::{NSAttributedString, NSDictionary, NSMutableAttributedString, NSString};
+use objc2_foundation::{
+    NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSPoint, NSRect, NSSize,
+    NSString,
+};
 use std::cell::{Cell, RefCell};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppShape {
     Loading,
     Unavailable,
-    Rows(usize),
+    Rows { rows: usize, culprit: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,12 +46,16 @@ pub struct TrayController {
     pressure_section: Retained<NSMenuItem>,
     swap_section: Retained<NSMenuItem>,
     memory_item: Retained<NSMenuItem>,
+    sparkline_item: Retained<NSMenuItem>,
     pressure_item: Retained<NSMenuItem>,
     swap_item: Retained<NSMenuItem>,
     loading_item: Retained<NSMenuItem>,
     app_loading_item: Retained<NSMenuItem>,
     app_unavailable_item: Retained<NSMenuItem>,
+    app_culprit_item: Retained<NSMenuItem>,
     app_items: Vec<Retained<NSMenuItem>>,
+    app_quit_items: Vec<Retained<NSMenuItem>>,
+    app_submenus: Vec<Retained<NSMenu>>,
     refresh_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
     show_app_usage_item: Retained<NSMenuItem>,
@@ -55,11 +65,13 @@ pub struct TrayController {
     play_icon: Option<Retained<NSImage>>,
     last_image_name: RefCell<Option<&'static str>>,
     last_pressure: Cell<MemoryPressure>,
+    last_trend: Cell<MemoryTrend>,
     shape: Cell<MenuShape>,
     last_memory_row: RefCell<Option<StatRow>>,
     last_pressure_display: RefCell<Option<PressureDisplay>>,
     last_swap_row: RefCell<Option<StatRow>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
+    last_history: RefCell<Vec<u8>>,
     last_auto_refresh_enabled: Cell<bool>,
     last_launch_title: RefCell<String>,
     last_launch_checked: Cell<bool>,
@@ -82,6 +94,8 @@ impl TrayController {
         let swap_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Swap"), mtm);
 
         let memory_item = make_stat_item(mtm);
+        let sparkline_item = make_stat_item(mtm);
+        sparkline_item.setEnabled(false);
         let pressure_item = make_stat_item(mtm);
         let swap_item = make_stat_item(mtm);
         let loading_item = make_stat_item(mtm);
@@ -90,8 +104,23 @@ impl TrayController {
         app_loading_item.setAttributedTitle(Some(&loading_attributed_title()));
         let app_unavailable_item = make_stat_item(mtm);
         app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
+        let app_culprit_item = make_stat_item(mtm);
+        if let Some(image) = make_culprit_glyph() {
+            app_culprit_item.setImage(Some(&image));
+        }
         let app_items: Vec<Retained<NSMenuItem>> =
             (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
+        let app_quit_items: Vec<Retained<NSMenuItem>> = (0..APP_ROW_POOL)
+            .map(|_| make_quit_app_item(mtm, &refresh_target))
+            .collect();
+        let app_submenus: Vec<Retained<NSMenu>> = (0..APP_ROW_POOL)
+            .map(|idx| {
+                let submenu = NSMenu::new(mtm);
+                submenu.setAutoenablesItems(false);
+                submenu.addItem(&app_quit_items[idx]);
+                submenu
+            })
+            .collect();
 
         let refresh_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -183,12 +212,16 @@ impl TrayController {
             pressure_section,
             swap_section,
             memory_item,
+            sparkline_item,
             pressure_item,
             swap_item,
             loading_item,
             app_loading_item,
             app_unavailable_item,
+            app_culprit_item,
             app_items,
+            app_quit_items,
+            app_submenus,
             refresh_item,
             auto_refresh_item,
             show_app_usage_item,
@@ -198,17 +231,19 @@ impl TrayController {
             play_icon,
             last_image_name: RefCell::new(None),
             last_pressure: Cell::new(MemoryPressure::Normal),
+            last_trend: Cell::new(MemoryTrend::Stable),
             shape: Cell::new(MenuShape::Uninitialized),
             last_memory_row: RefCell::new(None),
             last_pressure_display: RefCell::new(None),
             last_swap_row: RefCell::new(None),
             last_app_section: RefCell::new(None),
+            last_history: RefCell::new(Vec::new()),
             last_auto_refresh_enabled: Cell::new(true),
             last_launch_title: RefCell::new(String::new()),
             last_launch_checked: Cell::new(false),
             last_launch_enabled: Cell::new(false),
         };
-        controller.set_gauge(0, MemoryPressure::Normal, mtm);
+        controller.set_gauge(0, MemoryPressure::Normal, MemoryTrend::Stable, mtm);
         controller.apply_model(
             &placeholder_dropdown_model(),
             LaunchAtLoginStatus::Disabled,
@@ -218,21 +253,25 @@ impl TrayController {
         controller
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_snapshot(
         &self,
         snapshot: MemorySnapshot,
+        trend: MemoryTrend,
         apps: &AppMemorySnapshot,
+        history: &[u8],
         launch_at_login_status: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
     ) {
-        self.set_gauge(snapshot.used_percent, snapshot.pressure, mtm);
+        self.set_gauge(snapshot.used_percent, snapshot.pressure, trend, mtm);
         self.apply_model(
-            &dropdown_model_with_apps(snapshot, apps),
+            &dropdown_model_with_apps_and_trend(snapshot, trend, apps),
             launch_at_login_status,
             auto_refresh_enabled,
             mtm,
         );
+        self.update_sparkline(history);
     }
 
     pub fn set_show_app_usage(&self, enabled: bool) {
@@ -253,28 +292,36 @@ impl TrayController {
         launch_at_login_status: LaunchAtLoginStatus,
         mtm: MainThreadMarker,
     ) {
-        self.set_gauge(0, MemoryPressure::Normal, mtm);
+        self.set_gauge(0, MemoryPressure::Normal, MemoryTrend::Stable, mtm);
         self.apply_model(
             &placeholder_dropdown_model(),
             launch_at_login_status,
             true,
             mtm,
         );
+        self.update_sparkline(&[]);
     }
 
-    fn set_gauge(&self, percent: u8, pressure: MemoryPressure, mtm: MainThreadMarker) {
+    fn set_gauge(
+        &self,
+        percent: u8,
+        pressure: MemoryPressure,
+        trend: MemoryTrend,
+        mtm: MainThreadMarker,
+    ) {
         let name = gauge_symbol_name(percent);
         let name_unchanged = *self.last_image_name.borrow() == Some(name);
         let pressure_unchanged = self.last_pressure.get() == pressure;
-        if name_unchanged && pressure_unchanged {
+        let trend_unchanged = self.last_trend.get() == trend;
+        if name_unchanged && pressure_unchanged && trend_unchanged {
             return;
         }
 
         if let Some(button) = self.status_item.button(mtm) {
             let warning = matches!(pressure, MemoryPressure::High);
-            match self.make_symbol_image(name) {
-                Some(image) => {
-                    image.setTemplate(!warning);
+            match make_status_image(name, pressure, trend) {
+                Some(StatusImage { image, template }) => {
+                    image.setTemplate(template);
                     button.setImage(Some(&image));
                     *self.last_image_name.borrow_mut() = Some(name);
                 }
@@ -289,16 +336,8 @@ impl TrayController {
                 button.setContentTintColor(None);
             }
             self.last_pressure.set(pressure);
+            self.last_trend.set(trend);
         }
-    }
-
-    fn make_symbol_image(&self, name: &'static str) -> Option<Retained<NSImage>> {
-        let desc = NSString::from_str("RAM usage");
-        let symbol_name = NSString::from_str(name);
-        let base =
-            NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
-        let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Large);
-        base.imageWithSymbolConfiguration(&config)
     }
 
     fn apply_model(
@@ -334,6 +373,8 @@ impl TrayController {
             if self.last_pressure_display.borrow().as_ref() != Some(pressure) {
                 self.pressure_item
                     .setAttributedTitle(Some(&pressure_attributed(pressure)));
+                self.pressure_item
+                    .setImage(make_pressure_dot(pressure).as_deref());
                 *self.last_pressure_display.borrow_mut() = Some(pressure.clone());
             }
             if self.last_swap_row.borrow().as_ref() != Some(swap) {
@@ -352,12 +393,42 @@ impl TrayController {
         if self.last_app_section.borrow().as_ref() == Some(apps) {
             return;
         }
-        if let AppSectionDisplay::Rows(rows) = apps {
+        if let AppSectionDisplay::Rows { culprit, rows } = apps {
+            if let Some(culprit) = culprit {
+                self.app_culprit_item
+                    .setAttributedTitle(Some(&stat_row_attributed(culprit, NSColor::labelColor())));
+            }
             for (item, row) in self.app_items.iter().zip(rows.iter()) {
-                item.setAttributedTitle(Some(&stat_row_attributed(row, NSColor::labelColor())));
+                item.setAttributedTitle(Some(&app_row_attributed(row)));
+                item.setImage(app_row_icon(row).as_deref());
+            }
+            for (idx, row) in rows.iter().enumerate() {
+                let item = &self.app_items[idx];
+                if let Some(tag) = row.action_tag {
+                    let quit_item = &self.app_quit_items[idx];
+                    quit_item.setTitle(&NSString::from_str(&format!("Quit {}", row.primary)));
+                    quit_item.setTag(tag as isize);
+                    quit_item.setEnabled(true);
+                    item.setSubmenu(Some(&self.app_submenus[idx]));
+                } else {
+                    item.setSubmenu(None);
+                }
             }
         }
         *self.last_app_section.borrow_mut() = Some(apps.clone());
+    }
+
+    fn update_sparkline(&self, history: &[u8]) {
+        if self.last_history.borrow().as_slice() == history {
+            return;
+        }
+        let image = if history.len() >= 2 {
+            sparkline::render(history, 140.0, 14.0)
+        } else {
+            None
+        };
+        self.sparkline_item.setImage(image.as_deref());
+        *self.last_history.borrow_mut() = history.to_vec();
     }
 
     fn rebuild_menu(&self, shape: MenuShape, mtm: MainThreadMarker) {
@@ -371,6 +442,7 @@ impl TrayController {
             MenuShape::LoadedNoApps => {
                 self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.memory_item);
+                self.menu.addItem(&self.sparkline_item);
                 self.menu.addItem(&self.pressure_section);
                 self.menu.addItem(&self.pressure_item);
                 self.menu.addItem(&self.swap_section);
@@ -379,6 +451,7 @@ impl TrayController {
             MenuShape::LoadedWithApps(app_shape) => {
                 self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.memory_item);
+                self.menu.addItem(&self.sparkline_item);
                 self.menu.addItem(&self.apps_section);
                 match app_shape {
                     AppShape::Loading => {
@@ -387,8 +460,11 @@ impl TrayController {
                     AppShape::Unavailable => {
                         self.menu.addItem(&self.app_unavailable_item);
                     }
-                    AppShape::Rows(n) => {
-                        for item in self.app_items.iter().take(n) {
+                    AppShape::Rows { rows, culprit } => {
+                        if culprit {
+                            self.menu.addItem(&self.app_culprit_item);
+                        }
+                        for item in self.app_items.iter().take(rows) {
                             self.menu.addItem(item);
                         }
                     }
@@ -459,9 +535,11 @@ fn menu_shape_for(model: &DropdownModel) -> MenuShape {
             AppSectionDisplay::Hidden => MenuShape::LoadedNoApps,
             AppSectionDisplay::Loading => MenuShape::LoadedWithApps(AppShape::Loading),
             AppSectionDisplay::Unavailable => MenuShape::LoadedWithApps(AppShape::Unavailable),
-            AppSectionDisplay::Rows(rows) => {
-                let n = rows.len().min(APP_ROW_POOL);
-                MenuShape::LoadedWithApps(AppShape::Rows(n))
+            AppSectionDisplay::Rows { culprit, rows } => {
+                MenuShape::LoadedWithApps(AppShape::Rows {
+                    rows: rows.len().min(APP_ROW_POOL),
+                    culprit: culprit.is_some(),
+                })
             }
         },
     }
@@ -478,6 +556,271 @@ fn make_stat_item(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
     };
     item.setEnabled(true);
     item
+}
+
+fn make_quit_app_item(
+    mtm: MainThreadMarker,
+    refresh_target: &Retained<AnyObject>,
+) -> Retained<NSMenuItem> {
+    let item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Quit App"),
+            Some(sel!(quitAppAtIndex:)),
+            &NSString::from_str(""),
+        )
+    };
+    unsafe {
+        item.setTarget(Some(refresh_target));
+    }
+    item.setEnabled(true);
+    item
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BadgeKind {
+    None,
+    Rising,
+    RisingFast,
+    Elevated,
+    High,
+}
+
+fn badge_for_state(pressure: MemoryPressure, trend: MemoryTrend) -> BadgeKind {
+    match pressure {
+        MemoryPressure::High => BadgeKind::High,
+        MemoryPressure::Elevated => BadgeKind::Elevated,
+        MemoryPressure::Normal => match trend {
+            MemoryTrend::RisingFast => BadgeKind::RisingFast,
+            MemoryTrend::Rising => BadgeKind::Rising,
+            MemoryTrend::Stable => BadgeKind::None,
+        },
+    }
+}
+
+struct StatusImage {
+    image: Retained<NSImage>,
+    template: bool,
+}
+
+fn make_status_image(
+    gauge_name: &'static str,
+    pressure: MemoryPressure,
+    trend: MemoryTrend,
+) -> Option<StatusImage> {
+    let badge = badge_for_state(pressure, trend);
+    let base_template = render_template_symbol(gauge_name, NSImageSymbolScale::Large)?;
+    match badge {
+        BadgeKind::None => Some(StatusImage {
+            image: base_template,
+            template: true,
+        }),
+        BadgeKind::Rising => {
+            let badge_image = render_template_symbol("arrow.up.right", NSImageSymbolScale::Small)?;
+            let composite = compose_with_badge(&base_template, &badge_image)?;
+            Some(StatusImage {
+                image: composite,
+                template: true,
+            })
+        }
+        BadgeKind::High => {
+            let badge_image = render_template_symbol(
+                "exclamationmark.triangle.fill",
+                NSImageSymbolScale::Small,
+            )?;
+            let composite = compose_with_badge(&base_template, &badge_image)?;
+            Some(StatusImage {
+                image: composite,
+                template: true,
+            })
+        }
+        BadgeKind::RisingFast => {
+            let label = NSColor::labelColor();
+            let orange = NSColor::systemOrangeColor();
+            let base_colored =
+                render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &label)?;
+            let badge_image = render_colored_symbol(
+                "arrow.up.right.circle.fill",
+                NSImageSymbolScale::Small,
+                &orange,
+            )?;
+            let composite = compose_with_badge(&base_colored, &badge_image)?;
+            Some(StatusImage {
+                image: composite,
+                template: false,
+            })
+        }
+        BadgeKind::Elevated => {
+            let label = NSColor::labelColor();
+            let orange = NSColor::systemOrangeColor();
+            let base_colored =
+                render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &label)?;
+            let badge_image = render_colored_symbol(
+                "exclamationmark.circle.fill",
+                NSImageSymbolScale::Small,
+                &orange,
+            )?;
+            let composite = compose_with_badge(&base_colored, &badge_image)?;
+            Some(StatusImage {
+                image: composite,
+                template: false,
+            })
+        }
+    }
+}
+
+fn render_template_symbol(
+    name: &str,
+    scale: NSImageSymbolScale,
+) -> Option<Retained<NSImage>> {
+    let symbol_name = NSString::from_str(name);
+    let desc = NSString::from_str("");
+    let base =
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
+    let config = NSImageSymbolConfiguration::configurationWithScale(scale);
+    base.imageWithSymbolConfiguration(&config)
+}
+
+fn render_colored_symbol(
+    name: &str,
+    scale: NSImageSymbolScale,
+    color: &NSColor,
+) -> Option<Retained<NSImage>> {
+    let symbol_name = NSString::from_str(name);
+    let desc = NSString::from_str("");
+    let base =
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
+    let scale_config = NSImageSymbolConfiguration::configurationWithScale(scale);
+    let color_config = NSImageSymbolConfiguration::configurationWithHierarchicalColor(color);
+    let combined = scale_config.configurationByApplyingConfiguration(&color_config);
+    base.imageWithSymbolConfiguration(&combined)
+}
+
+fn compose_with_badge(base: &NSImage, badge: &NSImage) -> Option<Retained<NSImage>> {
+    let size = base.size();
+    if size.width <= 0.0 || size.height <= 0.0 {
+        return None;
+    }
+    let composite = NSImage::initWithSize(NSImage::alloc(), size);
+    let full_rect = NSRect::new(NSPoint::ZERO, size);
+    let zero_rect = NSRect::ZERO;
+    #[allow(deprecated)]
+    composite.lockFocus();
+    base.drawInRect_fromRect_operation_fraction(
+        full_rect,
+        zero_rect,
+        NSCompositingOperation::SourceOver,
+        1.0,
+    );
+    let badge_extent = (size.height * 0.65).min(size.width);
+    let badge_rect = NSRect::new(
+        NSPoint::new(size.width - badge_extent, 0.0),
+        NSSize::new(badge_extent, badge_extent),
+    );
+    badge.drawInRect_fromRect_operation_fraction(
+        badge_rect,
+        zero_rect,
+        NSCompositingOperation::SourceOver,
+        1.0,
+    );
+    #[allow(deprecated)]
+    composite.unlockFocus();
+    Some(composite)
+}
+
+fn make_pressure_dot(pressure: &PressureDisplay) -> Option<Retained<NSImage>> {
+    let color = if pressure.is_high {
+        NSColor::systemRedColor()
+    } else if pressure.text == "Elevated" {
+        NSColor::systemOrangeColor()
+    } else {
+        NSColor::systemGreenColor()
+    };
+    render_colored_symbol("circle.fill", NSImageSymbolScale::Small, &color)
+}
+
+fn make_culprit_glyph() -> Option<Retained<NSImage>> {
+    render_colored_symbol(
+        "exclamationmark.triangle.fill",
+        NSImageSymbolScale::Small,
+        &NSColor::systemOrangeColor(),
+    )
+}
+
+fn app_row_icon(row: &StatRow) -> Option<Retained<NSImage>> {
+    let bundle_path = row.bundle_path.as_ref()?;
+    let path = NSString::from_str(bundle_path);
+    let image = NSWorkspace::sharedWorkspace().iconForFile(&path);
+    image.setSize(NSSize::new(16.0, 16.0));
+    Some(image)
+}
+
+fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
+    let font = stat_font();
+    let primary_attrs = attrs_for(NSColor::labelColor(), font.clone());
+    let primary_str = NSString::from_str(&row.primary);
+    let primary = unsafe { NSAttributedString::new_with_attributes(&primary_str, &primary_attrs) };
+
+    let Some(tail) = &row.tail else {
+        return primary;
+    };
+
+    let result = NSMutableAttributedString::new();
+    result.appendAttributedString(&primary);
+
+    let separator_attrs = attrs_for(NSColor::secondaryLabelColor(), font.clone());
+    let separator_str = NSString::from_str("\t");
+    let separator =
+        unsafe { NSAttributedString::new_with_attributes(&separator_str, &separator_attrs) };
+    result.appendAttributedString(&separator);
+
+    let tail_attrs = attrs_for_with_paragraph(
+        NSColor::secondaryLabelColor(),
+        font,
+        app_row_paragraph_style(),
+    );
+    let tail_str = NSString::from_str(tail);
+    let tail_attr = unsafe { NSAttributedString::new_with_attributes(&tail_str, &tail_attrs) };
+    result.appendAttributedString(&tail_attr);
+
+    Retained::into_super(result)
+}
+
+const APP_ROW_TAIL_TAB: f64 = 260.0;
+
+fn app_row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
+    let style = NSMutableParagraphStyle::new();
+    let tab_stop = unsafe {
+        NSTextTab::initWithTextAlignment_location_options(
+            NSTextTab::alloc(),
+            NSTextAlignment::Right,
+            APP_ROW_TAIL_TAB,
+            &NSDictionary::new(),
+        )
+    };
+    let tabs = NSArray::from_retained_slice(&[tab_stop]);
+    style.setTabStops(Some(&tabs));
+    style
+}
+
+fn attrs_for_with_paragraph(
+    color: Retained<NSColor>,
+    font: Retained<NSFont>,
+    paragraph: Retained<NSMutableParagraphStyle>,
+) -> Retained<NSDictionary<NSString, AnyObject>> {
+    unsafe {
+        let color_obj = Retained::cast_unchecked::<AnyObject>(color);
+        let font_obj = Retained::cast_unchecked::<AnyObject>(font);
+        let paragraph_obj = Retained::cast_unchecked::<AnyObject>(paragraph);
+        NSDictionary::from_retained_objects(
+            &[
+                NSForegroundColorAttributeName,
+                NSFontAttributeName,
+                NSParagraphStyleAttributeName,
+            ],
+            &[color_obj, font_obj, paragraph_obj],
+        )
+    }
 }
 
 fn make_action_icon(name: &str) -> Option<Retained<NSImage>> {
@@ -544,6 +887,8 @@ fn pressure_attributed(display: &PressureDisplay) -> Retained<NSAttributedString
         &StatRow {
             primary: display.text.clone(),
             tail: None,
+            action_tag: None,
+            bundle_path: None,
         },
         color,
     )
@@ -554,6 +899,8 @@ fn loading_attributed_title() -> Retained<NSAttributedString> {
         &StatRow {
             primary: "Loading…".to_string(),
             tail: None,
+            action_tag: None,
+            bundle_path: None,
         },
         NSColor::secondaryLabelColor(),
     )
@@ -564,6 +911,8 @@ fn unavailable_attributed_title() -> Retained<NSAttributedString> {
         &StatRow {
             primary: "Unavailable".to_string(),
             tail: None,
+            action_tag: None,
+            bundle_path: None,
         },
         NSColor::secondaryLabelColor(),
     )
@@ -584,6 +933,7 @@ pub(crate) enum MenuEntry<'a> {
     AppRow {
         primary: &'a str,
         tail: Option<&'a str>,
+        action_tag: Option<usize>,
     },
     Separator,
     Refresh,
@@ -641,12 +991,20 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
                     entries.push(MenuEntry::SectionHeader("Apps"));
                     entries.push(MenuEntry::AppUnavailable);
                 }
-                AppSectionDisplay::Rows(rows) => {
+                AppSectionDisplay::Rows { culprit, rows } => {
                     entries.push(MenuEntry::SectionHeader("Apps"));
+                    if let Some(culprit) = culprit {
+                        entries.push(MenuEntry::AppRow {
+                            primary: &culprit.primary,
+                            tail: culprit.tail.as_deref(),
+                            action_tag: None,
+                        });
+                    }
                     for row in rows.iter().take(APP_ROW_POOL) {
                         entries.push(MenuEntry::AppRow {
                             primary: &row.primary,
                             tail: row.tail.as_deref(),
+                            action_tag: row.action_tag,
                         });
                     }
                 }
@@ -681,11 +1039,44 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{loaded_menu_entries, MenuEntry};
+    use super::{badge_for_state, loaded_menu_entries, BadgeKind, MenuEntry};
     use crate::format::{dropdown_model, dropdown_model_with_apps, placeholder_dropdown_model};
     use crate::login_item::LaunchAtLoginStatus;
     use crate::model::{MemoryPressure, MemorySnapshot};
     use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
+    use crate::trend::MemoryTrend;
+
+    #[test]
+    fn badge_prioritizes_pressure_over_trend() {
+        assert_eq!(
+            badge_for_state(MemoryPressure::Normal, MemoryTrend::Stable),
+            BadgeKind::None
+        );
+        assert_eq!(
+            badge_for_state(MemoryPressure::Normal, MemoryTrend::Rising),
+            BadgeKind::Rising
+        );
+        assert_eq!(
+            badge_for_state(MemoryPressure::Normal, MemoryTrend::RisingFast),
+            BadgeKind::RisingFast
+        );
+        assert_eq!(
+            badge_for_state(MemoryPressure::Elevated, MemoryTrend::Stable),
+            BadgeKind::Elevated
+        );
+        assert_eq!(
+            badge_for_state(MemoryPressure::Elevated, MemoryTrend::RisingFast),
+            BadgeKind::Elevated
+        );
+        assert_eq!(
+            badge_for_state(MemoryPressure::High, MemoryTrend::Stable),
+            BadgeKind::High
+        );
+        assert_eq!(
+            badge_for_state(MemoryPressure::High, MemoryTrend::RisingFast),
+            BadgeKind::High
+        );
+    }
 
     fn snapshot() -> MemorySnapshot {
         MemorySnapshot {
@@ -836,11 +1227,19 @@ mod tests {
         let usage = vec![
             AppMemoryUsage {
                 name: "Cursor".to_string(),
+                group_key: "/Applications/Cursor.app".to_string(),
                 footprint_bytes: 2_000_000_000,
+                pids: vec![1],
+                can_quit: true,
+                delta_bytes: None,
             },
             AppMemoryUsage {
                 name: "Chrome".to_string(),
+                group_key: "/Applications/Chrome.app".to_string(),
                 footprint_bytes: 1_200_000_000,
+                pids: vec![2],
+                can_quit: true,
+                delta_bytes: None,
             },
         ];
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage));
@@ -854,6 +1253,7 @@ mod tests {
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB  13%"),
+                action_tag: Some(0),
             }
         );
         assert_eq!(
@@ -861,6 +1261,7 @@ mod tests {
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB  8%"),
+                action_tag: Some(1),
             }
         );
         assert_eq!(entries[5], MenuEntry::SectionHeader("Pressure"));

@@ -16,22 +16,28 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
   "NSApplication",
   "NSAttributedString",
+  "NSBezierPath",
   "NSButton",
   "NSCell",
+  "NSColor",
   "NSControl",
   "NSEvent",
   "NSFont",
   "NSFontDescriptor",
+  "NSGraphics",
   "NSImage",
   "NSMenu",
   "NSMenuItem",
+  "NSParagraphStyle",
   "NSResponder",
   "NSRunningApplication",
   "NSStatusBar",
   "NSStatusBarButton",
   "NSStatusItem",
   "NSTextAttachment",
+  "NSText",
   "NSView",
+  "NSWorkspace",
   "objc2-core-foundation",
 ] }
 objc2-foundation = { version = "0.3", features = [
@@ -40,6 +46,7 @@ objc2-foundation = { version = "0.3", features = [
   "NSObject",
   "NSString",
   "NSTimer",
+  "NSUserNotification",
 ] }
 mach2 = "0.4"
 libc = "0.2"

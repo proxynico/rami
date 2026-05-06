@@ -1,6 +1,6 @@
 use libc::{
-    c_int, c_void, getpid, pid_t, proc_listallpids, proc_name, proc_pid_rusage, proc_pidpath,
-    rusage_info_t, rusage_info_v4, PROC_PIDPATHINFO_MAXSIZE, RUSAGE_INFO_V4,
+    c_int, c_void, getpid, kill, pid_t, proc_listallpids, proc_name, proc_pid_rusage, proc_pidpath,
+    rusage_info_t, rusage_info_v4, PROC_PIDPATHINFO_MAXSIZE, RUSAGE_INFO_V4, SIGTERM,
 };
 use std::collections::HashMap;
 use std::io;
@@ -9,7 +9,11 @@ use std::mem::MaybeUninit;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppMemoryUsage {
     pub name: String,
+    pub group_key: String,
     pub footprint_bytes: u64,
+    pub pids: Vec<pid_t>,
+    pub can_quit: bool,
+    pub delta_bytes: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,19 +180,28 @@ fn aggregate(records: Vec<ProcessMemoryRecord>, top_n: usize) -> Vec<AppMemoryUs
         return Vec::new();
     }
 
-    let mut by_group: HashMap<String, (String, u64)> = HashMap::new();
+    let mut by_group: HashMap<String, (String, u64, Vec<pid_t>)> = HashMap::new();
     for r in records {
         let entry = by_group
             .entry(r.group_key)
-            .or_insert_with(|| (r.display_name.clone(), 0));
+            .or_insert_with(|| (r.display_name.clone(), 0, Vec::new()));
         entry.1 += r.footprint_bytes;
+        entry.2.push(r.pid);
     }
 
     let mut rows: Vec<AppMemoryUsage> = by_group
         .into_iter()
-        .map(|(_, (name, bytes))| AppMemoryUsage {
-            name,
-            footprint_bytes: bytes,
+        .map(|(group_key, (name, bytes, mut pids))| {
+            pids.sort_unstable();
+            let can_quit = can_quit_group(&group_key, &name);
+            AppMemoryUsage {
+                name,
+                group_key,
+                footprint_bytes: bytes,
+                pids,
+                can_quit,
+                delta_bytes: None,
+            }
         })
         .collect();
 
@@ -199,6 +212,38 @@ fn aggregate(records: Vec<ProcessMemoryRecord>, top_n: usize) -> Vec<AppMemoryUs
     });
     rows.truncate(top_n);
     rows
+}
+
+fn can_quit_group(group_key: &str, name: &str) -> bool {
+    group_key.ends_with(".app") && !name.eq_ignore_ascii_case("rami")
+}
+
+pub fn kill_app_group(usage: &AppMemoryUsage) -> io::Result<()> {
+    if !usage.can_quit || usage.pids.is_empty() {
+        return Ok(());
+    }
+
+    let mut first_error = None;
+    let mut sent_any = false;
+    for pid in &usage.pids {
+        if *pid <= 0 {
+            continue;
+        }
+        let rc = unsafe { kill(*pid, SIGTERM) };
+        if rc == 0 {
+            sent_any = true;
+        } else if first_error.is_none() {
+            first_error = Some(io::Error::last_os_error());
+        }
+    }
+
+    if sent_any {
+        Ok(())
+    } else if let Some(err) = first_error {
+        Err(err)
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -262,6 +307,36 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "Cursor");
         assert_eq!(rows[0].footprint_bytes, 600);
+        assert_eq!(rows[0].pids, vec![1, 2, 3]);
+        assert!(rows[0].can_quit);
+    }
+
+    #[test]
+    fn aggregate_marks_non_app_groups_as_not_quittable() {
+        let rows = aggregate(vec![record(1, "cfprefsd", "cfprefsd", 100)], 5);
+        assert_eq!(rows[0].name, "cfprefsd");
+        assert!(!rows[0].can_quit);
+    }
+
+    #[test]
+    fn aggregate_marks_rami_as_not_quittable() {
+        let rows = aggregate(vec![record(1, "/Applications/rami.app", "rami", 100)], 5);
+        assert_eq!(rows[0].name, "rami");
+        assert!(!rows[0].can_quit);
+    }
+
+    #[test]
+    fn kill_app_group_on_invalid_pid_returns_esrch_without_panicking() {
+        let usage = AppMemoryUsage {
+            name: "Missing".to_string(),
+            group_key: "/Applications/Missing.app".to_string(),
+            footprint_bytes: 1,
+            pids: vec![999_999],
+            can_quit: true,
+            delta_bytes: None,
+        };
+        let err = kill_app_group(&usage).expect_err("invalid pid should return ESRCH");
+        assert_eq!(err.raw_os_error(), Some(libc::ESRCH));
     }
 
     #[test]

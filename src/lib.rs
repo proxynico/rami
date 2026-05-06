@@ -1,8 +1,12 @@
 pub mod app;
 pub mod format;
+pub mod history;
 pub mod lock;
 pub mod login_item;
 pub mod memory;
 pub mod model;
+pub mod notification;
 pub mod process_memory;
+pub mod sparkline;
 pub mod tray;
+pub mod trend;

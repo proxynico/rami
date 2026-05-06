@@ -15,6 +15,7 @@ How much memory is this Mac using right now?
 - tints the glyph red when kernel memory pressure is `High`
 - opens a plain native dropdown with:
   - `RAM: NN% — used of total`
+  - `Apps` with a likely culprit and memory deltas when usage is rising
   - `Memory Pressure: Normal | Elevated | High`
   - `Swap Used: N.N GB`
   - `Refresh`
@@ -30,6 +31,22 @@ Toggle `Show App Usage` to add an `Apps` section between Memory and Pressure
 that lists the top five processes by physical memory footprint, grouped under
 their parent `.app` bundle. Refreshes every 30 seconds while visible (and
 immediately on `Refresh`).
+
+When an app's footprint is rising, `rami` prioritizes the risers over merely
+large apps and can show a one-line culprit answer:
+
+```text
+Likely culprit: Zen +300 MB
+Zen 0.7 GB  +300 MB
+```
+
+Rows for normal `.app` bundles expose a native submenu with `Quit <App Name>`.
+This sends a graceful quit signal only. There is no force quit fallback.
+
+When memory pressure becomes `High`, `rami` sends a cooldown-protected
+notification with the top riser when available. During elevated or high memory
+pressure, it prepares app usage in the background even if `Show App Usage` is
+off, so the dropdown has an answer when you open it.
 
 Caveats worth knowing:
 
@@ -49,6 +66,7 @@ This is intentionally still a tiny menu bar utility.
 - no graphs
 - no custom popover UI
 - no settings panel
+- no force quit
 
 ## Platform
 

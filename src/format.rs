@@ -1,5 +1,6 @@
 use crate::model::{MemoryPressure, MemorySnapshot};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
+use crate::trend::{likely_culprit, rank_app_rows, MemoryTrend};
 
 const APP_NAME_MAX_CHARS: usize = 28;
 const APP_USAGE_ROW_LIMIT: usize = 5;
@@ -29,6 +30,8 @@ pub fn gb_pair(used_bytes: u64, total_bytes: u64) -> String {
 pub struct StatRow {
     pub primary: String,
     pub tail: Option<String>,
+    pub action_tag: Option<usize>,
+    pub bundle_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,10 +44,14 @@ pub struct PressureDisplay {
 pub enum AppSectionDisplay {
     Hidden,
     Loading,
-    Rows(Vec<StatRow>),
+    Rows {
+        culprit: Option<StatRow>,
+        rows: Vec<StatRow>,
+    },
     Unavailable,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DropdownModel {
     Loading,
@@ -65,17 +72,27 @@ fn pressure_text(p: MemoryPressure) -> &'static str {
 }
 
 pub fn dropdown_model(snapshot: MemorySnapshot) -> DropdownModel {
-    dropdown_model_with_apps(snapshot, &AppMemorySnapshot::Hidden)
+    dropdown_model_with_apps_and_trend(snapshot, MemoryTrend::Stable, &AppMemorySnapshot::Hidden)
 }
 
 pub fn dropdown_model_with_apps(
     snapshot: MemorySnapshot,
     apps: &AppMemorySnapshot,
 ) -> DropdownModel {
+    dropdown_model_with_apps_and_trend(snapshot, MemoryTrend::Stable, apps)
+}
+
+pub fn dropdown_model_with_apps_and_trend(
+    snapshot: MemorySnapshot,
+    trend: MemoryTrend,
+    apps: &AppMemorySnapshot,
+) -> DropdownModel {
     DropdownModel::Loaded {
         memory: StatRow {
             primary: format!("{}%", snapshot.used_percent),
-            tail: Some(gb_pair(snapshot.used_bytes, snapshot.total_bytes)),
+            tail: memory_tail(snapshot.used_bytes, snapshot.total_bytes, trend),
+            action_tag: None,
+            bundle_path: None,
         },
         apps: app_section_display(apps, snapshot.total_bytes),
         pressure: PressureDisplay {
@@ -85,6 +102,8 @@ pub fn dropdown_model_with_apps(
         swap: StatRow {
             primary: gb_text(snapshot.swap_used_bytes),
             tail: None,
+            action_tag: None,
+            bundle_path: None,
         },
     }
 }
@@ -100,26 +119,66 @@ fn app_section_display(apps: &AppMemorySnapshot, total_bytes: u64) -> AppSection
         AppMemorySnapshot::Unavailable => AppSectionDisplay::Unavailable,
         AppMemorySnapshot::Loaded(rows) => {
             let mut rows = rows.clone();
-            rows.sort_by(|a, b| {
-                b.footprint_bytes
-                    .cmp(&a.footprint_bytes)
-                    .then_with(|| a.name.cmp(&b.name))
+            rank_app_rows(&mut rows);
+            let culprit = likely_culprit(&rows).map(|culprit| StatRow {
+                primary: "Likely culprit:".to_string(),
+                tail: Some(format!(
+                    "{} {}",
+                    culprit.name,
+                    delta_text(culprit.delta_bytes)
+                )),
+                action_tag: None,
+                bundle_path: None,
             });
             rows.truncate(APP_USAGE_ROW_LIMIT);
-            AppSectionDisplay::Rows(rows.iter().map(|r| app_row(r, total_bytes)).collect())
+            AppSectionDisplay::Rows {
+                culprit,
+                rows: rows
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, r)| app_row(idx, r, total_bytes))
+                    .collect(),
+            }
         }
     }
 }
 
-fn app_row(app: &AppMemoryUsage, total_bytes: u64) -> StatRow {
-    StatRow {
-        primary: truncate_name(&app.name, APP_NAME_MAX_CHARS),
-        tail: Some(format!(
+fn memory_tail(used_bytes: u64, total_bytes: u64, trend: MemoryTrend) -> Option<String> {
+    let base = gb_pair(used_bytes, total_bytes);
+    match trend {
+        MemoryTrend::Stable => Some(base),
+        MemoryTrend::Rising => Some(format!("{base}  Rising")),
+        MemoryTrend::RisingFast => Some(format!("{base}  Rising fast")),
+    }
+}
+
+fn app_row(index: usize, app: &AppMemoryUsage, total_bytes: u64) -> StatRow {
+    let tail = if let Some(delta) = app.delta_bytes.filter(|delta| *delta >= 50_000_000) {
+        format!(
+            "{}  {}",
+            gb_text(app.footprint_bytes),
+            delta_text(delta as u64)
+        )
+    } else {
+        format!(
             "{}  {}",
             gb_text(app.footprint_bytes),
             percent_label(app.footprint_bytes, total_bytes)
-        )),
+        )
+    };
+    StatRow {
+        primary: truncate_name(&app.name, APP_NAME_MAX_CHARS),
+        tail: Some(tail),
+        action_tag: app.can_quit.then_some(index),
+        bundle_path: app
+            .group_key
+            .ends_with(".app")
+            .then(|| app.group_key.clone()),
     }
+}
+
+fn delta_text(bytes: u64) -> String {
+    format!("+{} MB", bytes / 1_000_000)
 }
 
 fn percent_label(part: u64, total: u64) -> String {
@@ -241,16 +300,22 @@ mod tests {
     fn dropdown_model_with_apps_rows_format() {
         let usage = vec![AppMemoryUsage {
             name: "Cursor".to_string(),
+            group_key: "/Applications/Cursor.app".to_string(),
             footprint_bytes: 2_000_000_000,
+            pids: vec![42],
+            can_quit: true,
+            delta_bytes: None,
         }];
         let model =
             dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
         match model {
             DropdownModel::Loaded { apps, .. } => match apps {
-                AppSectionDisplay::Rows(rows) => {
+                AppSectionDisplay::Rows { culprit, rows } => {
+                    assert!(culprit.is_none());
                     assert_eq!(rows.len(), 1);
                     assert_eq!(rows[0].primary, "Cursor");
                     assert_eq!(rows[0].tail.as_deref(), Some("2.0 GB  13%"));
+                    assert_eq!(rows[0].action_tag, Some(0));
                 }
                 _ => panic!("expected Rows"),
             },
@@ -261,41 +326,59 @@ mod tests {
     #[test]
     fn dropdown_model_with_apps_keeps_top_five_sorted() {
         let usage = vec![
-            AppMemoryUsage {
-                name: "Six".to_string(),
-                footprint_bytes: 6,
-            },
-            AppMemoryUsage {
-                name: "One".to_string(),
-                footprint_bytes: 1,
-            },
-            AppMemoryUsage {
-                name: "Five".to_string(),
-                footprint_bytes: 5,
-            },
-            AppMemoryUsage {
-                name: "Two".to_string(),
-                footprint_bytes: 2,
-            },
-            AppMemoryUsage {
-                name: "Four".to_string(),
-                footprint_bytes: 4,
-            },
-            AppMemoryUsage {
-                name: "Three".to_string(),
-                footprint_bytes: 3,
-            },
+            usage("Six", 6, None),
+            usage("One", 1, None),
+            usage("Five", 5, None),
+            usage("Two", 2, None),
+            usage("Four", 4, None),
+            usage("Three", 3, None),
         ];
         let model = dropdown_model_with_apps(snapshot(100), &AppMemorySnapshot::Loaded(usage));
         match model {
             DropdownModel::Loaded {
-                apps: AppSectionDisplay::Rows(rows),
+                apps: AppSectionDisplay::Rows { rows, .. },
                 ..
             } => {
                 let names: Vec<_> = rows.iter().map(|row| row.primary.as_str()).collect();
                 assert_eq!(names, vec!["Six", "Five", "Four", "Three", "Two"]);
             }
             _ => panic!("expected app rows"),
+        }
+    }
+
+    #[test]
+    fn dropdown_model_with_apps_prefers_positive_deltas_and_culprit() {
+        let usage = vec![
+            usage("Chrome", 4_000_000_000, None),
+            usage("Zen", 700_000_000, Some(300_000_000)),
+            usage("Codex", 500_000_000, Some(80_000_000)),
+        ];
+        let model =
+            dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
+        match model {
+            DropdownModel::Loaded {
+                apps: AppSectionDisplay::Rows { culprit, rows },
+                ..
+            } => {
+                let culprit = culprit.expect("culprit");
+                assert_eq!(culprit.primary, "Likely culprit:");
+                assert_eq!(culprit.tail.as_deref(), Some("Zen +300 MB"));
+                assert_eq!(rows[0].primary, "Zen");
+                assert_eq!(rows[0].tail.as_deref(), Some("0.7 GB  +300 MB"));
+                assert_eq!(rows[0].action_tag, Some(0));
+            }
+            _ => panic!("expected app rows"),
+        }
+    }
+
+    fn usage(name: &str, footprint_bytes: u64, delta_bytes: Option<i64>) -> AppMemoryUsage {
+        AppMemoryUsage {
+            name: name.to_string(),
+            group_key: format!("/Applications/{name}.app"),
+            footprint_bytes,
+            pids: vec![1],
+            can_quit: true,
+            delta_bytes,
         }
     }
 }
