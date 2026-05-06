@@ -27,10 +27,10 @@ How much memory is this Mac using right now?
 
 ## Show App Usage (optional)
 
-Toggle `Show App Usage` to add an `Apps` section between Memory and Pressure
-that lists the top five processes by physical memory footprint, grouped under
-their parent `.app` bundle. Refreshes every 30 seconds while visible (and
-immediately on `Refresh`).
+Toggle `Show App Usage` to add an `Apps` section below Memory that lists the
+top five processes by physical memory footprint, grouped under their parent
+`.app` bundle. Refreshes every 30 seconds while visible (and immediately on
+`Refresh`).
 
 When an app's footprint is rising, `rami` prioritizes the risers over merely
 large apps and can show a one-line culprit answer:

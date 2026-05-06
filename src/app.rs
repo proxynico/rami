@@ -19,7 +19,7 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSTimer};
 use std::cell::{Cell, RefCell};
 use std::io;
 use std::rc::{Rc, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 thread_local! {
     static APP_STATE: RefCell<Option<Weak<AppState>>> = const { RefCell::new(None) };
@@ -37,14 +37,65 @@ struct AppState {
     app_memory: RefCell<AppMemorySnapshot>,
     last_app_rows: RefCell<Vec<AppMemoryUsage>>,
     trend_tracker: RefCell<MemoryTrendTracker>,
+    last_app_sample_at: Cell<Option<Instant>>,
     last_pressure: Cell<MemoryPressure>,
     last_high_pressure_notification: Cell<Option<Instant>>,
     ticks_until_app_refresh: Cell<u8>,
 }
 
 const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
-const TOP_APP_ROWS: usize = 20;
+const APP_DELTA_BASELINE_MAX_AGE: Duration = Duration::from_secs(90);
+const TOP_APP_ROWS: usize = usize::MAX;
 const MENU_REOPEN_DELAY_SECONDS: f64 = 0.05;
+
+fn previous_app_rows_if_fresh(
+    last_sample_at: Option<Instant>,
+    now: Instant,
+    rows: &[AppMemoryUsage],
+) -> Vec<AppMemoryUsage> {
+    if last_sample_at
+        .map(|sampled_at| now.duration_since(sampled_at) <= APP_DELTA_BASELINE_MAX_AGE)
+        .unwrap_or(false)
+    {
+        rows.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn previous_app_rows_are_suppressed_when_stale() {
+        let now = Instant::now();
+        let rows = vec![usage("Zen")];
+
+        assert_eq!(
+            previous_app_rows_if_fresh(Some(now - Duration::from_secs(30)), now, &rows),
+            rows
+        );
+        assert!(previous_app_rows_if_fresh(
+            Some(now - APP_DELTA_BASELINE_MAX_AGE - Duration::from_secs(1)),
+            now,
+            &rows
+        )
+        .is_empty());
+        assert!(previous_app_rows_if_fresh(None, now, &rows).is_empty());
+    }
+
+    fn usage(name: &str) -> AppMemoryUsage {
+        AppMemoryUsage {
+            name: name.to_string(),
+            group_key: format!("/Applications/{name}.app"),
+            footprint_bytes: 1,
+            pids: vec![1],
+            can_quit: true,
+            delta_bytes: None,
+        }
+    }
+}
 
 impl AppState {
     fn refresh(&self, manual: bool) {
@@ -78,6 +129,8 @@ impl AppState {
                 }
             } else {
                 *self.app_memory.borrow_mut() = AppMemorySnapshot::Hidden;
+                self.last_app_rows.borrow_mut().clear();
+                self.last_app_sample_at.set(None);
             }
 
             self.maybe_notify_high_pressure(previous_pressure, snapshot.pressure);
@@ -96,13 +149,24 @@ impl AppState {
     }
 
     fn sample_apps(&self) {
+        let now = Instant::now();
         let next = match self.process_sampler.sample(TOP_APP_ROWS) {
             Ok(rows) => {
-                let ranked = app_rows_with_deltas(rows, &self.last_app_rows.borrow());
+                let previous_rows = previous_app_rows_if_fresh(
+                    self.last_app_sample_at.get(),
+                    now,
+                    &self.last_app_rows.borrow(),
+                );
+                let ranked = app_rows_with_deltas(rows, &previous_rows);
                 *self.last_app_rows.borrow_mut() = ranked.clone();
+                self.last_app_sample_at.set(Some(now));
                 AppMemorySnapshot::Loaded(ranked)
             }
-            Err(_) => AppMemorySnapshot::Unavailable,
+            Err(_) => {
+                self.last_app_rows.borrow_mut().clear();
+                self.last_app_sample_at.set(None);
+                AppMemorySnapshot::Unavailable
+            }
         };
         *self.app_memory.borrow_mut() = next;
     }
@@ -163,6 +227,7 @@ impl AppState {
         } else {
             *self.app_memory.borrow_mut() = AppMemorySnapshot::Hidden;
             self.last_app_rows.borrow_mut().clear();
+            self.last_app_sample_at.set(None);
         }
         self.tray.set_show_app_usage(on);
         self.refresh(true);
@@ -315,6 +380,7 @@ impl App {
             app_memory: RefCell::new(AppMemorySnapshot::Hidden),
             last_app_rows: RefCell::new(Vec::new()),
             trend_tracker: RefCell::new(MemoryTrendTracker::new()),
+            last_app_sample_at: Cell::new(None),
             last_pressure: Cell::new(MemoryPressure::Normal),
             last_high_pressure_notification: Cell::new(None),
             ticks_until_app_refresh: Cell::new(0),

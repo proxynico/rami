@@ -215,18 +215,22 @@ fn aggregate(records: Vec<ProcessMemoryRecord>, top_n: usize) -> Vec<AppMemoryUs
 }
 
 fn can_quit_group(group_key: &str, name: &str) -> bool {
-    group_key.ends_with(".app") && !name.eq_ignore_ascii_case("rami")
+    is_absolute_app_bundle_path(group_key) && !name.eq_ignore_ascii_case("rami")
 }
 
-pub fn kill_app_group(usage: &AppMemoryUsage) -> io::Result<()> {
+fn is_absolute_app_bundle_path(group_key: &str) -> bool {
+    group_key.starts_with('/') && group_key.ends_with(".app")
+}
+
+pub fn kill_app_group(usage: &AppMemoryUsage) -> io::Result<bool> {
     if !usage.can_quit || usage.pids.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     let mut first_error = None;
     let mut sent_any = false;
     for pid in &usage.pids {
-        if *pid <= 0 {
+        if *pid <= 0 || !pid_still_matches_usage(*pid, usage) {
             continue;
         }
         let rc = unsafe { kill(*pid, SIGTERM) };
@@ -238,12 +242,26 @@ pub fn kill_app_group(usage: &AppMemoryUsage) -> io::Result<()> {
     }
 
     if sent_any {
-        Ok(())
+        Ok(true)
     } else if let Some(err) = first_error {
         Err(err)
     } else {
-        Ok(())
+        Ok(false)
     }
+}
+
+fn pid_still_matches_usage(pid: pid_t, usage: &AppMemoryUsage) -> bool {
+    let path = read_pid_path(pid).unwrap_or_default();
+    let name = read_pid_name(pid).unwrap_or_default();
+    group_matches_usage(&path, &name, usage)
+}
+
+fn group_matches_usage(exec_path: &str, proc_name: &str, usage: &AppMemoryUsage) -> bool {
+    if exec_path.is_empty() && proc_name.is_empty() {
+        return false;
+    }
+    let (group_key, _) = group_key_and_name(exec_path, proc_name);
+    group_key == usage.group_key
 }
 
 #[cfg(test)]
@@ -319,6 +337,13 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_requires_absolute_app_bundle_path_for_quit() {
+        let rows = aggregate(vec![record(1, "fake.app", "fake.app", 100)], 5);
+        assert_eq!(rows[0].name, "fake.app");
+        assert!(!rows[0].can_quit);
+    }
+
+    #[test]
     fn aggregate_marks_rami_as_not_quittable() {
         let rows = aggregate(vec![record(1, "/Applications/rami.app", "rami", 100)], 5);
         assert_eq!(rows[0].name, "rami");
@@ -326,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn kill_app_group_on_invalid_pid_returns_esrch_without_panicking() {
+    fn kill_app_group_on_invalid_pid_ignores_stale_pid_without_panicking() {
         let usage = AppMemoryUsage {
             name: "Missing".to_string(),
             group_key: "/Applications/Missing.app".to_string(),
@@ -335,8 +360,30 @@ mod tests {
             can_quit: true,
             delta_bytes: None,
         };
-        let err = kill_app_group(&usage).expect_err("invalid pid should return ESRCH");
-        assert_eq!(err.raw_os_error(), Some(libc::ESRCH));
+        assert!(!kill_app_group(&usage).expect("stale pid should be ignored"));
+    }
+
+    #[test]
+    fn group_match_rejects_pid_that_now_belongs_to_another_app() {
+        let usage = AppMemoryUsage {
+            name: "Original".to_string(),
+            group_key: "/Applications/Original.app".to_string(),
+            footprint_bytes: 1,
+            pids: vec![1],
+            can_quit: true,
+            delta_bytes: None,
+        };
+
+        assert!(group_matches_usage(
+            "/Applications/Original.app/Contents/MacOS/Original",
+            "Original",
+            &usage
+        ));
+        assert!(!group_matches_usage(
+            "/Applications/Other.app/Contents/MacOS/Other",
+            "Other",
+            &usage
+        ));
     }
 
     #[test]

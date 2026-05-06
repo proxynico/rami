@@ -245,8 +245,8 @@ Keep process sampling at 30 seconds during normal visible app usage.
 
 Add:
 
-- a rolling global memory history covering roughly 2 minutes
-- the previous app sample keyed by stable app group
+- rolling global memory samples covering roughly 2 minutes for trend classification
+- the previous app sample keyed by stable app group, with stale baselines suppressed
 - last notification timestamp
 - last pressure state
 
