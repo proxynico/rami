@@ -1,12 +1,23 @@
 # rami
 
-`rami` is a tiny macOS menu bar app that shows current RAM usage as a single
-SF Symbol gauge in the menu bar.
+[![Release](https://img.shields.io/github/v/release/proxynico/rami?display_name=tag&sort=semver)](https://github.com/proxynico/rami/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)](#platform)
+[![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange)](https://www.rust-lang.org/)
 
-The goal is not to be a full system monitor. It is meant to stay lightweight,
-stay out of the Dock, and answer one question quickly:
+A tiny macOS menu bar app that shows current RAM usage as a single SF Symbol
+gauge. No Dock icon, no graphs, no settings panel. It answers one question:
 
-How much memory is this Mac using right now?
+> How much memory is this Mac using right now?
+
+## Install
+
+Grab the notarized `.dmg` from the
+[latest release](https://github.com/proxynico/rami/releases/latest), drag
+`rami.app` into `/Applications`, and launch it. The app lives in the menu
+bar; it does not show up in the Dock or the App Switcher.
+
+To build from source instead, see [Build from source](#build-from-source).
 
 ## What it does
 
@@ -44,9 +55,9 @@ Rows for normal `.app` bundles expose a native submenu with `Quit <App Name>`.
 This sends a graceful quit signal only. There is no force quit fallback.
 
 When memory pressure becomes `High`, `rami` sends a cooldown-protected
-notification with the top riser when available. During elevated or high memory
-pressure, it prepares app usage in the background even if `Show App Usage` is
-off, so the dropdown has an answer when you open it.
+notification with the top riser when available. During elevated or high
+memory pressure, it prepares app usage in the background even if `Show App
+Usage` is off, so the dropdown has an answer when you open it.
 
 Caveats worth knowing:
 
@@ -58,30 +69,48 @@ Caveats worth knowing:
   reports the same way.
 - `rami` filters its own pid out of the list.
 
-## Current scope
+## Non-goals
 
-This is intentionally still a tiny menu bar utility.
+`rami` is intentionally a tiny menu bar utility. It does not, and will not,
+include:
 
-- no CPU temperature
-- no graphs
-- no custom popover UI
-- no settings panel
-- no force quit
+- CPU temperature
+- graphs or history
+- a custom popover UI
+- a settings panel
+- force quit
+
+If you need any of that, Activity Monitor and
+[Stats](https://github.com/exelban/stats) cover it well.
 
 ## Platform
 
 - macOS 14+
-- Apple Silicon tested
-- written in Rust with native AppKit bindings
+- Apple Silicon tested (`arm64`)
+- written in Rust with native AppKit bindings via `objc2`
 
-## Run in development
+## How it works
+
+`rami` reads macOS VM statistics and computes used RAM from active, wired,
+and compressed memory, then rounds to an integer percentage for the menu bar
+and shows used/total values in the dropdown.
+
+To stay simple and cheap to run:
+
+- sampling happens on a 5-second timer
+- the UI stays native and small
+- second launches exit quietly instead of opening duplicate menu bar items
+
+## Build from source
+
+Run the test suite and a debug build:
 
 ```sh
 cargo test
 cargo run
 ```
 
-## Build the app bundle
+Build a local app bundle:
 
 ```sh
 ./scripts/build-app.sh
@@ -132,8 +161,9 @@ Apple's notary service.
 
 ## Release via GitHub Actions
 
-`.github/workflows/release.yml` builds, signs, notarizes, and uploads a DMG to
-a GitHub Release whenever a `v*` tag is pushed. Required repository secrets:
+`.github/workflows/release.yml` builds, signs, notarizes, and uploads a DMG
+to a GitHub Release whenever a `v*` tag is pushed. Required repository
+secrets:
 
 | Secret | Purpose |
 |---|---|
@@ -148,29 +178,19 @@ Export the `.p12` from Keychain Access (right-click the cert → Export) and
 encode with `base64 -i cert.p12 | pbcopy`. The workflow runs on `macos-14`
 (Apple Silicon), so the resulting DMG is `arm64`-only.
 
-## How it works
-
-`rami` reads macOS VM statistics and computes used RAM from:
-
-- active memory
-- wired memory
-- compressed memory
-
-It then rounds that to an integer percentage for the menu bar and shows the
-used/total values in the dropdown.
-
-To keep the app simple and cheap to run:
-
-- sampling happens on a 5-second timer
-- the UI stays native and small
-- second launches exit quietly instead of opening duplicate menu bar items
-
 ## Repo notes
 
 - `scripts/build-app.sh` builds the release binary and assembles `rami.app`
 - `scripts/release.sh` builds a notarized, stapled DMG for distribution
 - `macos/Info.plist` configures accessory-app behavior with `LSUIElement`
-- `macos/rami.entitlements` carries the hardened-runtime entitlements used by `release.sh`
-- `scripts/generate-icon.swift` draws the app icon and emits the `.icns` file used by the bundle build
+- `macos/rami.entitlements` carries the hardened-runtime entitlements used
+  by `release.sh`
+- `scripts/generate-icon.swift` draws the app icon and emits the `.icns`
+  file used by the bundle build
 - the app bundle target is aligned to macOS 14.0
-- `CFBundleShortVersionString` and `CFBundleVersion` are templated from `Cargo.toml` at build time
+- `CFBundleShortVersionString` and `CFBundleVersion` are templated from
+  `Cargo.toml` at build time
+
+## License
+
+[MIT](LICENSE).

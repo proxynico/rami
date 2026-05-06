@@ -2,6 +2,13 @@
 name = "rami"
 version = "0.1.0"
 edition = "2021"
+description = "Tiny macOS menu bar app that shows current RAM usage as a single SF Symbol gauge."
+license = "MIT"
+repository = "https://github.com/proxynico/rami"
+homepage = "https://github.com/proxynico/rami"
+readme = "README.md"
+keywords = ["macos", "menu-bar", "memory", "ram", "monitor"]
+categories = ["command-line-utilities", "os::macos-apis"]
 
 [lib]
 name = "rami"
