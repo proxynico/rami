@@ -1,5 +1,5 @@
-use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::lock::AppLock;
+use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
 use crate::process_memory::{AppMemorySnapshot, ProcessMemorySampler};
 use crate::tray::TrayController;
@@ -20,6 +20,7 @@ struct AppState {
     tray: TrayController,
     sampler: MemorySampler,
     process_sampler: ProcessMemorySampler,
+    refresh_target: Retained<AnyObject>,
     launch_at_login: LaunchAtLoginController,
     launch_at_login_status: Cell<LaunchAtLoginStatus>,
     auto_refresh_enabled: Cell<bool>,
@@ -30,6 +31,7 @@ struct AppState {
 
 const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
 const TOP_APP_ROWS: usize = 5;
+const MENU_REOPEN_DELAY_SECONDS: f64 = 0.05;
 
 impl AppState {
     fn refresh(&self, manual: bool) {
@@ -98,6 +100,27 @@ impl AppState {
         }
         self.tray.set_show_app_usage(on);
         self.refresh(true);
+        if on {
+            self.reopen_menu_soon();
+        }
+    }
+
+    fn reopen_menu_soon(&self) {
+        let _timer = unsafe {
+            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+                MENU_REOPEN_DELAY_SECONDS,
+                &self.refresh_target,
+                sel!(reopenMenu:),
+                None,
+                false,
+            )
+        };
+    }
+
+    fn reopen_menu_if_app_usage_visible(&self) {
+        if self.show_app_usage.get() {
+            self.tray.pop_up_menu();
+        }
     }
 }
 
@@ -160,6 +183,14 @@ define_class!(
                 state.toggle_show_app_usage();
             }
         }
+
+        #[unsafe(method(reopenMenu:))]
+        fn reopen_menu(&self, _sender: &AnyObject) {
+            let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+            if let Some(state) = state {
+                state.reopen_menu_if_app_usage_visible();
+            }
+        }
     }
 
     unsafe impl NSObjectProtocol for RefreshTarget {}
@@ -198,6 +229,7 @@ impl App {
             tray,
             sampler: MemorySampler::new()?,
             process_sampler: ProcessMemorySampler::new(),
+            refresh_target: refresh_target.clone(),
             launch_at_login,
             launch_at_login_status: Cell::new(launch_at_login_status),
             auto_refresh_enabled: Cell::new(true),

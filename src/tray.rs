@@ -14,9 +14,7 @@ use objc2_app_kit::{
     NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
     NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
 };
-use objc2_foundation::{
-    NSAttributedString, NSDictionary, NSMutableAttributedString, NSString,
-};
+use objc2_foundation::{NSAttributedString, NSDictionary, NSMutableAttributedString, NSString};
 use std::cell::{Cell, RefCell};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,8 +75,7 @@ impl TrayController {
         menu.setAutoenablesItems(false);
         let empty = NSString::from_str("");
 
-        let memory_section =
-            NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Memory"), mtm);
+        let memory_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Memory"), mtm);
         let apps_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Apps"), mtm);
         let pressure_section =
             NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Pressure"), mtm);
@@ -92,8 +89,7 @@ impl TrayController {
         let app_loading_item = make_stat_item(mtm);
         app_loading_item.setAttributedTitle(Some(&loading_attributed_title()));
         let app_unavailable_item = make_stat_item(mtm);
-        app_unavailable_item
-            .setAttributedTitle(Some(&unavailable_attributed_title()));
+        app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
         let app_items: Vec<Retained<NSMenuItem>> =
             (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
 
@@ -247,6 +243,11 @@ impl TrayController {
         });
     }
 
+    #[allow(deprecated)]
+    pub fn pop_up_menu(&self) {
+        self.status_item.popUpStatusItemMenu(&self.menu);
+    }
+
     pub fn set_placeholder(
         &self,
         launch_at_login_status: LaunchAtLoginStatus,
@@ -294,10 +295,8 @@ impl TrayController {
     fn make_symbol_image(&self, name: &'static str) -> Option<Retained<NSImage>> {
         let desc = NSString::from_str("RAM usage");
         let symbol_name = NSString::from_str(name);
-        let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &symbol_name,
-            Some(&desc),
-        )?;
+        let base =
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
         let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Large);
         base.imageWithSymbolConfiguration(&config)
     }
@@ -327,10 +326,8 @@ impl TrayController {
         } = model
         {
             if self.last_memory_row.borrow().as_ref() != Some(memory) {
-                self.memory_item.setAttributedTitle(Some(&stat_row_attributed(
-                    memory,
-                    NSColor::labelColor(),
-                )));
+                self.memory_item
+                    .setAttributedTitle(Some(&stat_row_attributed(memory, NSColor::labelColor())));
                 *self.last_memory_row.borrow_mut() = Some(memory.clone());
             }
             self.update_app_section(apps);
@@ -340,10 +337,8 @@ impl TrayController {
                 *self.last_pressure_display.borrow_mut() = Some(pressure.clone());
             }
             if self.last_swap_row.borrow().as_ref() != Some(swap) {
-                self.swap_item.setAttributedTitle(Some(&stat_row_attributed(
-                    swap,
-                    NSColor::labelColor(),
-                )));
+                self.swap_item
+                    .setAttributedTitle(Some(&stat_row_attributed(swap, NSColor::labelColor())));
                 *self.last_swap_row.borrow_mut() = Some(swap.clone());
             }
         }
@@ -359,10 +354,7 @@ impl TrayController {
         }
         if let AppSectionDisplay::Rows(rows) = apps {
             for (item, row) in self.app_items.iter().zip(rows.iter()) {
-                item.setAttributedTitle(Some(&stat_row_attributed(
-                    row,
-                    NSColor::labelColor(),
-                )));
+                item.setAttributedTitle(Some(&stat_row_attributed(row, NSColor::labelColor())));
             }
         }
         *self.last_app_section.borrow_mut() = Some(apps.clone());
@@ -491,7 +483,8 @@ fn make_stat_item(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
 fn make_action_icon(name: &str) -> Option<Retained<NSImage>> {
     let desc = NSString::from_str("");
     let symbol_name = NSString::from_str(name);
-    let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
+    let base =
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
     let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Small);
     let image = base.imageWithSymbolConfiguration(&config)?;
     image.setTemplate(true);
@@ -524,8 +517,7 @@ fn stat_row_attributed(
     let font = stat_font();
     let primary_attrs = attrs_for(primary_color, font.clone());
     let primary_str = NSString::from_str(&row.primary);
-    let primary =
-        unsafe { NSAttributedString::new_with_attributes(&primary_str, &primary_attrs) };
+    let primary = unsafe { NSAttributedString::new_with_attributes(&primary_str, &primary_attrs) };
 
     let Some(tail) = &row.tail else {
         return primary;
@@ -581,15 +573,26 @@ fn unavailable_attributed_title() -> Retained<NSAttributedString> {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MenuEntry<'a> {
     SectionHeader(&'a str),
-    Stat { primary: &'a str, tail: Option<&'a str>, is_high: bool },
+    Stat {
+        primary: &'a str,
+        tail: Option<&'a str>,
+        is_high: bool,
+    },
     Loading,
     AppLoading,
     AppUnavailable,
-    AppRow { primary: &'a str, tail: Option<&'a str> },
+    AppRow {
+        primary: &'a str,
+        tail: Option<&'a str>,
+    },
     Separator,
     Refresh,
-    AutoRefresh { enabled: bool },
-    ShowAppUsage { enabled: bool },
+    AutoRefresh {
+        enabled: bool,
+    },
+    ShowAppUsage {
+        enabled: bool,
+    },
     LaunchAtLogin(LaunchAtLoginStatus),
     Quit,
 }
@@ -616,7 +619,12 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
             entries.push(MenuEntry::SectionHeader("Memory"));
             entries.push(MenuEntry::Loading);
         }
-        DropdownModel::Loaded { memory, apps, pressure, swap } => {
+        DropdownModel::Loaded {
+            memory,
+            apps,
+            pressure,
+            swap,
+        } => {
             entries.push(MenuEntry::SectionHeader("Memory"));
             entries.push(MenuEntry::Stat {
                 primary: &memory.primary,
@@ -785,7 +793,9 @@ mod tests {
     fn loaded_with_apps_hidden_omits_apps_section() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert!(!entries.iter().any(|e| matches!(e, MenuEntry::SectionHeader("Apps"))));
+        assert!(!entries
+            .iter()
+            .any(|e| matches!(e, MenuEntry::SectionHeader("Apps"))));
     }
 
     #[test]
@@ -808,22 +818,14 @@ mod tests {
     fn show_app_usage_state_reflects_toggle() {
         use super::loaded_menu_entries_with_app_usage;
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
-        let on = loaded_menu_entries_with_app_usage(
-            &model,
-            LaunchAtLoginStatus::Disabled,
-            true,
-            true,
-        );
+        let on =
+            loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, true);
         assert!(on
             .iter()
             .any(|e| matches!(e, MenuEntry::ShowAppUsage { enabled: true })));
 
-        let off = loaded_menu_entries_with_app_usage(
-            &model,
-            LaunchAtLoginStatus::Disabled,
-            true,
-            false,
-        );
+        let off =
+            loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, false);
         assert!(off
             .iter()
             .any(|e| matches!(e, MenuEntry::ShowAppUsage { enabled: false })));

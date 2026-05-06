@@ -63,9 +63,7 @@ impl ProcessMemorySampler {
 
         let rows = aggregate(records, top_n);
         if rows.is_empty() {
-            return Err(io::Error::other(
-                "no per-process memory rows available",
-            ));
+            return Err(io::Error::other("no per-process memory rows available"));
         }
         Ok(rows)
     }
@@ -118,13 +116,8 @@ fn sample_pid(pid: pid_t) -> Option<ProcessMemoryRecord> {
 
 fn read_phys_footprint(pid: pid_t) -> Option<u64> {
     let mut info = MaybeUninit::<rusage_info_v4>::zeroed();
-    let rc = unsafe {
-        proc_pid_rusage(
-            pid,
-            RUSAGE_INFO_V4,
-            info.as_mut_ptr() as *mut rusage_info_t,
-        )
-    };
+    let rc =
+        unsafe { proc_pid_rusage(pid, RUSAGE_INFO_V4, info.as_mut_ptr() as *mut rusage_info_t) };
     if rc != 0 {
         return None;
     }
@@ -134,13 +127,7 @@ fn read_phys_footprint(pid: pid_t) -> Option<u64> {
 
 fn read_pid_path(pid: pid_t) -> Option<String> {
     let mut buf = vec![0u8; PROC_PIDPATHINFO_MAXSIZE as usize];
-    let len = unsafe {
-        proc_pidpath(
-            pid,
-            buf.as_mut_ptr() as *mut c_void,
-            buf.len() as u32,
-        )
-    };
+    let len = unsafe { proc_pidpath(pid, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) };
     if len <= 0 {
         return None;
     }
@@ -150,13 +137,7 @@ fn read_pid_path(pid: pid_t) -> Option<String> {
 
 fn read_pid_name(pid: pid_t) -> Option<String> {
     let mut buf = vec![0u8; 256];
-    let len = unsafe {
-        proc_name(
-            pid,
-            buf.as_mut_ptr() as *mut c_void,
-            buf.len() as u32,
-        )
-    };
+    let len = unsafe { proc_name(pid, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) };
     if len <= 0 {
         return None;
     }
@@ -177,11 +158,7 @@ fn group_key_and_name(exec_path: &str, proc_name: &str) -> (String, String) {
         return (proc_name.to_string(), proc_name.to_string());
     }
 
-    let basename = exec_path
-        .rsplit('/')
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let basename = exec_path.rsplit('/').next().unwrap_or("").to_string();
     (basename.clone(), basename)
 }
 

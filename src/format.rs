@@ -2,6 +2,7 @@ use crate::model::{MemoryPressure, MemorySnapshot};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 
 const APP_NAME_MAX_CHARS: usize = 28;
+const APP_USAGE_ROW_LIMIT: usize = 5;
 
 pub fn gauge_symbol_name(percent: u8) -> &'static str {
     match percent {
@@ -98,6 +99,13 @@ fn app_section_display(apps: &AppMemorySnapshot, total_bytes: u64) -> AppSection
         AppMemorySnapshot::Loading => AppSectionDisplay::Loading,
         AppMemorySnapshot::Unavailable => AppSectionDisplay::Unavailable,
         AppMemorySnapshot::Loaded(rows) => {
+            let mut rows = rows.clone();
+            rows.sort_by(|a, b| {
+                b.footprint_bytes
+                    .cmp(&a.footprint_bytes)
+                    .then_with(|| a.name.cmp(&b.name))
+            });
+            rows.truncate(APP_USAGE_ROW_LIMIT);
             AppSectionDisplay::Rows(rows.iter().map(|r| app_row(r, total_bytes)).collect())
         }
     }
@@ -235,10 +243,8 @@ mod tests {
             name: "Cursor".to_string(),
             footprint_bytes: 2_000_000_000,
         }];
-        let model = dropdown_model_with_apps(
-            snapshot(16_000_000_000),
-            &AppMemorySnapshot::Loaded(usage),
-        );
+        let model =
+            dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
         match model {
             DropdownModel::Loaded { apps, .. } => match apps {
                 AppSectionDisplay::Rows(rows) => {
@@ -249,6 +255,47 @@ mod tests {
                 _ => panic!("expected Rows"),
             },
             _ => panic!("expected Loaded"),
+        }
+    }
+
+    #[test]
+    fn dropdown_model_with_apps_keeps_top_five_sorted() {
+        let usage = vec![
+            AppMemoryUsage {
+                name: "Six".to_string(),
+                footprint_bytes: 6,
+            },
+            AppMemoryUsage {
+                name: "One".to_string(),
+                footprint_bytes: 1,
+            },
+            AppMemoryUsage {
+                name: "Five".to_string(),
+                footprint_bytes: 5,
+            },
+            AppMemoryUsage {
+                name: "Two".to_string(),
+                footprint_bytes: 2,
+            },
+            AppMemoryUsage {
+                name: "Four".to_string(),
+                footprint_bytes: 4,
+            },
+            AppMemoryUsage {
+                name: "Three".to_string(),
+                footprint_bytes: 3,
+            },
+        ];
+        let model = dropdown_model_with_apps(snapshot(100), &AppMemorySnapshot::Loaded(usage));
+        match model {
+            DropdownModel::Loaded {
+                apps: AppSectionDisplay::Rows(rows),
+                ..
+            } => {
+                let names: Vec<_> = rows.iter().map(|row| row.primary.as_str()).collect();
+                assert_eq!(names, vec!["Six", "Five", "Four", "Three", "Two"]);
+            }
+            _ => panic!("expected app rows"),
         }
     }
 }

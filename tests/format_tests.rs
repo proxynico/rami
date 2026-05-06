@@ -1,6 +1,5 @@
 use rami::format::{
-    dropdown_model, gauge_symbol_name, gb_pair, gb_text, placeholder_dropdown_model,
-    DropdownModel,
+    dropdown_model, gauge_symbol_name, gb_pair, gb_text, placeholder_dropdown_model, DropdownModel,
 };
 use rami::model::{MemoryPressure, MemorySnapshot};
 
@@ -53,7 +52,13 @@ fn dropdown_model_splits_memory_into_primary_and_tail() {
         swap_used_bytes: 4_414_120_000,
     };
 
-    let DropdownModel::Loaded { memory, pressure, swap, .. } = dropdown_model(snapshot) else {
+    let DropdownModel::Loaded {
+        memory,
+        pressure,
+        swap,
+        ..
+    } = dropdown_model(snapshot)
+    else {
         panic!("expected Loaded model");
     };
 

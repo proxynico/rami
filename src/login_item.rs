@@ -95,7 +95,9 @@ impl LaunchAtLoginController {
             LaunchAtLoginStatus::Enabled => unsafe { self.service.unregister_and_return_error()? },
             LaunchAtLoginStatus::Disabled
             | LaunchAtLoginStatus::RequiresApproval
-            | LaunchAtLoginStatus::Unavailable => unsafe { self.service.register_and_return_error()? },
+            | LaunchAtLoginStatus::Unavailable => unsafe {
+                self.service.register_and_return_error()?
+            },
         }
 
         Ok(self.status())
