@@ -1,4 +1,3 @@
-use crate::history::MemoryHistory;
 use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
@@ -38,7 +37,6 @@ struct AppState {
     app_memory: RefCell<AppMemorySnapshot>,
     last_app_rows: RefCell<Vec<AppMemoryUsage>>,
     trend_tracker: RefCell<MemoryTrendTracker>,
-    history: RefCell<MemoryHistory>,
     last_pressure: Cell<MemoryPressure>,
     last_high_pressure_notification: Cell<Option<Instant>>,
     ticks_until_app_refresh: Cell<u8>,
@@ -56,17 +54,20 @@ impl AppState {
         let mtm = MainThreadMarker::new().expect("refreshes must stay on the main thread");
         if let Ok(snapshot) = self.sampler.sample() {
             let trend = self.trend_tracker.borrow_mut().record(snapshot.used_bytes);
-            self.history.borrow_mut().record(snapshot.used_percent);
             let previous_pressure = self.last_pressure.get();
             let pressure_sampling = !matches!(snapshot.pressure, MemoryPressure::Normal);
             let pressure_just_rose = !matches!(
                 previous_pressure,
                 MemoryPressure::Elevated | MemoryPressure::High
             ) && pressure_sampling;
+            let high_pressure_just_started = !matches!(previous_pressure, MemoryPressure::High)
+                && matches!(snapshot.pressure, MemoryPressure::High);
             let app_sampling_enabled = self.show_app_usage.get() || pressure_sampling;
             if app_sampling_enabled {
-                let should_scan =
-                    manual || self.ticks_until_app_refresh.get() == 0 || pressure_just_rose;
+                let should_scan = manual
+                    || self.ticks_until_app_refresh.get() == 0
+                    || pressure_just_rose
+                    || high_pressure_just_started;
                 if should_scan {
                     self.sample_apps();
                     self.ticks_until_app_refresh
@@ -83,12 +84,10 @@ impl AppState {
             self.last_pressure.set(snapshot.pressure);
             let apps = self.app_memory.borrow();
             let launch_at_login_status = self.launch_at_login_status.get();
-            let history = self.history.borrow().samples();
             self.tray.set_snapshot(
                 snapshot,
                 trend,
                 &apps,
-                &history,
                 launch_at_login_status,
                 self.auto_refresh_enabled.get(),
                 mtm,
@@ -316,7 +315,6 @@ impl App {
             app_memory: RefCell::new(AppMemorySnapshot::Hidden),
             last_app_rows: RefCell::new(Vec::new()),
             trend_tracker: RefCell::new(MemoryTrendTracker::new()),
-            history: RefCell::new(MemoryHistory::new()),
             last_pressure: Cell::new(MemoryPressure::Normal),
             last_high_pressure_notification: Cell::new(None),
             ticks_until_app_refresh: Cell::new(0),

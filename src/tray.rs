@@ -5,7 +5,6 @@ use crate::format::{
 use crate::login_item::LaunchAtLoginStatus;
 use crate::model::{MemoryPressure, MemorySnapshot};
 use crate::process_memory::AppMemorySnapshot;
-use crate::sparkline;
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -46,7 +45,6 @@ pub struct TrayController {
     pressure_section: Retained<NSMenuItem>,
     swap_section: Retained<NSMenuItem>,
     memory_item: Retained<NSMenuItem>,
-    sparkline_item: Retained<NSMenuItem>,
     pressure_item: Retained<NSMenuItem>,
     swap_item: Retained<NSMenuItem>,
     loading_item: Retained<NSMenuItem>,
@@ -71,7 +69,6 @@ pub struct TrayController {
     last_pressure_display: RefCell<Option<PressureDisplay>>,
     last_swap_row: RefCell<Option<StatRow>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
-    last_history: RefCell<Vec<u8>>,
     last_auto_refresh_enabled: Cell<bool>,
     last_launch_title: RefCell<String>,
     last_launch_checked: Cell<bool>,
@@ -94,8 +91,6 @@ impl TrayController {
         let swap_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Swap"), mtm);
 
         let memory_item = make_stat_item(mtm);
-        let sparkline_item = make_stat_item(mtm);
-        sparkline_item.setEnabled(false);
         let pressure_item = make_stat_item(mtm);
         let swap_item = make_stat_item(mtm);
         let loading_item = make_stat_item(mtm);
@@ -212,7 +207,6 @@ impl TrayController {
             pressure_section,
             swap_section,
             memory_item,
-            sparkline_item,
             pressure_item,
             swap_item,
             loading_item,
@@ -237,7 +231,6 @@ impl TrayController {
             last_pressure_display: RefCell::new(None),
             last_swap_row: RefCell::new(None),
             last_app_section: RefCell::new(None),
-            last_history: RefCell::new(Vec::new()),
             last_auto_refresh_enabled: Cell::new(true),
             last_launch_title: RefCell::new(String::new()),
             last_launch_checked: Cell::new(false),
@@ -259,7 +252,6 @@ impl TrayController {
         snapshot: MemorySnapshot,
         trend: MemoryTrend,
         apps: &AppMemorySnapshot,
-        history: &[u8],
         launch_at_login_status: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
@@ -271,7 +263,6 @@ impl TrayController {
             auto_refresh_enabled,
             mtm,
         );
-        self.update_sparkline(history);
     }
 
     pub fn set_show_app_usage(&self, enabled: bool) {
@@ -299,7 +290,6 @@ impl TrayController {
             true,
             mtm,
         );
-        self.update_sparkline(&[]);
     }
 
     fn set_gauge(
@@ -418,19 +408,6 @@ impl TrayController {
         *self.last_app_section.borrow_mut() = Some(apps.clone());
     }
 
-    fn update_sparkline(&self, history: &[u8]) {
-        if self.last_history.borrow().as_slice() == history {
-            return;
-        }
-        let image = if history.len() >= 2 {
-            sparkline::render(history, 140.0, 14.0)
-        } else {
-            None
-        };
-        self.sparkline_item.setImage(image.as_deref());
-        *self.last_history.borrow_mut() = history.to_vec();
-    }
-
     fn rebuild_menu(&self, shape: MenuShape, mtm: MainThreadMarker) {
         self.menu.removeAllItems();
         match shape {
@@ -442,7 +419,6 @@ impl TrayController {
             MenuShape::LoadedNoApps => {
                 self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.memory_item);
-                self.menu.addItem(&self.sparkline_item);
                 self.menu.addItem(&self.pressure_section);
                 self.menu.addItem(&self.pressure_item);
                 self.menu.addItem(&self.swap_section);
@@ -451,7 +427,6 @@ impl TrayController {
             MenuShape::LoadedWithApps(app_shape) => {
                 self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.memory_item);
-                self.menu.addItem(&self.sparkline_item);
                 self.menu.addItem(&self.apps_section);
                 match app_shape {
                     AppShape::Loading => {
@@ -624,10 +599,8 @@ fn make_status_image(
             })
         }
         BadgeKind::High => {
-            let badge_image = render_template_symbol(
-                "exclamationmark.triangle.fill",
-                NSImageSymbolScale::Small,
-            )?;
+            let badge_image =
+                render_template_symbol("exclamationmark.triangle.fill", NSImageSymbolScale::Small)?;
             let composite = compose_with_badge(&base_template, &badge_image)?;
             Some(StatusImage {
                 image: composite,
@@ -669,10 +642,7 @@ fn make_status_image(
     }
 }
 
-fn render_template_symbol(
-    name: &str,
-    scale: NSImageSymbolScale,
-) -> Option<Retained<NSImage>> {
+fn render_template_symbol(name: &str, scale: NSImageSymbolScale) -> Option<Retained<NSImage>> {
     let symbol_name = NSString::from_str(name);
     let desc = NSString::from_str("");
     let base =

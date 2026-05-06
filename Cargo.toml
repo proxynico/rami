@@ -16,7 +16,6 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
   "NSApplication",
   "NSAttributedString",
-  "NSBezierPath",
   "NSButton",
   "NSCell",
   "NSColor",
@@ -24,7 +23,6 @@ objc2-app-kit = { version = "0.3", features = [
   "NSEvent",
   "NSFont",
   "NSFontDescriptor",
-  "NSGraphics",
   "NSImage",
   "NSMenu",
   "NSMenuItem",
