@@ -95,7 +95,7 @@ pub fn dropdown_model_with_apps_and_trend(
             action_tag: None,
             bundle_path: None,
         },
-        apps: app_section_display(apps, snapshot.total_bytes),
+        apps: app_section_display(apps),
         pressure: PressureDisplay {
             text: pressure_text(snapshot.pressure).to_string(),
             is_high: matches!(snapshot.pressure, MemoryPressure::High),
@@ -114,7 +114,7 @@ pub fn placeholder_dropdown_model() -> DropdownModel {
     DropdownModel::Loading
 }
 
-fn app_section_display(apps: &AppMemorySnapshot, total_bytes: u64) -> AppSectionDisplay {
+fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
     match apps {
         AppMemorySnapshot::Hidden => AppSectionDisplay::Hidden,
         AppMemorySnapshot::Loading => AppSectionDisplay::Loading,
@@ -138,7 +138,7 @@ fn app_section_display(apps: &AppMemorySnapshot, total_bytes: u64) -> AppSection
                 rows: rows
                     .iter()
                     .enumerate()
-                    .map(|(idx, r)| app_row(idx, r, total_bytes))
+                    .map(|(idx, r)| app_row(idx, r))
                     .collect(),
             }
         }
@@ -154,7 +154,7 @@ fn memory_tail(used_bytes: u64, total_bytes: u64, trend: MemoryTrend) -> Option<
     }
 }
 
-fn app_row(index: usize, app: &AppMemoryUsage, _total_bytes: u64) -> StatRow {
+fn app_row(index: usize, app: &AppMemoryUsage) -> StatRow {
     let tail = if let Some(delta) = app.delta_bytes.filter(|delta| *delta >= 50_000_000) {
         format!(
             "{}  {}",

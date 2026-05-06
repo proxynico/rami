@@ -45,8 +45,11 @@ pub fn snapshot_from_counts(
     pressure: MemoryPressure,
     swap_used_bytes: u64,
 ) -> MemorySnapshot {
-    let used_bytes =
-        (counts.active_pages + counts.wired_pages + counts.compressed_pages) * counts.page_size;
+    let used_pages = counts
+        .active_pages
+        .saturating_add(counts.wired_pages)
+        .saturating_add(counts.compressed_pages);
+    let used_bytes = used_pages.saturating_mul(counts.page_size);
 
     let raw_percent = if counts.total_bytes == 0 {
         0.0

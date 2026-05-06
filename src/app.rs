@@ -1,3 +1,4 @@
+use crate::app_control::quit_app_group;
 use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
@@ -6,9 +7,7 @@ use crate::notification::{
     deliver_high_pressure_notification, high_pressure_notification_text,
     should_notify_high_pressure,
 };
-use crate::process_memory::{
-    kill_app_group, AppMemorySnapshot, AppMemoryUsage, ProcessMemorySampler,
-};
+use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage, ProcessMemorySampler};
 use crate::tray::TrayController;
 use crate::trend::{app_rows_with_deltas, likely_culprit, MemoryTrendTracker};
 use objc2::rc::Retained;
@@ -19,6 +18,8 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSTimer};
 use std::cell::{Cell, RefCell};
 use std::io;
 use std::rc::{Rc, Weak};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 
 thread_local! {
@@ -28,7 +29,10 @@ thread_local! {
 struct AppState {
     tray: TrayController,
     sampler: MemorySampler,
-    process_sampler: ProcessMemorySampler,
+    app_scan_sender: Sender<AppScanResult>,
+    app_scan_receiver: Receiver<AppScanResult>,
+    app_scan_in_flight: Cell<bool>,
+    app_scan_generation: Cell<u64>,
     refresh_target: Retained<AnyObject>,
     launch_at_login: LaunchAtLoginController,
     launch_at_login_status: Cell<LaunchAtLoginStatus>,
@@ -45,8 +49,14 @@ struct AppState {
 
 const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
 const APP_DELTA_BASELINE_MAX_AGE: Duration = Duration::from_secs(90);
-const TOP_APP_ROWS: usize = usize::MAX;
+const APP_BASELINE_ROW_LIMIT: usize = 25;
 const MENU_REOPEN_DELAY_SECONDS: f64 = 0.05;
+
+struct AppScanResult {
+    generation: u64,
+    completed_at: Instant,
+    rows: io::Result<Vec<AppMemoryUsage>>,
+}
 
 fn previous_app_rows_if_fresh(
     last_sample_at: Option<Instant>,
@@ -103,72 +113,107 @@ impl AppState {
             return;
         }
         let mtm = MainThreadMarker::new().expect("refreshes must stay on the main thread");
-        if let Ok(snapshot) = self.sampler.sample() {
-            let trend = self.trend_tracker.borrow_mut().record(snapshot.used_bytes);
-            let previous_pressure = self.last_pressure.get();
-            let pressure_sampling = !matches!(snapshot.pressure, MemoryPressure::Normal);
-            let pressure_just_rose = !matches!(
-                previous_pressure,
-                MemoryPressure::Elevated | MemoryPressure::High
-            ) && pressure_sampling;
-            let high_pressure_just_started = !matches!(previous_pressure, MemoryPressure::High)
-                && matches!(snapshot.pressure, MemoryPressure::High);
-            let app_sampling_enabled = self.show_app_usage.get() || pressure_sampling;
-            if app_sampling_enabled {
-                let should_scan = manual
-                    || self.ticks_until_app_refresh.get() == 0
-                    || pressure_just_rose
-                    || high_pressure_just_started;
-                if should_scan {
-                    self.sample_apps();
-                    self.ticks_until_app_refresh
-                        .set(APP_REFRESH_INTERVAL_TICKS.saturating_sub(1));
+        self.drain_app_scan_results();
+        match self.sampler.sample() {
+            Ok(snapshot) => {
+                let trend = self.trend_tracker.borrow_mut().record(snapshot.used_bytes);
+                let previous_pressure = self.last_pressure.get();
+                let pressure_sampling = !matches!(snapshot.pressure, MemoryPressure::Normal);
+                let pressure_just_rose = !matches!(
+                    previous_pressure,
+                    MemoryPressure::Elevated | MemoryPressure::High
+                ) && pressure_sampling;
+                let high_pressure_just_started = !matches!(previous_pressure, MemoryPressure::High)
+                    && matches!(snapshot.pressure, MemoryPressure::High);
+                let app_sampling_enabled = self.show_app_usage.get() || pressure_sampling;
+                if app_sampling_enabled {
+                    let should_scan = manual
+                        || self.ticks_until_app_refresh.get() == 0
+                        || pressure_just_rose
+                        || high_pressure_just_started;
+                    if should_scan {
+                        self.start_app_scan();
+                        self.ticks_until_app_refresh
+                            .set(APP_REFRESH_INTERVAL_TICKS.saturating_sub(1));
+                    } else {
+                        self.ticks_until_app_refresh
+                            .set(self.ticks_until_app_refresh.get() - 1);
+                    }
                 } else {
-                    self.ticks_until_app_refresh
-                        .set(self.ticks_until_app_refresh.get() - 1);
+                    self.clear_app_usage();
                 }
-            } else {
-                *self.app_memory.borrow_mut() = AppMemorySnapshot::Hidden;
-                self.last_app_rows.borrow_mut().clear();
-                self.last_app_sample_at.set(None);
-            }
 
-            self.maybe_notify_high_pressure(previous_pressure, snapshot.pressure);
-            self.last_pressure.set(snapshot.pressure);
-            let apps = self.app_memory.borrow();
-            let launch_at_login_status = self.launch_at_login_status.get();
-            self.tray.set_snapshot(
-                snapshot,
-                trend,
-                &apps,
-                launch_at_login_status,
-                self.auto_refresh_enabled.get(),
-                mtm,
-            );
+                self.maybe_notify_high_pressure(previous_pressure, snapshot.pressure);
+                self.last_pressure.set(snapshot.pressure);
+                let apps = self.app_memory.borrow();
+                let launch_at_login_status = self.launch_at_login_status.get();
+                self.tray.set_snapshot(
+                    snapshot,
+                    trend,
+                    &apps,
+                    launch_at_login_status,
+                    self.auto_refresh_enabled.get(),
+                    mtm,
+                );
+            }
+            Err(_) => {
+                self.tray
+                    .set_placeholder(self.launch_at_login_status.get(), mtm);
+            }
         }
     }
 
-    fn sample_apps(&self) {
-        let now = Instant::now();
-        let next = match self.process_sampler.sample(TOP_APP_ROWS) {
-            Ok(rows) => {
-                let previous_rows = previous_app_rows_if_fresh(
-                    self.last_app_sample_at.get(),
-                    now,
-                    &self.last_app_rows.borrow(),
-                );
-                let ranked = app_rows_with_deltas(rows, &previous_rows);
-                *self.last_app_rows.borrow_mut() = ranked.clone();
-                self.last_app_sample_at.set(Some(now));
-                AppMemorySnapshot::Loaded(ranked)
+    fn start_app_scan(&self) {
+        if self.app_scan_in_flight.replace(true) {
+            return;
+        }
+        let sender = self.app_scan_sender.clone();
+        let generation = self.app_scan_generation.get();
+        thread::spawn(move || {
+            let rows = ProcessMemorySampler::new().sample(APP_BASELINE_ROW_LIMIT);
+            let _ = sender.send(AppScanResult {
+                generation,
+                completed_at: Instant::now(),
+                rows,
+            });
+        });
+    }
+
+    fn drain_app_scan_results(&self) {
+        while let Ok(result) = self.app_scan_receiver.try_recv() {
+            if result.generation != self.app_scan_generation.get() {
+                continue;
             }
-            Err(_) => {
-                self.last_app_rows.borrow_mut().clear();
-                self.last_app_sample_at.set(None);
-                AppMemorySnapshot::Unavailable
-            }
-        };
-        *self.app_memory.borrow_mut() = next;
+            self.app_scan_in_flight.set(false);
+            let next = match result.rows {
+                Ok(rows) => {
+                    let previous_rows = previous_app_rows_if_fresh(
+                        self.last_app_sample_at.get(),
+                        result.completed_at,
+                        &self.last_app_rows.borrow(),
+                    );
+                    let ranked = app_rows_with_deltas(rows, &previous_rows);
+                    *self.last_app_rows.borrow_mut() = ranked.clone();
+                    self.last_app_sample_at.set(Some(result.completed_at));
+                    AppMemorySnapshot::Loaded(ranked)
+                }
+                Err(_) => {
+                    self.last_app_rows.borrow_mut().clear();
+                    self.last_app_sample_at.set(None);
+                    AppMemorySnapshot::Unavailable
+                }
+            };
+            *self.app_memory.borrow_mut() = next;
+        }
+    }
+
+    fn clear_app_usage(&self) {
+        *self.app_memory.borrow_mut() = AppMemorySnapshot::Hidden;
+        self.last_app_rows.borrow_mut().clear();
+        self.last_app_sample_at.set(None);
+        self.app_scan_in_flight.set(false);
+        self.app_scan_generation
+            .set(self.app_scan_generation.get().wrapping_add(1));
     }
 
     fn maybe_notify_high_pressure(&self, previous: MemoryPressure, current: MemoryPressure) {
@@ -197,7 +242,7 @@ impl AppState {
             _ => None,
         };
         if let Some(usage) = usage.filter(|usage| usage.can_quit) {
-            let _ = kill_app_group(&usage);
+            let _ = quit_app_group(&usage);
             self.refresh(true);
         }
     }
@@ -225,9 +270,7 @@ impl AppState {
             *self.app_memory.borrow_mut() = AppMemorySnapshot::Loading;
             self.ticks_until_app_refresh.set(0);
         } else {
-            *self.app_memory.borrow_mut() = AppMemorySnapshot::Hidden;
-            self.last_app_rows.borrow_mut().clear();
-            self.last_app_sample_at.set(None);
+            self.clear_app_usage();
         }
         self.tray.set_show_app_usage(on);
         self.refresh(true);
@@ -250,6 +293,7 @@ impl AppState {
 
     fn reopen_menu_if_app_usage_visible(&self) {
         if self.show_app_usage.get() {
+            self.refresh(true);
             self.tray.pop_up_menu();
         }
     }
@@ -368,10 +412,14 @@ impl App {
         let tray = TrayController::new(mtm, refresh_target.clone());
         let launch_at_login = LaunchAtLoginController::new();
         let launch_at_login_status = launch_at_login.status();
+        let (app_scan_sender, app_scan_receiver) = mpsc::channel();
         let state = Rc::new(AppState {
             tray,
             sampler: MemorySampler::new()?,
-            process_sampler: ProcessMemorySampler::new(),
+            app_scan_sender,
+            app_scan_receiver,
+            app_scan_in_flight: Cell::new(false),
+            app_scan_generation: Cell::new(0),
             refresh_target: refresh_target.clone(),
             launch_at_login,
             launch_at_login_status: Cell::new(launch_at_login_status),

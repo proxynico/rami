@@ -93,11 +93,10 @@ impl LaunchAtLoginController {
     pub fn toggle(&self) -> Result<LaunchAtLoginStatus, Retained<NSError>> {
         match self.status() {
             LaunchAtLoginStatus::Enabled => unsafe { self.service.unregister_and_return_error()? },
-            LaunchAtLoginStatus::Disabled
-            | LaunchAtLoginStatus::RequiresApproval
-            | LaunchAtLoginStatus::Unavailable => unsafe {
+            LaunchAtLoginStatus::Disabled | LaunchAtLoginStatus::RequiresApproval => unsafe {
                 self.service.register_and_return_error()?
             },
+            LaunchAtLoginStatus::Unavailable => return Ok(LaunchAtLoginStatus::Unavailable),
         }
 
         Ok(self.status())

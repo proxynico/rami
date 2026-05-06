@@ -1,6 +1,6 @@
 use libc::{
-    c_int, c_void, getpid, kill, pid_t, proc_listallpids, proc_name, proc_pid_rusage, proc_pidpath,
-    rusage_info_t, rusage_info_v4, PROC_PIDPATHINFO_MAXSIZE, RUSAGE_INFO_V4, SIGTERM,
+    c_int, c_void, getpid, pid_t, proc_listallpids, proc_name, proc_pid_rusage, proc_pidpath,
+    rusage_info_t, rusage_info_v4, PROC_PIDPATHINFO_MAXSIZE, RUSAGE_INFO_V4,
 };
 use std::collections::HashMap;
 use std::io;
@@ -222,35 +222,7 @@ fn is_absolute_app_bundle_path(group_key: &str) -> bool {
     group_key.starts_with('/') && group_key.ends_with(".app")
 }
 
-pub fn kill_app_group(usage: &AppMemoryUsage) -> io::Result<bool> {
-    if !usage.can_quit || usage.pids.is_empty() {
-        return Ok(false);
-    }
-
-    let mut first_error = None;
-    let mut sent_any = false;
-    for pid in &usage.pids {
-        if *pid <= 0 || !pid_still_matches_usage(*pid, usage) {
-            continue;
-        }
-        let rc = unsafe { kill(*pid, SIGTERM) };
-        if rc == 0 {
-            sent_any = true;
-        } else if first_error.is_none() {
-            first_error = Some(io::Error::last_os_error());
-        }
-    }
-
-    if sent_any {
-        Ok(true)
-    } else if let Some(err) = first_error {
-        Err(err)
-    } else {
-        Ok(false)
-    }
-}
-
-fn pid_still_matches_usage(pid: pid_t, usage: &AppMemoryUsage) -> bool {
+pub(crate) fn pid_still_matches_usage(pid: pid_t, usage: &AppMemoryUsage) -> bool {
     let path = read_pid_path(pid).unwrap_or_default();
     let name = read_pid_name(pid).unwrap_or_default();
     group_matches_usage(&path, &name, usage)
@@ -348,19 +320,6 @@ mod tests {
         let rows = aggregate(vec![record(1, "/Applications/rami.app", "rami", 100)], 5);
         assert_eq!(rows[0].name, "rami");
         assert!(!rows[0].can_quit);
-    }
-
-    #[test]
-    fn kill_app_group_on_invalid_pid_ignores_stale_pid_without_panicking() {
-        let usage = AppMemoryUsage {
-            name: "Missing".to_string(),
-            group_key: "/Applications/Missing.app".to_string(),
-            footprint_bytes: 1,
-            pids: vec![999_999],
-            can_quit: true,
-            delta_bytes: None,
-        };
-        assert!(!kill_app_group(&usage).expect("stale pid should be ignored"));
     }
 
     #[test]

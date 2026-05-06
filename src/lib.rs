@@ -1,4 +1,5 @@
 pub mod app;
+pub mod app_control;
 pub mod format;
 pub mod lock;
 pub mod login_item;
@@ -6,5 +7,6 @@ pub mod memory;
 pub mod model;
 pub mod notification;
 pub mod process_memory;
+pub mod status_icon;
 pub mod tray;
 pub mod trend;
