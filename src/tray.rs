@@ -24,6 +24,7 @@ use std::cell::{Cell, RefCell};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppShape {
+    Hidden,
     Loading,
     Unavailable,
     Rows { rows: usize, culprit: bool },
@@ -33,8 +34,7 @@ enum AppShape {
 enum MenuShape {
     Uninitialized,
     Loading,
-    LoadedNoApps,
-    LoadedWithApps(AppShape),
+    Loaded { apps: AppShape, show_swap: bool },
 }
 
 pub struct TrayController {
@@ -42,8 +42,6 @@ pub struct TrayController {
     menu: Retained<NSMenu>,
     memory_section: Retained<NSMenuItem>,
     apps_section: Retained<NSMenuItem>,
-    pressure_section: Retained<NSMenuItem>,
-    swap_section: Retained<NSMenuItem>,
     memory_item: Retained<NSMenuItem>,
     pressure_item: Retained<NSMenuItem>,
     swap_item: Retained<NSMenuItem>,
@@ -86,9 +84,6 @@ impl TrayController {
 
         let memory_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Memory"), mtm);
         let apps_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Apps"), mtm);
-        let pressure_section =
-            NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Pressure"), mtm);
-        let swap_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Swap"), mtm);
 
         let memory_item = make_stat_item(mtm);
         let pressure_item = make_stat_item(mtm);
@@ -100,9 +95,6 @@ impl TrayController {
         let app_unavailable_item = make_stat_item(mtm);
         app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
         let app_culprit_item = make_stat_item(mtm);
-        if let Some(image) = make_culprit_glyph() {
-            app_culprit_item.setImage(Some(&image));
-        }
         let app_items: Vec<Retained<NSMenuItem>> =
             (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
         let app_quit_items: Vec<Retained<NSMenuItem>> = (0..APP_ROW_POOL)
@@ -204,8 +196,6 @@ impl TrayController {
             menu,
             memory_section,
             apps_section,
-            pressure_section,
-            swap_section,
             memory_item,
             pressure_item,
             swap_item,
@@ -363,14 +353,16 @@ impl TrayController {
             if self.last_pressure_display.borrow().as_ref() != Some(pressure) {
                 self.pressure_item
                     .setAttributedTitle(Some(&pressure_attributed(pressure)));
-                self.pressure_item
-                    .setImage(make_pressure_dot(pressure).as_deref());
                 *self.last_pressure_display.borrow_mut() = Some(pressure.clone());
             }
-            if self.last_swap_row.borrow().as_ref() != Some(swap) {
-                self.swap_item
-                    .setAttributedTitle(Some(&stat_row_attributed(swap, NSColor::labelColor())));
-                *self.last_swap_row.borrow_mut() = Some(swap.clone());
+            if self.last_swap_row.borrow().as_ref() != swap.as_ref() {
+                if let Some(swap_row) = swap {
+                    self.swap_item.setAttributedTitle(Some(&stat_row_attributed(
+                        swap_row,
+                        NSColor::labelColor(),
+                    )));
+                }
+                *self.last_swap_row.borrow_mut() = swap.clone();
             }
         }
 
@@ -386,7 +378,7 @@ impl TrayController {
         if let AppSectionDisplay::Rows { culprit, rows } = apps {
             if let Some(culprit) = culprit {
                 self.app_culprit_item
-                    .setAttributedTitle(Some(&stat_row_attributed(culprit, NSColor::labelColor())));
+                    .setAttributedTitle(Some(&culprit_attributed(culprit)));
             }
             for (item, row) in self.app_items.iter().zip(rows.iter()) {
                 item.setAttributedTitle(Some(&app_row_attributed(row)));
@@ -416,26 +408,25 @@ impl TrayController {
                 self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.loading_item);
             }
-            MenuShape::LoadedNoApps => {
+            MenuShape::Loaded { apps, show_swap } => {
                 self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.memory_item);
-                self.menu.addItem(&self.pressure_section);
                 self.menu.addItem(&self.pressure_item);
-                self.menu.addItem(&self.swap_section);
-                self.menu.addItem(&self.swap_item);
-            }
-            MenuShape::LoadedWithApps(app_shape) => {
-                self.menu.addItem(&self.memory_section);
-                self.menu.addItem(&self.memory_item);
-                self.menu.addItem(&self.apps_section);
-                match app_shape {
+                if show_swap {
+                    self.menu.addItem(&self.swap_item);
+                }
+                match apps {
+                    AppShape::Hidden => {}
                     AppShape::Loading => {
+                        self.menu.addItem(&self.apps_section);
                         self.menu.addItem(&self.app_loading_item);
                     }
                     AppShape::Unavailable => {
+                        self.menu.addItem(&self.apps_section);
                         self.menu.addItem(&self.app_unavailable_item);
                     }
                     AppShape::Rows { rows, culprit } => {
+                        self.menu.addItem(&self.apps_section);
                         if culprit {
                             self.menu.addItem(&self.app_culprit_item);
                         }
@@ -444,15 +435,12 @@ impl TrayController {
                         }
                     }
                 }
-                self.menu.addItem(&self.pressure_section);
-                self.menu.addItem(&self.pressure_item);
-                self.menu.addItem(&self.swap_section);
-                self.menu.addItem(&self.swap_item);
             }
         }
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
         self.menu.addItem(&self.refresh_item);
         self.menu.addItem(&self.auto_refresh_item);
+        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
         self.menu.addItem(&self.show_app_usage_item);
         self.menu.addItem(&self.launch_at_login_item);
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -506,17 +494,21 @@ impl TrayController {
 fn menu_shape_for(model: &DropdownModel) -> MenuShape {
     match model {
         DropdownModel::Loading => MenuShape::Loading,
-        DropdownModel::Loaded { apps, .. } => match apps {
-            AppSectionDisplay::Hidden => MenuShape::LoadedNoApps,
-            AppSectionDisplay::Loading => MenuShape::LoadedWithApps(AppShape::Loading),
-            AppSectionDisplay::Unavailable => MenuShape::LoadedWithApps(AppShape::Unavailable),
-            AppSectionDisplay::Rows { culprit, rows } => {
-                MenuShape::LoadedWithApps(AppShape::Rows {
+        DropdownModel::Loaded { apps, swap, .. } => {
+            let app_shape = match apps {
+                AppSectionDisplay::Hidden => AppShape::Hidden,
+                AppSectionDisplay::Loading => AppShape::Loading,
+                AppSectionDisplay::Unavailable => AppShape::Unavailable,
+                AppSectionDisplay::Rows { culprit, rows } => AppShape::Rows {
                     rows: rows.len().min(APP_ROW_POOL),
                     culprit: culprit.is_some(),
-                })
+                },
+            };
+            MenuShape::Loaded {
+                apps: app_shape,
+                show_swap: swap.is_some(),
             }
-        },
+        }
     }
 }
 
@@ -591,7 +583,8 @@ fn make_status_image(
             template: true,
         }),
         BadgeKind::Rising => {
-            let badge_image = render_template_symbol("arrow.up.right", NSImageSymbolScale::Small)?;
+            let badge_image =
+                render_template_symbol("arrow.up.right.circle.fill", NSImageSymbolScale::Small)?;
             let composite = compose_with_badge(&base_template, &badge_image)?;
             Some(StatusImage {
                 image: composite,
@@ -698,25 +691,6 @@ fn compose_with_badge(base: &NSImage, badge: &NSImage) -> Option<Retained<NSImag
     Some(composite)
 }
 
-fn make_pressure_dot(pressure: &PressureDisplay) -> Option<Retained<NSImage>> {
-    let color = if pressure.is_high {
-        NSColor::systemRedColor()
-    } else if pressure.text == "Elevated" {
-        NSColor::systemOrangeColor()
-    } else {
-        NSColor::systemGreenColor()
-    };
-    render_colored_symbol("circle.fill", NSImageSymbolScale::Small, &color)
-}
-
-fn make_culprit_glyph() -> Option<Retained<NSImage>> {
-    render_colored_symbol(
-        "exclamationmark.triangle.fill",
-        NSImageSymbolScale::Small,
-        &NSColor::systemOrangeColor(),
-    )
-}
-
 fn app_row_icon(row: &StatRow) -> Option<Retained<NSImage>> {
     let bundle_path = row.bundle_path.as_ref()?;
     let path = NSString::from_str(bundle_path);
@@ -726,45 +700,18 @@ fn app_row_icon(row: &StatRow) -> Option<Retained<NSImage>> {
 }
 
 fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
-    let font = stat_font();
-    let primary_attrs = attrs_for(NSColor::labelColor(), font.clone());
-    let primary_str = NSString::from_str(&row.primary);
-    let primary = unsafe { NSAttributedString::new_with_attributes(&primary_str, &primary_attrs) };
-
-    let Some(tail) = &row.tail else {
-        return primary;
-    };
-
-    let result = NSMutableAttributedString::new();
-    result.appendAttributedString(&primary);
-
-    let separator_attrs = attrs_for(NSColor::secondaryLabelColor(), font.clone());
-    let separator_str = NSString::from_str("\t");
-    let separator =
-        unsafe { NSAttributedString::new_with_attributes(&separator_str, &separator_attrs) };
-    result.appendAttributedString(&separator);
-
-    let tail_attrs = attrs_for_with_paragraph(
-        NSColor::secondaryLabelColor(),
-        font,
-        app_row_paragraph_style(),
-    );
-    let tail_str = NSString::from_str(tail);
-    let tail_attr = unsafe { NSAttributedString::new_with_attributes(&tail_str, &tail_attrs) };
-    result.appendAttributedString(&tail_attr);
-
-    Retained::into_super(result)
+    stat_row_attributed_colored(row, NSColor::labelColor(), NSColor::secondaryLabelColor())
 }
 
-const APP_ROW_TAIL_TAB: f64 = 260.0;
+const ROW_TAIL_TAB: f64 = 260.0;
 
-fn app_row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
+fn tail_paragraph_style() -> Retained<NSMutableParagraphStyle> {
     let style = NSMutableParagraphStyle::new();
     let tab_stop = unsafe {
         NSTextTab::initWithTextAlignment_location_options(
             NSTextTab::alloc(),
             NSTextAlignment::Right,
-            APP_ROW_TAIL_TAB,
+            ROW_TAIL_TAB,
             &NSDictionary::new(),
         )
     };
@@ -827,6 +774,14 @@ fn stat_row_attributed(
     row: &StatRow,
     primary_color: Retained<NSColor>,
 ) -> Retained<NSAttributedString> {
+    stat_row_attributed_colored(row, primary_color, NSColor::secondaryLabelColor())
+}
+
+fn stat_row_attributed_colored(
+    row: &StatRow,
+    primary_color: Retained<NSColor>,
+    tail_color: Retained<NSColor>,
+) -> Retained<NSAttributedString> {
     let font = stat_font();
     let primary_attrs = attrs_for(primary_color, font.clone());
     let primary_str = NSString::from_str(&row.primary);
@@ -839,8 +794,14 @@ fn stat_row_attributed(
     let result = NSMutableAttributedString::new();
     result.appendAttributedString(&primary);
 
-    let tail_attrs = attrs_for(NSColor::secondaryLabelColor(), font);
-    let tail_str = NSString::from_str(&format!(" {tail}"));
+    let separator_attrs = attrs_for(NSColor::secondaryLabelColor(), font.clone());
+    let separator_str = NSString::from_str("\t");
+    let separator =
+        unsafe { NSAttributedString::new_with_attributes(&separator_str, &separator_attrs) };
+    result.appendAttributedString(&separator);
+
+    let tail_attrs = attrs_for_with_paragraph(tail_color, font, tail_paragraph_style());
+    let tail_str = NSString::from_str(tail);
     let tail_attr = unsafe { NSAttributedString::new_with_attributes(&tail_str, &tail_attrs) };
     result.appendAttributedString(&tail_attr);
 
@@ -848,19 +809,30 @@ fn stat_row_attributed(
 }
 
 fn pressure_attributed(display: &PressureDisplay) -> Retained<NSAttributedString> {
-    let color = if display.is_high {
+    let tail_color = if display.is_high {
         NSColor::systemRedColor()
+    } else if display.is_elevated {
+        NSColor::systemOrangeColor()
     } else {
-        NSColor::labelColor()
+        NSColor::secondaryLabelColor()
     };
-    stat_row_attributed(
+    stat_row_attributed_colored(
         &StatRow {
-            primary: display.text.clone(),
-            tail: None,
+            primary: "Pressure".to_string(),
+            tail: Some(display.text.clone()),
             action_tag: None,
             bundle_path: None,
         },
-        color,
+        NSColor::labelColor(),
+        tail_color,
+    )
+}
+
+fn culprit_attributed(row: &StatRow) -> Retained<NSAttributedString> {
+    stat_row_attributed_colored(
+        row,
+        NSColor::secondaryLabelColor(),
+        NSColor::secondaryLabelColor(),
     )
 }
 
@@ -951,6 +923,18 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
                 tail: memory.tail.as_deref(),
                 is_high: false,
             });
+            entries.push(MenuEntry::Stat {
+                primary: "Pressure",
+                tail: Some(pressure.text.as_str()),
+                is_high: pressure.is_high,
+            });
+            if let Some(swap) = swap {
+                entries.push(MenuEntry::Stat {
+                    primary: &swap.primary,
+                    tail: swap.tail.as_deref(),
+                    is_high: false,
+                });
+            }
             match apps {
                 AppSectionDisplay::Hidden => {}
                 AppSectionDisplay::Loading => {
@@ -979,18 +963,6 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
                     }
                 }
             }
-            entries.push(MenuEntry::SectionHeader("Pressure"));
-            entries.push(MenuEntry::Stat {
-                primary: &pressure.text,
-                tail: None,
-                is_high: pressure.is_high,
-            });
-            entries.push(MenuEntry::SectionHeader("Swap"));
-            entries.push(MenuEntry::Stat {
-                primary: &swap.primary,
-                tail: swap.tail.as_deref(),
-                is_high: false,
-            });
         }
     }
     entries.push(MenuEntry::Separator);
@@ -998,6 +970,7 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
     entries.push(MenuEntry::AutoRefresh {
         enabled: auto_refresh_enabled,
     });
+    entries.push(MenuEntry::Separator);
     entries.push(MenuEntry::ShowAppUsage {
         enabled: show_app_usage,
     });
@@ -1070,6 +1043,7 @@ mod tests {
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
                 MenuEntry::AutoRefresh { enabled: true },
+                MenuEntry::Separator,
                 MenuEntry::ShowAppUsage { enabled: false },
                 MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Disabled),
                 MenuEntry::Separator,
@@ -1079,7 +1053,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_layout_renders_three_sections_with_stat_rows() {
+    fn loaded_layout_renders_memory_section_with_pressure_and_swap_rows() {
         let snapshot = MemorySnapshot {
             used_bytes: 5_700_000_000,
             total_bytes: 16_000_000_000,
@@ -1089,43 +1063,55 @@ mod tests {
         };
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Enabled, true);
-        assert_eq!(entries[0], MenuEntry::SectionHeader("Memory"));
         assert_eq!(
-            entries[1],
+            entries,
+            vec![
+                MenuEntry::SectionHeader("Memory"),
+                MenuEntry::Stat {
+                    primary: "47%",
+                    tail: Some("5.7 / 16.0 GB"),
+                    is_high: false,
+                },
+                MenuEntry::Stat {
+                    primary: "Pressure",
+                    tail: Some("Normal"),
+                    is_high: false,
+                },
+                MenuEntry::Stat {
+                    primary: "Swap",
+                    tail: Some("1.2 GB"),
+                    is_high: false,
+                },
+                MenuEntry::Separator,
+                MenuEntry::Refresh,
+                MenuEntry::AutoRefresh { enabled: true },
+                MenuEntry::Separator,
+                MenuEntry::ShowAppUsage { enabled: false },
+                MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Enabled),
+                MenuEntry::Separator,
+                MenuEntry::Quit,
+            ]
+        );
+    }
+
+    #[test]
+    fn loaded_layout_hides_swap_row_when_zero() {
+        let snapshot = MemorySnapshot {
+            used_bytes: 5_700_000_000,
+            total_bytes: 16_000_000_000,
+            used_percent: 47,
+            pressure: MemoryPressure::Normal,
+            swap_used_bytes: 0,
+        };
+        let model = dropdown_model(snapshot);
+        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        assert!(!entries.iter().any(|e| matches!(
+            e,
             MenuEntry::Stat {
-                primary: "47%",
-                tail: Some("5.7 / 16.0 GB"),
-                is_high: false,
+                primary: "Swap",
+                ..
             }
-        );
-        assert_eq!(entries[2], MenuEntry::SectionHeader("Pressure"));
-        assert_eq!(
-            entries[3],
-            MenuEntry::Stat {
-                primary: "Normal",
-                tail: None,
-                is_high: false,
-            }
-        );
-        assert_eq!(entries[4], MenuEntry::SectionHeader("Swap"));
-        assert_eq!(
-            entries[5],
-            MenuEntry::Stat {
-                primary: "1.2 GB",
-                tail: None,
-                is_high: false,
-            }
-        );
-        assert_eq!(entries[6], MenuEntry::Separator);
-        assert_eq!(entries[7], MenuEntry::Refresh);
-        assert_eq!(entries[8], MenuEntry::AutoRefresh { enabled: true });
-        assert_eq!(entries[9], MenuEntry::ShowAppUsage { enabled: false });
-        assert_eq!(
-            entries[10],
-            MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Enabled)
-        );
-        assert_eq!(entries[11], MenuEntry::Separator);
-        assert_eq!(entries[12], MenuEntry::Quit);
+        )));
     }
 
     #[test]
@@ -1140,14 +1126,16 @@ mod tests {
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, false);
         assert_eq!(
-            entries[3],
+            entries[2],
             MenuEntry::Stat {
-                primary: "High",
-                tail: None,
+                primary: "Pressure",
+                tail: Some("High"),
                 is_high: true,
             }
         );
-        assert_eq!(entries[8], MenuEntry::AutoRefresh { enabled: false });
+        assert!(entries
+            .iter()
+            .any(|e| matches!(e, MenuEntry::AutoRefresh { enabled: false })));
     }
 
     #[test]
@@ -1163,16 +1151,16 @@ mod tests {
     fn loaded_with_apps_loading_renders_loading_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[2], MenuEntry::SectionHeader("Apps"));
-        assert_eq!(entries[3], MenuEntry::AppLoading);
+        assert_eq!(entries[4], MenuEntry::SectionHeader("Apps"));
+        assert_eq!(entries[5], MenuEntry::AppLoading);
     }
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[2], MenuEntry::SectionHeader("Apps"));
-        assert_eq!(entries[3], MenuEntry::AppUnavailable);
+        assert_eq!(entries[4], MenuEntry::SectionHeader("Apps"));
+        assert_eq!(entries[5], MenuEntry::AppUnavailable);
     }
 
     #[test]
@@ -1193,7 +1181,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_with_apps_rows_inserts_between_memory_and_pressure() {
+    fn loaded_with_apps_rows_follow_memory_section() {
         let usage = vec![
             AppMemoryUsage {
                 name: "Cursor".to_string(),
@@ -1216,24 +1204,38 @@ mod tests {
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
 
         assert_eq!(entries[0], MenuEntry::SectionHeader("Memory"));
-        assert!(matches!(entries[1], MenuEntry::Stat { .. }));
-        assert_eq!(entries[2], MenuEntry::SectionHeader("Apps"));
-        assert_eq!(
+        assert!(matches!(entries[1], MenuEntry::Stat { primary: "47%", .. }));
+        assert!(matches!(
+            entries[2],
+            MenuEntry::Stat {
+                primary: "Pressure",
+                ..
+            }
+        ));
+        assert!(matches!(
             entries[3],
+            MenuEntry::Stat {
+                primary: "Swap",
+                ..
+            }
+        ));
+        assert_eq!(entries[4], MenuEntry::SectionHeader("Apps"));
+        assert_eq!(
+            entries[5],
             MenuEntry::AppRow {
                 primary: "Cursor",
-                tail: Some("2.0 GB  13%"),
+                tail: Some("2.0 GB"),
                 action_tag: Some(0),
             }
         );
         assert_eq!(
-            entries[4],
+            entries[6],
             MenuEntry::AppRow {
                 primary: "Chrome",
-                tail: Some("1.2 GB  8%"),
+                tail: Some("1.2 GB"),
                 action_tag: Some(1),
             }
         );
-        assert_eq!(entries[5], MenuEntry::SectionHeader("Pressure"));
+        assert_eq!(entries[7], MenuEntry::Separator);
     }
 }

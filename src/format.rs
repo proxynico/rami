@@ -38,6 +38,7 @@ pub struct StatRow {
 pub struct PressureDisplay {
     pub text: String,
     pub is_high: bool,
+    pub is_elevated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +60,7 @@ pub enum DropdownModel {
         memory: StatRow,
         apps: AppSectionDisplay,
         pressure: PressureDisplay,
-        swap: StatRow,
+        swap: Option<StatRow>,
     },
 }
 
@@ -98,13 +99,14 @@ pub fn dropdown_model_with_apps_and_trend(
         pressure: PressureDisplay {
             text: pressure_text(snapshot.pressure).to_string(),
             is_high: matches!(snapshot.pressure, MemoryPressure::High),
+            is_elevated: matches!(snapshot.pressure, MemoryPressure::Elevated),
         },
-        swap: StatRow {
-            primary: gb_text(snapshot.swap_used_bytes),
-            tail: None,
+        swap: (snapshot.swap_used_bytes > 0).then(|| StatRow {
+            primary: "Swap".to_string(),
+            tail: Some(gb_text(snapshot.swap_used_bytes)),
             action_tag: None,
             bundle_path: None,
-        },
+        }),
     }
 }
 
@@ -152,7 +154,7 @@ fn memory_tail(used_bytes: u64, total_bytes: u64, trend: MemoryTrend) -> Option<
     }
 }
 
-fn app_row(index: usize, app: &AppMemoryUsage, total_bytes: u64) -> StatRow {
+fn app_row(index: usize, app: &AppMemoryUsage, _total_bytes: u64) -> StatRow {
     let tail = if let Some(delta) = app.delta_bytes.filter(|delta| *delta >= 50_000_000) {
         format!(
             "{}  {}",
@@ -160,11 +162,7 @@ fn app_row(index: usize, app: &AppMemoryUsage, total_bytes: u64) -> StatRow {
             delta_text(delta as u64)
         )
     } else {
-        format!(
-            "{}  {}",
-            gb_text(app.footprint_bytes),
-            percent_label(app.footprint_bytes, total_bytes)
-        )
+        gb_text(app.footprint_bytes)
     };
     StatRow {
         primary: truncate_name(&app.name, APP_NAME_MAX_CHARS),
@@ -179,18 +177,6 @@ fn app_row(index: usize, app: &AppMemoryUsage, total_bytes: u64) -> StatRow {
 
 fn delta_text(bytes: u64) -> String {
     format!("+{} MB", bytes / 1_000_000)
-}
-
-fn percent_label(part: u64, total: u64) -> String {
-    if total == 0 {
-        return "—".to_string();
-    }
-    let raw = part as f64 / total as f64 * 100.0;
-    if raw < 1.0 {
-        "<1%".to_string()
-    } else {
-        format!("{}%", raw.round() as u32)
-    }
 }
 
 fn truncate_name(name: &str, max_chars: usize) -> String {
@@ -228,26 +214,6 @@ mod tests {
         assert_eq!(gauge_symbol_name(79), "gauge.with.dots.needle.67percent");
         assert_eq!(gauge_symbol_name(80), "gauge.with.dots.needle.100percent");
         assert_eq!(gauge_symbol_name(100), "gauge.with.dots.needle.100percent");
-    }
-
-    #[test]
-    fn percent_label_below_one_renders_lt() {
-        assert_eq!(percent_label(5_000_000, 1_000_000_000_000), "<1%");
-    }
-
-    #[test]
-    fn percent_label_at_one_renders_whole() {
-        assert_eq!(percent_label(10, 1000), "1%");
-    }
-
-    #[test]
-    fn percent_label_rounds_to_nearest() {
-        assert_eq!(percent_label(127, 1000), "13%");
-    }
-
-    #[test]
-    fn percent_label_handles_zero_total() {
-        assert_eq!(percent_label(100, 0), "—");
     }
 
     #[test]
@@ -314,7 +280,7 @@ mod tests {
                     assert!(culprit.is_none());
                     assert_eq!(rows.len(), 1);
                     assert_eq!(rows[0].primary, "Cursor");
-                    assert_eq!(rows[0].tail.as_deref(), Some("2.0 GB  13%"));
+                    assert_eq!(rows[0].tail.as_deref(), Some("2.0 GB"));
                     assert_eq!(rows[0].action_tag, Some(0));
                 }
                 _ => panic!("expected Rows"),

@@ -1,5 +1,18 @@
 # Feature Plan — Dropdown Polish (Battery-menu style)
 
+> **Status (2026-05-06): superseded by the dropdown polish v2 pass.**
+> The original target visual below kept Pressure and Swap as their own section
+> headers. The shipped iteration collapses both into rows under a single
+> `Memory` section header, right-aligns every tail at a shared tab stop,
+> tints the Pressure tail (orange/red) instead of using a leading dot, hides
+> the Swap row when zero, drops the per-app share-of-total percent, restyles
+> the culprit line as a secondary-color sub-header without the orange
+> triangle, and splits the footer into Refresh/Auto-Refresh ・
+> Show App Usage/Launch at Login ・ Quit. Rising trend now uses
+> `arrow.up.right.circle.fill` so the badge reads against the dotted gauge.
+> See `README.md` for the canonical dropdown shape; this doc is kept for
+> historical context.
+
 The menu bar gauge (v2 / `f98a3a1`) stays as-is. This plan rebuilds the
 dropdown to match the polish of Apple's own status-bar menus (Battery, Sound,
 Control Center extras): section headers, primary-value-with-secondary-tail

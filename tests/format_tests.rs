@@ -66,8 +66,27 @@ fn dropdown_model_splits_memory_into_primary_and_tail() {
     assert_eq!(memory.tail.as_deref(), Some("9.0 / 17.2 GB"));
     assert_eq!(pressure.text, "Elevated");
     assert!(!pressure.is_high);
-    assert_eq!(swap.primary, "4.4 GB");
-    assert_eq!(swap.tail, None);
+    assert!(pressure.is_elevated);
+    let swap = swap.expect("swap row present when nonzero");
+    assert_eq!(swap.primary, "Swap");
+    assert_eq!(swap.tail.as_deref(), Some("4.4 GB"));
+}
+
+#[test]
+fn dropdown_model_hides_swap_when_zero() {
+    let snapshot = MemorySnapshot {
+        used_bytes: 5_000_000_000,
+        total_bytes: 16_000_000_000,
+        used_percent: 31,
+        pressure: MemoryPressure::Normal,
+        swap_used_bytes: 0,
+    };
+
+    let DropdownModel::Loaded { swap, .. } = dropdown_model(snapshot) else {
+        panic!("expected Loaded model");
+    };
+
+    assert!(swap.is_none());
 }
 
 #[test]

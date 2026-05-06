@@ -14,16 +14,16 @@ How much memory is this Mac using right now?
   `0% / 33% / 50% / 67% / 100%`
 - tints the glyph red when kernel memory pressure is `High`
 - opens a plain native dropdown with:
-  - `RAM: NN% — used of total`
-  - `Apps` with a likely culprit and memory deltas when usage is rising
-  - `Memory Pressure: Normal | Elevated | High`
-  - `Swap Used: N.N GB`
-  - `Refresh`
-  - `Pause Auto Refresh`
-  - `Show App Usage` (optional, see below)
-  - `Launch at Login`
+  - a `Memory` section grouping:
+    - `NN%   used / total GB`
+    - `Pressure   Normal | Elevated | High` (tail tinted orange/red when not Normal)
+    - `Swap   N.N GB` (hidden when swap is zero)
+  - an `Apps` section (optional, see below) with a likely-culprit sub-line
+    and per-app rows
+  - `Refresh`, `Auto-Refresh`
+  - `Show App Usage`, `Launch at Login`
   - `Quit`
-- refreshes automatically every 5 seconds (toggle with `Pause Auto Refresh`)
+- refreshes automatically every 5 seconds (toggle with `Auto-Refresh`)
 
 ## Show App Usage (optional)
 
