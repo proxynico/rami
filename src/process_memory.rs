@@ -144,11 +144,15 @@ fn owning_app_bundle<L: ProcLookup>(pid: pid_t, lookup: &mut L) -> Option<(Strin
         }
         if let Some(path) = lookup.exec_path(current) {
             if let Some((bundle_path, app_segment)) = first_app_bundle(&path) {
-                let display = app_segment
-                    .strip_suffix(".app")
-                    .unwrap_or(app_segment)
-                    .to_string();
-                return Some((bundle_path, display));
+                if is_user_facing_app_bundle(&bundle_path) {
+                    let display = app_segment
+                        .strip_suffix(".app")
+                        .unwrap_or(app_segment)
+                        .to_string();
+                    return Some((bundle_path, display));
+                }
+                // System agent .app — keep walking the responsibility chain in case
+                // the agent was spawned on behalf of a real user-facing app.
             }
         }
         let responsible = lookup.responsible_pid(current);
@@ -159,6 +163,13 @@ fn owning_app_bundle<L: ProcLookup>(pid: pid_t, lookup: &mut L) -> Option<(Strin
         current = responsible;
     }
     None
+}
+
+fn is_user_facing_app_bundle(bundle_path: &str) -> bool {
+    !bundle_path.starts_with("/System/Library/")
+        && !bundle_path.starts_with("/Library/")
+        && !bundle_path.starts_with("/usr/")
+        && !bundle_path.starts_with("/private/")
 }
 
 fn read_phys_footprint(pid: pid_t) -> Option<u64> {
@@ -318,6 +329,29 @@ mod tests {
         let mut lookup = FakeProcLookup::new().with_path(55, "/usr/sbin/cfprefsd");
         // cfprefsd is its own responsible pid (chain terminates without an .app)
         assert!(owning_app_bundle(55, &mut lookup).is_none());
+    }
+
+    #[test]
+    fn owning_bundle_skips_system_agent_app_and_walks_to_real_app() {
+        let mut lookup = FakeProcLookup::new()
+            .with_path(
+                200,
+                "/System/Library/PrivateFrameworks/Foo.framework/sociallayerd.app/Contents/MacOS/sociallayerd",
+            )
+            .with_path(7, "/Applications/Messages.app/Contents/MacOS/Messages")
+            .responsible(200, 7);
+        let (key, name) = owning_app_bundle(200, &mut lookup).expect("rolled up");
+        assert_eq!(key, "/Applications/Messages.app");
+        assert_eq!(name, "Messages");
+    }
+
+    #[test]
+    fn owning_bundle_drops_system_agent_with_no_real_responsible_app() {
+        let mut lookup = FakeProcLookup::new().with_path(
+            201,
+            "/System/Library/PrivateFrameworks/Foo.framework/privatecloudcomputed.app/Contents/MacOS/privatecloudcomputed",
+        );
+        assert!(owning_app_bundle(201, &mut lookup).is_none());
     }
 
     #[test]

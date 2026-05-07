@@ -78,6 +78,7 @@ pub struct TrayController {
 }
 
 const APP_ROW_POOL: usize = 5;
+const ROW_ICON_SIZE: f64 = 16.0;
 
 impl TrayController {
     pub fn new(mtm: MainThreadMarker, refresh_target: Retained<AnyObject>) -> Self {
@@ -89,16 +90,24 @@ impl TrayController {
         let memory_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Memory"), mtm);
         let apps_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Apps"), mtm);
 
+        let placeholder_icon = make_placeholder_icon();
         let memory_item = make_stat_item(mtm);
+        memory_item.setImage(Some(&placeholder_icon));
         let pressure_item = make_stat_item(mtm);
+        pressure_item.setImage(Some(&placeholder_icon));
         let swap_item = make_stat_item(mtm);
+        swap_item.setImage(Some(&placeholder_icon));
         let loading_item = make_stat_item(mtm);
+        loading_item.setImage(Some(&placeholder_icon));
         loading_item.setAttributedTitle(Some(&loading_attributed_title()));
         let app_loading_item = make_stat_item(mtm);
+        app_loading_item.setImage(Some(&placeholder_icon));
         app_loading_item.setAttributedTitle(Some(&loading_attributed_title()));
         let app_unavailable_item = make_stat_item(mtm);
+        app_unavailable_item.setImage(Some(&placeholder_icon));
         app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
         let app_culprit_item = make_stat_item(mtm);
+        app_culprit_item.setImage(Some(&placeholder_icon));
         let app_items: Vec<Retained<NSMenuItem>> =
             (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
         let app_quit_items: Vec<Retained<NSMenuItem>> = (0..APP_ROW_POOL)
@@ -578,8 +587,8 @@ fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
     stat_row_attributed_colored(row, NSColor::labelColor(), NSColor::secondaryLabelColor())
 }
 
-const ROW_FOOTPRINT_TAB: f64 = 210.0;
-const ROW_DELTA_TAB: f64 = 280.0;
+const ROW_FOOTPRINT_TAB: f64 = 175.0;
+const ROW_DELTA_TAB: f64 = 240.0;
 
 fn row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
     let style = NSMutableParagraphStyle::new();
@@ -602,6 +611,14 @@ fn row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
     let tabs = NSArray::from_retained_slice(&[footprint_tab, delta_tab]);
     style.setTabStops(Some(&tabs));
     style
+}
+
+fn make_placeholder_icon() -> Retained<NSImage> {
+    // Transparent 16pt square so non-icon rows align with app rows that carry an icon.
+    NSImage::initWithSize(
+        NSImage::alloc(),
+        NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE),
+    )
 }
 
 fn make_action_icon(name: &str) -> Option<Retained<NSImage>> {
