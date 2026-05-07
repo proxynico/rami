@@ -586,28 +586,19 @@ fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
     stat_row_attributed_colored(row, NSColor::labelColor(), NSColor::secondaryLabelColor())
 }
 
-const ROW_FOOTPRINT_TAB: f64 = 175.0;
-const ROW_DELTA_TAB: f64 = 240.0;
+const ROW_TAIL_TAB: f64 = 175.0;
 
 fn row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
     let style = NSMutableParagraphStyle::new();
-    let footprint_tab = unsafe {
+    let tail_tab = unsafe {
         NSTextTab::initWithTextAlignment_location_options(
             NSTextTab::alloc(),
             NSTextAlignment::Right,
-            ROW_FOOTPRINT_TAB,
+            ROW_TAIL_TAB,
             &NSDictionary::new(),
         )
     };
-    let delta_tab = unsafe {
-        NSTextTab::initWithTextAlignment_location_options(
-            NSTextTab::alloc(),
-            NSTextAlignment::Right,
-            ROW_DELTA_TAB,
-            &NSDictionary::new(),
-        )
-    };
-    let tabs = NSArray::from_retained_slice(&[footprint_tab, delta_tab]);
+    let tabs = NSArray::from_retained_slice(&[tail_tab]);
     style.setTabStops(Some(&tabs));
     style
 }
@@ -699,8 +690,9 @@ fn stat_row_attributed_colored(
         unsafe { NSAttributedString::new_with_attributes(&separator_str, &separator_attrs) };
     result.appendAttributedString(&separator);
 
-    // Split tail on \t so the delta column gets its own right-aligned tab stop and
-    // can be styled independently (e.g. green for "+%" risers).
+    // Split tail on \t so the delta keeps its own color (orange) while sharing
+    // a single right-aligned tail column with the footprint. No reserved delta
+    // gutter: the row's right edge collapses when nothing is rising.
     let mut tail_parts = tail.splitn(2, '\t');
     let footprint_part = tail_parts.next().unwrap_or("");
     let delta_part = tail_parts.next();
@@ -712,11 +704,9 @@ fn stat_row_attributed_colored(
     result.appendAttributedString(&footprint);
 
     if let Some(delta) = delta_part {
-        let delta_separator_str = NSString::from_str("\t");
-        let delta_separator = unsafe {
-            NSAttributedString::new_with_attributes(&delta_separator_str, &separator_attrs)
-        };
-        result.appendAttributedString(&delta_separator);
+        let gap_str = NSString::from_str("  ");
+        let gap = unsafe { NSAttributedString::new_with_attributes(&gap_str, &tail_attrs) };
+        result.appendAttributedString(&gap);
 
         let delta_attrs = attrs_for(NSColor::systemOrangeColor(), font.clone());
         let delta_str = NSString::from_str(delta);
