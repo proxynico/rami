@@ -42,8 +42,6 @@ enum MenuShape {
 pub struct TrayController {
     status_item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
-    memory_section: Retained<NSMenuItem>,
-    apps_section: Retained<NSMenuItem>,
     memory_item: Retained<NSMenuItem>,
     pressure_item: Retained<NSMenuItem>,
     swap_item: Retained<NSMenuItem>,
@@ -58,6 +56,8 @@ pub struct TrayController {
     auto_refresh_item: Retained<NSMenuItem>,
     show_app_usage_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
+    settings_item: Retained<NSMenuItem>,
+    _settings_submenu: Retained<NSMenu>,
     quit_item: Retained<NSMenuItem>,
     pause_icon: Option<Retained<NSImage>>,
     play_icon: Option<Retained<NSImage>>,
@@ -76,6 +76,7 @@ pub struct TrayController {
 }
 
 const APP_ROW_POOL: usize = 5;
+const ROW_ICON_SIZE: f64 = 16.0;
 
 impl TrayController {
     pub fn new(mtm: MainThreadMarker, refresh_target: Retained<AnyObject>) -> Self {
@@ -84,19 +85,28 @@ impl TrayController {
         menu.setAutoenablesItems(false);
         let empty = NSString::from_str("");
 
-        let memory_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Memory"), mtm);
-        let apps_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Apps"), mtm);
-
+        let placeholder_icon = make_placeholder_icon();
         let memory_item = make_stat_item(mtm);
+        set_row_icon(&memory_item, "memorychip", &placeholder_icon);
         let pressure_item = make_stat_item(mtm);
+        set_row_icon(
+            &pressure_item,
+            "gauge.with.dots.needle.bottom.50percent",
+            &placeholder_icon,
+        );
         let swap_item = make_stat_item(mtm);
+        set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
         let loading_item = make_stat_item(mtm);
+        loading_item.setImage(Some(&placeholder_icon));
         loading_item.setAttributedTitle(Some(&loading_attributed_title()));
         let app_loading_item = make_stat_item(mtm);
+        app_loading_item.setImage(Some(&placeholder_icon));
         app_loading_item.setAttributedTitle(Some(&loading_attributed_title()));
         let app_unavailable_item = make_stat_item(mtm);
+        app_unavailable_item.setImage(Some(&placeholder_icon));
         app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
         let app_culprit_item = make_stat_item(mtm);
+        set_row_icon(&app_culprit_item, "flame", &placeholder_icon);
         let app_items: Vec<Retained<NSMenuItem>> =
             (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
         let app_quit_items: Vec<Retained<NSMenuItem>> = (0..APP_ROW_POOL)
@@ -151,7 +161,7 @@ impl TrayController {
         let show_app_usage_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
-                &NSString::from_str("Show App Usage"),
+                &NSString::from_str("Hide Apps"),
                 Some(sel!(toggleShowAppUsage:)),
                 &empty,
             )
@@ -176,6 +186,26 @@ impl TrayController {
         launch_at_login_item.setState(NSControlStateValueOff);
         launch_at_login_item.setEnabled(false);
 
+        let settings_submenu = NSMenu::new(mtm);
+        settings_submenu.setAutoenablesItems(false);
+        settings_submenu.addItem(&auto_refresh_item);
+        settings_submenu.addItem(&show_app_usage_item);
+        settings_submenu.addItem(&launch_at_login_item);
+
+        let settings_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Settings"),
+                None,
+                &empty,
+            )
+        };
+        settings_item.setSubmenu(Some(&settings_submenu));
+        settings_item.setEnabled(true);
+        if let Some(img) = make_action_icon("gearshape") {
+            settings_item.setImage(Some(&img));
+        }
+
         let quit_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
@@ -196,8 +226,6 @@ impl TrayController {
         let controller = Self {
             status_item,
             menu,
-            memory_section,
-            apps_section,
             memory_item,
             pressure_item,
             swap_item,
@@ -212,6 +240,8 @@ impl TrayController {
             auto_refresh_item,
             show_app_usage_item,
             launch_at_login_item,
+            settings_item,
+            _settings_submenu: settings_submenu,
             quit_item,
             pause_icon,
             play_icon,
@@ -258,10 +288,11 @@ impl TrayController {
     }
 
     pub fn set_show_app_usage(&self, enabled: bool) {
+        // Item label is "Hide Apps" — checked when apps are hidden, i.e. !enabled.
         self.show_app_usage_item.setState(if enabled {
-            NSControlStateValueOn
-        } else {
             NSControlStateValueOff
+        } else {
+            NSControlStateValueOn
         });
     }
 
@@ -300,7 +331,6 @@ impl TrayController {
         }
 
         if let Some(button) = self.status_item.button(mtm) {
-            let warning = matches!(pressure, MemoryPressure::High);
             match make_status_image(name, pressure, trend) {
                 Some(StatusImage { image, template }) => {
                     image.setTemplate(template);
@@ -312,11 +342,9 @@ impl TrayController {
                     *self.last_image_name.borrow_mut() = None;
                 }
             }
-            if warning {
-                button.setContentTintColor(Some(&NSColor::systemRedColor()));
-            } else {
-                button.setContentTintColor(None);
-            }
+            // Pressure colors are baked into the image (non-template render); no system
+            // tint, which used to bleed into a soft halo around the glyph.
+            button.setContentTintColor(None);
             self.last_pressure.set(pressure);
             self.last_trend.set(trend);
         }
@@ -407,11 +435,9 @@ impl TrayController {
         match shape {
             MenuShape::Uninitialized => {}
             MenuShape::Loading => {
-                self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.loading_item);
             }
             MenuShape::Loaded { apps, show_swap } => {
-                self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.memory_item);
                 self.menu.addItem(&self.pressure_item);
                 if show_swap {
@@ -420,15 +446,15 @@ impl TrayController {
                 match apps {
                     AppShape::Hidden => {}
                     AppShape::Loading => {
-                        self.menu.addItem(&self.apps_section);
+                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                         self.menu.addItem(&self.app_loading_item);
                     }
                     AppShape::Unavailable => {
-                        self.menu.addItem(&self.apps_section);
+                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                         self.menu.addItem(&self.app_unavailable_item);
                     }
                     AppShape::Rows { rows, culprit } => {
-                        self.menu.addItem(&self.apps_section);
+                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                         if culprit {
                             self.menu.addItem(&self.app_culprit_item);
                         }
@@ -441,10 +467,7 @@ impl TrayController {
         }
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
         self.menu.addItem(&self.refresh_item);
-        self.menu.addItem(&self.auto_refresh_item);
-        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-        self.menu.addItem(&self.show_app_usage_item);
-        self.menu.addItem(&self.launch_at_login_item);
+        self.menu.addItem(&self.settings_item);
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
         self.menu.addItem(&self.quit_item);
     }
@@ -558,11 +581,11 @@ fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
     stat_row_attributed_colored(row, NSColor::labelColor(), NSColor::secondaryLabelColor())
 }
 
-const ROW_TAIL_TAB: f64 = 280.0;
+const ROW_TAIL_TAB: f64 = 175.0;
 
-fn tail_paragraph_style() -> Retained<NSMutableParagraphStyle> {
+fn row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
     let style = NSMutableParagraphStyle::new();
-    let tab_stop = unsafe {
+    let tail_tab = unsafe {
         NSTextTab::initWithTextAlignment_location_options(
             NSTextTab::alloc(),
             NSTextAlignment::Right,
@@ -570,28 +593,32 @@ fn tail_paragraph_style() -> Retained<NSMutableParagraphStyle> {
             &NSDictionary::new(),
         )
     };
-    let tabs = NSArray::from_retained_slice(&[tab_stop]);
+    let tabs = NSArray::from_retained_slice(&[tail_tab]);
     style.setTabStops(Some(&tabs));
     style
 }
 
-fn attrs_for_with_paragraph(
-    color: Retained<NSColor>,
-    font: Retained<NSFont>,
-    paragraph: Retained<NSMutableParagraphStyle>,
-) -> Retained<NSDictionary<NSString, AnyObject>> {
-    unsafe {
-        let color_obj = Retained::cast_unchecked::<AnyObject>(color);
-        let font_obj = Retained::cast_unchecked::<AnyObject>(font);
-        let paragraph_obj = Retained::cast_unchecked::<AnyObject>(paragraph);
-        NSDictionary::from_retained_objects(
-            &[
-                NSForegroundColorAttributeName,
-                NSFontAttributeName,
-                NSParagraphStyleAttributeName,
-            ],
-            &[color_obj, font_obj, paragraph_obj],
-        )
+fn make_placeholder_icon() -> Retained<NSImage> {
+    // Transparent 16pt square so non-icon rows align with app rows that carry an icon.
+    NSImage::initWithSize(NSImage::alloc(), NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE))
+}
+
+fn make_row_icon(name: &str) -> Option<Retained<NSImage>> {
+    let symbol_name = NSString::from_str(name);
+    let desc = NSString::from_str("");
+    let base =
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
+    let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Medium);
+    let image = base.imageWithSymbolConfiguration(&config)?;
+    image.setSize(NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE));
+    image.setTemplate(true);
+    Some(image)
+}
+
+fn set_row_icon(item: &NSMenuItem, name: &str, fallback: &NSImage) {
+    match make_row_icon(name) {
+        Some(icon) => item.setImage(Some(&icon)),
+        None => item.setImage(Some(fallback)),
     }
 }
 
@@ -655,12 +682,44 @@ fn stat_row_attributed_colored(
         unsafe { NSAttributedString::new_with_attributes(&separator_str, &separator_attrs) };
     result.appendAttributedString(&separator);
 
-    let tail_attrs = attrs_for_with_paragraph(tail_color, font, tail_paragraph_style());
-    let tail_str = NSString::from_str(tail);
-    let tail_attr = unsafe { NSAttributedString::new_with_attributes(&tail_str, &tail_attrs) };
-    result.appendAttributedString(&tail_attr);
+    // Split tail on \t so the delta keeps its own color (orange) while sharing
+    // a single right-aligned tail column with the footprint. No reserved delta
+    // gutter: the row's right edge collapses when nothing is rising.
+    let mut tail_parts = tail.splitn(2, '\t');
+    let footprint_part = tail_parts.next().unwrap_or("");
+    let delta_part = tail_parts.next();
 
+    let tail_attrs = attrs_for(tail_color.clone(), font.clone());
+    let footprint_str = NSString::from_str(footprint_part);
+    let footprint = unsafe { NSAttributedString::new_with_attributes(&footprint_str, &tail_attrs) };
+    result.appendAttributedString(&footprint);
+
+    if let Some(delta) = delta_part {
+        let gap_str = NSString::from_str("  ");
+        let gap = unsafe { NSAttributedString::new_with_attributes(&gap_str, &tail_attrs) };
+        result.appendAttributedString(&gap);
+
+        let delta_attrs = attrs_for(NSColor::systemOrangeColor(), font.clone());
+        let delta_str = NSString::from_str(delta);
+        let delta_attr =
+            unsafe { NSAttributedString::new_with_attributes(&delta_str, &delta_attrs) };
+        result.appendAttributedString(&delta_attr);
+    }
+
+    apply_paragraph_style(&result);
     Retained::into_super(result)
+}
+
+fn apply_paragraph_style(s: &NSMutableAttributedString) {
+    let style = row_paragraph_style();
+    let style_obj = unsafe { Retained::cast_unchecked::<AnyObject>(style) };
+    let range = objc2_foundation::NSRange {
+        location: 0,
+        length: s.length(),
+    };
+    unsafe {
+        s.addAttribute_value_range(NSParagraphStyleAttributeName, &style_obj, range);
+    }
 }
 
 fn pressure_attributed(display: &PressureDisplay) -> Retained<NSAttributedString> {
@@ -718,7 +777,6 @@ fn unavailable_attributed_title() -> Retained<NSAttributedString> {
 #[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MenuEntry<'a> {
-    SectionHeader(&'a str),
     Stat {
         primary: &'a str,
         tail: Option<&'a str>,
@@ -734,13 +792,11 @@ pub(crate) enum MenuEntry<'a> {
     },
     Separator,
     Refresh,
-    AutoRefresh {
-        enabled: bool,
+    Settings {
+        auto_refresh_enabled: bool,
+        show_app_usage: bool,
+        launch_at_login: LaunchAtLoginStatus,
     },
-    ShowAppUsage {
-        enabled: bool,
-    },
-    LaunchAtLogin(LaunchAtLoginStatus),
     Quit,
 }
 
@@ -763,7 +819,6 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
     let mut entries = Vec::new();
     match model {
         DropdownModel::Loading => {
-            entries.push(MenuEntry::SectionHeader("Memory"));
             entries.push(MenuEntry::Loading);
         }
         DropdownModel::Loaded {
@@ -772,7 +827,6 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
             pressure,
             swap,
         } => {
-            entries.push(MenuEntry::SectionHeader("Memory"));
             entries.push(MenuEntry::Stat {
                 primary: &memory.primary,
                 tail: memory.tail.as_deref(),
@@ -793,15 +847,15 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
             match apps {
                 AppSectionDisplay::Hidden => {}
                 AppSectionDisplay::Loading => {
-                    entries.push(MenuEntry::SectionHeader("Apps"));
+                    entries.push(MenuEntry::Separator);
                     entries.push(MenuEntry::AppLoading);
                 }
                 AppSectionDisplay::Unavailable => {
-                    entries.push(MenuEntry::SectionHeader("Apps"));
+                    entries.push(MenuEntry::Separator);
                     entries.push(MenuEntry::AppUnavailable);
                 }
                 AppSectionDisplay::Rows { culprit, rows } => {
-                    entries.push(MenuEntry::SectionHeader("Apps"));
+                    entries.push(MenuEntry::Separator);
                     if let Some(culprit) = culprit {
                         entries.push(MenuEntry::AppRow {
                             primary: &culprit.primary,
@@ -822,14 +876,11 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
     }
     entries.push(MenuEntry::Separator);
     entries.push(MenuEntry::Refresh);
-    entries.push(MenuEntry::AutoRefresh {
-        enabled: auto_refresh_enabled,
+    entries.push(MenuEntry::Settings {
+        auto_refresh_enabled,
+        show_app_usage,
+        launch_at_login: launch_at_login_status,
     });
-    entries.push(MenuEntry::Separator);
-    entries.push(MenuEntry::ShowAppUsage {
-        enabled: show_app_usage,
-    });
-    entries.push(MenuEntry::LaunchAtLogin(launch_at_login_status));
     entries.push(MenuEntry::Separator);
     entries.push(MenuEntry::Quit);
     entries
@@ -893,14 +944,14 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                MenuEntry::SectionHeader("Memory"),
                 MenuEntry::Loading,
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
-                MenuEntry::AutoRefresh { enabled: true },
-                MenuEntry::Separator,
-                MenuEntry::ShowAppUsage { enabled: false },
-                MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Disabled),
+                MenuEntry::Settings {
+                    auto_refresh_enabled: true,
+                    show_app_usage: false,
+                    launch_at_login: LaunchAtLoginStatus::Disabled,
+                },
                 MenuEntry::Separator,
                 MenuEntry::Quit,
             ]
@@ -921,10 +972,9 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                MenuEntry::SectionHeader("Memory"),
                 MenuEntry::Stat {
-                    primary: "47%",
-                    tail: Some("5.7 / 16.0 GB"),
+                    primary: "5.7 / 16.0 GB",
+                    tail: Some("47%"),
                     is_high: false,
                 },
                 MenuEntry::Stat {
@@ -939,10 +989,11 @@ mod tests {
                 },
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
-                MenuEntry::AutoRefresh { enabled: true },
-                MenuEntry::Separator,
-                MenuEntry::ShowAppUsage { enabled: false },
-                MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Enabled),
+                MenuEntry::Settings {
+                    auto_refresh_enabled: true,
+                    show_app_usage: false,
+                    launch_at_login: LaunchAtLoginStatus::Enabled,
+                },
                 MenuEntry::Separator,
                 MenuEntry::Quit,
             ]
@@ -981,41 +1032,46 @@ mod tests {
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, false);
         assert_eq!(
-            entries[2],
+            entries[1],
             MenuEntry::Stat {
                 primary: "Pressure",
                 tail: Some("High"),
                 is_high: true,
             }
         );
-        assert!(entries
-            .iter()
-            .any(|e| matches!(e, MenuEntry::AutoRefresh { enabled: false })));
+        assert!(entries.iter().any(|e| matches!(
+            e,
+            MenuEntry::Settings {
+                auto_refresh_enabled: false,
+                ..
+            }
+        )));
     }
 
     #[test]
     fn loaded_with_apps_hidden_omits_apps_section() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert!(!entries
-            .iter()
-            .any(|e| matches!(e, MenuEntry::SectionHeader("Apps"))));
+        assert!(!entries.iter().any(|e| matches!(
+            e,
+            MenuEntry::AppRow { .. } | MenuEntry::AppLoading | MenuEntry::AppUnavailable
+        )));
     }
 
     #[test]
     fn loaded_with_apps_loading_renders_loading_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[4], MenuEntry::SectionHeader("Apps"));
-        assert_eq!(entries[5], MenuEntry::AppLoading);
+        assert_eq!(entries[3], MenuEntry::Separator);
+        assert_eq!(entries[4], MenuEntry::AppLoading);
     }
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[4], MenuEntry::SectionHeader("Apps"));
-        assert_eq!(entries[5], MenuEntry::AppUnavailable);
+        assert_eq!(entries[3], MenuEntry::Separator);
+        assert_eq!(entries[4], MenuEntry::AppUnavailable);
     }
 
     #[test]
@@ -1024,15 +1080,23 @@ mod tests {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
         let on =
             loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, true);
-        assert!(on
-            .iter()
-            .any(|e| matches!(e, MenuEntry::ShowAppUsage { enabled: true })));
+        assert!(on.iter().any(|e| matches!(
+            e,
+            MenuEntry::Settings {
+                show_app_usage: true,
+                ..
+            }
+        )));
 
         let off =
             loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, false);
-        assert!(off
-            .iter()
-            .any(|e| matches!(e, MenuEntry::ShowAppUsage { enabled: false })));
+        assert!(off.iter().any(|e| matches!(
+            e,
+            MenuEntry::Settings {
+                show_app_usage: false,
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -1058,25 +1122,30 @@ mod tests {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage));
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
 
-        assert_eq!(entries[0], MenuEntry::SectionHeader("Memory"));
-        assert!(matches!(entries[1], MenuEntry::Stat { primary: "47%", .. }));
         assert!(matches!(
-            entries[2],
+            entries[0],
+            MenuEntry::Stat {
+                primary: "5.7 / 16.0 GB",
+                ..
+            }
+        ));
+        assert!(matches!(
+            entries[1],
             MenuEntry::Stat {
                 primary: "Pressure",
                 ..
             }
         ));
         assert!(matches!(
-            entries[3],
+            entries[2],
             MenuEntry::Stat {
                 primary: "Swap",
                 ..
             }
         ));
-        assert_eq!(entries[4], MenuEntry::SectionHeader("Apps"));
+        assert_eq!(entries[3], MenuEntry::Separator);
         assert_eq!(
-            entries[5],
+            entries[4],
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
@@ -1084,13 +1153,13 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[6],
+            entries[5],
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
                 action_tag: Some(1),
             }
         );
-        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[6], MenuEntry::Separator);
     }
 }

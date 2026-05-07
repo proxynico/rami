@@ -1,10 +1,16 @@
 use libc::{
-    c_int, c_void, getpid, pid_t, proc_listallpids, proc_name, proc_pid_rusage, proc_pidpath,
-    rusage_info_t, rusage_info_v4, PROC_PIDPATHINFO_MAXSIZE, RUSAGE_INFO_V4,
+    c_int, c_void, getpid, pid_t, proc_listallpids, proc_pid_rusage, proc_pidpath, rusage_info_t,
+    rusage_info_v4, PROC_PIDPATHINFO_MAXSIZE, RUSAGE_INFO_V4,
 };
 use std::collections::HashMap;
 use std::io;
 use std::mem::MaybeUninit;
+
+extern "C" {
+    fn responsibility_get_pid_responsible_for_pid(pid: pid_t) -> pid_t;
+}
+
+const RESPONSIBILITY_MAX_HOPS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppMemoryUsage {
@@ -103,19 +109,67 @@ fn sample_pid(pid: pid_t) -> Option<ProcessMemoryRecord> {
         return None;
     }
 
-    let path = read_pid_path(pid).unwrap_or_default();
-    let name = read_pid_name(pid).unwrap_or_default();
-    if path.is_empty() && name.is_empty() {
-        return None;
-    }
-
-    let (group_key, display_name) = group_key_and_name(&path, &name);
+    let (group_key, display_name) = owning_app_bundle(pid, &mut LiveProcLookup)?;
     Some(ProcessMemoryRecord {
         pid,
         group_key,
         display_name,
         footprint_bytes: footprint,
     })
+}
+
+trait ProcLookup {
+    fn exec_path(&mut self, pid: pid_t) -> Option<String>;
+    fn responsible_pid(&mut self, pid: pid_t) -> pid_t;
+}
+
+struct LiveProcLookup;
+
+impl ProcLookup for LiveProcLookup {
+    fn exec_path(&mut self, pid: pid_t) -> Option<String> {
+        read_pid_path(pid)
+    }
+
+    fn responsible_pid(&mut self, pid: pid_t) -> pid_t {
+        unsafe { responsibility_get_pid_responsible_for_pid(pid) }
+    }
+}
+
+fn owning_app_bundle<L: ProcLookup>(pid: pid_t, lookup: &mut L) -> Option<(String, String)> {
+    let mut current = pid;
+    let mut last = 0;
+    for _ in 0..RESPONSIBILITY_MAX_HOPS {
+        if current <= 0 {
+            return None;
+        }
+        if let Some(path) = lookup.exec_path(current) {
+            if let Some((bundle_path, app_segment)) = first_app_bundle(&path) {
+                if is_user_facing_app_bundle(&bundle_path) {
+                    let display = app_segment
+                        .strip_suffix(".app")
+                        .unwrap_or(app_segment)
+                        .to_string();
+                    return Some((bundle_path, display));
+                }
+                // System agent .app — keep walking the responsibility chain in case
+                // the agent was spawned on behalf of a real user-facing app.
+            }
+        }
+        let responsible = lookup.responsible_pid(current);
+        if responsible <= 0 || responsible == current || responsible == last {
+            return None;
+        }
+        last = current;
+        current = responsible;
+    }
+    None
+}
+
+fn is_user_facing_app_bundle(bundle_path: &str) -> bool {
+    !bundle_path.starts_with("/System/Library/")
+        && !bundle_path.starts_with("/Library/")
+        && !bundle_path.starts_with("/usr/")
+        && !bundle_path.starts_with("/private/")
 }
 
 fn read_phys_footprint(pid: pid_t) -> Option<u64> {
@@ -139,33 +193,6 @@ fn read_pid_path(pid: pid_t) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-fn read_pid_name(pid: pid_t) -> Option<String> {
-    let mut buf = vec![0u8; 256];
-    let len = unsafe { proc_name(pid, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) };
-    if len <= 0 {
-        return None;
-    }
-    buf.truncate(len as usize);
-    Some(String::from_utf8_lossy(&buf).into_owned())
-}
-
-fn group_key_and_name(exec_path: &str, proc_name: &str) -> (String, String) {
-    if let Some((bundle_path, app_segment)) = first_app_bundle(exec_path) {
-        let display = app_segment
-            .strip_suffix(".app")
-            .unwrap_or(app_segment)
-            .to_string();
-        return (bundle_path, display);
-    }
-
-    if !proc_name.is_empty() {
-        return (proc_name.to_string(), proc_name.to_string());
-    }
-
-    let basename = exec_path.rsplit('/').next().unwrap_or("").to_string();
-    (basename.clone(), basename)
-}
-
 fn first_app_bundle(exec_path: &str) -> Option<(String, &str)> {
     let needle = ".app/Contents/";
     let idx = exec_path.find(needle)?;
@@ -185,7 +212,7 @@ fn aggregate(records: Vec<ProcessMemoryRecord>, top_n: usize) -> Vec<AppMemoryUs
         let entry = by_group
             .entry(r.group_key)
             .or_insert_with(|| (r.display_name.clone(), 0, Vec::new()));
-        entry.1 += r.footprint_bytes;
+        entry.1 = entry.1.saturating_add(r.footprint_bytes);
         entry.2.push(r.pid);
     }
 
@@ -223,22 +250,16 @@ fn is_absolute_app_bundle_path(group_key: &str) -> bool {
 }
 
 pub(crate) fn pid_still_matches_usage(pid: pid_t, usage: &AppMemoryUsage) -> bool {
-    let path = read_pid_path(pid).unwrap_or_default();
-    let name = read_pid_name(pid).unwrap_or_default();
-    group_matches_usage(&path, &name, usage)
-}
-
-fn group_matches_usage(exec_path: &str, proc_name: &str, usage: &AppMemoryUsage) -> bool {
-    if exec_path.is_empty() && proc_name.is_empty() {
+    let Some((group_key, _)) = owning_app_bundle(pid, &mut LiveProcLookup) else {
         return false;
-    }
-    let (group_key, _) = group_key_and_name(exec_path, proc_name);
+    };
     group_key == usage.group_key
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn record(pid: pid_t, group: &str, name: &str, bytes: u64) -> ProcessMemoryRecord {
         ProcessMemoryRecord {
@@ -249,41 +270,110 @@ mod tests {
         }
     }
 
+    struct FakeProcLookup {
+        paths: HashMap<pid_t, String>,
+        responsible: HashMap<pid_t, pid_t>,
+    }
+
+    impl FakeProcLookup {
+        fn new() -> Self {
+            Self {
+                paths: HashMap::new(),
+                responsible: HashMap::new(),
+            }
+        }
+
+        fn with_path(mut self, pid: pid_t, path: &str) -> Self {
+            self.paths.insert(pid, path.to_string());
+            self
+        }
+
+        fn responsible(mut self, pid: pid_t, parent: pid_t) -> Self {
+            self.responsible.insert(pid, parent);
+            self
+        }
+    }
+
+    impl ProcLookup for FakeProcLookup {
+        fn exec_path(&mut self, pid: pid_t) -> Option<String> {
+            self.paths.get(&pid).cloned()
+        }
+
+        fn responsible_pid(&mut self, pid: pid_t) -> pid_t {
+            *self.responsible.get(&pid).unwrap_or(&pid)
+        }
+    }
+
     #[test]
-    fn groups_helper_under_outer_app() {
-        let path = "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/Current/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper";
-        let (key, name) = group_key_and_name(path, "Google Chrome Helper");
+    fn owning_bundle_uses_pid_path_when_inside_app() {
+        let mut lookup =
+            FakeProcLookup::new().with_path(42, "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        let (key, name) = owning_app_bundle(42, &mut lookup).expect("bundle");
+        assert_eq!(key, "/Applications/Cursor.app");
+        assert_eq!(name, "Cursor");
+    }
+
+    #[test]
+    fn owning_bundle_walks_responsibility_chain_to_app() {
+        let mut lookup = FakeProcLookup::new()
+            .with_path(
+                100,
+                "/System/Library/Frameworks/WebKit.framework/.../com.apple.WebKit.WebContent",
+            )
+            .with_path(7, "/Applications/Safari.app/Contents/MacOS/Safari")
+            .responsible(100, 7);
+        let (key, name) = owning_app_bundle(100, &mut lookup).expect("rolled up");
+        assert_eq!(key, "/Applications/Safari.app");
+        assert_eq!(name, "Safari");
+    }
+
+    #[test]
+    fn owning_bundle_drops_pid_with_no_responsible_app() {
+        let mut lookup = FakeProcLookup::new().with_path(55, "/usr/sbin/cfprefsd");
+        // cfprefsd is its own responsible pid (chain terminates without an .app)
+        assert!(owning_app_bundle(55, &mut lookup).is_none());
+    }
+
+    #[test]
+    fn owning_bundle_skips_system_agent_app_and_walks_to_real_app() {
+        let mut lookup = FakeProcLookup::new()
+            .with_path(
+                200,
+                "/System/Library/PrivateFrameworks/Foo.framework/sociallayerd.app/Contents/MacOS/sociallayerd",
+            )
+            .with_path(7, "/Applications/Messages.app/Contents/MacOS/Messages")
+            .responsible(200, 7);
+        let (key, name) = owning_app_bundle(200, &mut lookup).expect("rolled up");
+        assert_eq!(key, "/Applications/Messages.app");
+        assert_eq!(name, "Messages");
+    }
+
+    #[test]
+    fn owning_bundle_drops_system_agent_with_no_real_responsible_app() {
+        let mut lookup = FakeProcLookup::new().with_path(
+            201,
+            "/System/Library/PrivateFrameworks/Foo.framework/privatecloudcomputed.app/Contents/MacOS/privatecloudcomputed",
+        );
+        assert!(owning_app_bundle(201, &mut lookup).is_none());
+    }
+
+    #[test]
+    fn owning_bundle_short_circuits_on_self_responsible_loop() {
+        let mut lookup = FakeProcLookup::new()
+            .with_path(9, "/usr/libexec/some-helper")
+            .responsible(9, 9);
+        assert!(owning_app_bundle(9, &mut lookup).is_none());
+    }
+
+    #[test]
+    fn owning_bundle_outer_app_wins_when_helper_is_nested_app() {
+        let mut lookup = FakeProcLookup::new().with_path(
+            33,
+            "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/Current/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper",
+        );
+        let (key, name) = owning_app_bundle(33, &mut lookup).expect("bundle");
         assert_eq!(key, "/Applications/Google Chrome.app");
         assert_eq!(name, "Google Chrome");
-    }
-
-    #[test]
-    fn falls_back_to_proc_name_for_non_app() {
-        let (key, name) = group_key_and_name("/usr/sbin/cfprefsd", "cfprefsd");
-        assert_eq!(key, "cfprefsd");
-        assert_eq!(name, "cfprefsd");
-    }
-
-    #[test]
-    fn empty_path_falls_back_to_proc_name() {
-        let (key, name) = group_key_and_name("", "launchd");
-        assert_eq!(key, "launchd");
-        assert_eq!(name, "launchd");
-    }
-
-    #[test]
-    fn empty_name_falls_back_to_path_basename() {
-        let (key, name) = group_key_and_name("/usr/bin/odd-binary", "");
-        assert_eq!(key, "odd-binary");
-        assert_eq!(name, "odd-binary");
-    }
-
-    #[test]
-    fn group_key_first_app_segment_wins() {
-        let path = "/Applications/Outer.app/Contents/MacOS/Inner.app/Contents/MacOS/Bar";
-        let (key, name) = group_key_and_name(path, "Bar");
-        assert_eq!(key, "/Applications/Outer.app");
-        assert_eq!(name, "Outer");
     }
 
     #[test]
@@ -302,47 +392,10 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_marks_non_app_groups_as_not_quittable() {
-        let rows = aggregate(vec![record(1, "cfprefsd", "cfprefsd", 100)], 5);
-        assert_eq!(rows[0].name, "cfprefsd");
-        assert!(!rows[0].can_quit);
-    }
-
-    #[test]
-    fn aggregate_requires_absolute_app_bundle_path_for_quit() {
-        let rows = aggregate(vec![record(1, "fake.app", "fake.app", 100)], 5);
-        assert_eq!(rows[0].name, "fake.app");
-        assert!(!rows[0].can_quit);
-    }
-
-    #[test]
     fn aggregate_marks_rami_as_not_quittable() {
         let rows = aggregate(vec![record(1, "/Applications/rami.app", "rami", 100)], 5);
         assert_eq!(rows[0].name, "rami");
         assert!(!rows[0].can_quit);
-    }
-
-    #[test]
-    fn group_match_rejects_pid_that_now_belongs_to_another_app() {
-        let usage = AppMemoryUsage {
-            name: "Original".to_string(),
-            group_key: "/Applications/Original.app".to_string(),
-            footprint_bytes: 1,
-            pids: vec![1],
-            can_quit: true,
-            delta_bytes: None,
-        };
-
-        assert!(group_matches_usage(
-            "/Applications/Original.app/Contents/MacOS/Original",
-            "Original",
-            &usage
-        ));
-        assert!(!group_matches_usage(
-            "/Applications/Other.app/Contents/MacOS/Other",
-            "Other",
-            &usage
-        ));
     }
 
     #[test]

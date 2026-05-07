@@ -55,12 +55,17 @@ pub(crate) fn make_status_image(
             })
         }
         BadgeKind::High => {
-            let badge_image =
-                render_template_symbol("exclamationmark.triangle.fill", NSImageSymbolScale::Small)?;
-            let composite = compose_with_badge(&base_template, &badge_image)?;
+            let red = NSColor::systemRedColor();
+            let base_colored = render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &red)?;
+            let badge_image = render_colored_symbol(
+                "exclamationmark.triangle.fill",
+                NSImageSymbolScale::Small,
+                &red,
+            )?;
+            let composite = compose_with_badge(&base_colored, &badge_image)?;
             Some(StatusImage {
                 image: composite,
-                template: true,
+                template: false,
             })
         }
         BadgeKind::RisingFast => {
