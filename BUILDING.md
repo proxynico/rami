@@ -16,6 +16,14 @@ cargo test
 cargo run
 ```
 
+Before sending changes, run the same narrow checks used for the polish pass:
+
+```sh
+cargo fmt
+cargo test
+cargo clippy --all-targets -- -D warnings
+```
+
 ## Local app bundle
 
 ```sh
@@ -96,6 +104,8 @@ distribute it via `brew install --cask proxynico/tap/rami`:
    - `version` to match the new tag
    - `sha256` to the SHA of the published DMG (from
      `shasum -a 256 dist/rami-*.dmg` or the GitHub release asset details)
+   - `zap` paths only if `CFBundleIdentifier` changes from
+     `com.nicomontero.rami`
 3. Commit and push to `homebrew-tap`.
 
 Users then run:
@@ -112,7 +122,8 @@ auto-bumps on every release.
 - `scripts/build-app.sh` builds the release binary and assembles `rami.app`.
 - `scripts/release.sh` builds the notarized DMG.
 - `scripts/install.sh` is the `curl | bash` end-user installer (downloads
-  the latest GitHub release DMG, copies into `/Applications`, launches).
+  the latest GitHub release DMG, copies into `/Applications`, ejects the DMG,
+  leaves Gatekeeper quarantine handling intact, launches).
 - `macos/Info.plist` configures accessory-app behavior with `LSUIElement`.
 - `macos/rami.entitlements` carries the hardened-runtime entitlements.
 - `scripts/generate-icon.swift` draws the app icon and emits the `.icns`.

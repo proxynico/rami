@@ -56,8 +56,7 @@ pub(crate) fn make_status_image(
         }
         BadgeKind::High => {
             let red = NSColor::systemRedColor();
-            let base_colored =
-                render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &red)?;
+            let base_colored = render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &red)?;
             let badge_image = render_colored_symbol(
                 "exclamationmark.triangle.fill",
                 NSImageSymbolScale::Small,

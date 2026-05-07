@@ -89,7 +89,11 @@ impl TrayController {
         let memory_item = make_stat_item(mtm);
         set_row_icon(&memory_item, "memorychip", &placeholder_icon);
         let pressure_item = make_stat_item(mtm);
-        set_row_icon(&pressure_item, "gauge.with.dots.needle.bottom.50percent", &placeholder_icon);
+        set_row_icon(
+            &pressure_item,
+            "gauge.with.dots.needle.bottom.50percent",
+            &placeholder_icon,
+        );
         let swap_item = make_stat_item(mtm);
         set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
         let loading_item = make_stat_item(mtm);
@@ -596,10 +600,7 @@ fn row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
 
 fn make_placeholder_icon() -> Retained<NSImage> {
     // Transparent 16pt square so non-icon rows align with app rows that carry an icon.
-    NSImage::initWithSize(
-        NSImage::alloc(),
-        NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE),
-    )
+    NSImage::initWithSize(NSImage::alloc(), NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE))
 }
 
 fn make_row_icon(name: &str) -> Option<Retained<NSImage>> {
@@ -690,8 +691,7 @@ fn stat_row_attributed_colored(
 
     let tail_attrs = attrs_for(tail_color.clone(), font.clone());
     let footprint_str = NSString::from_str(footprint_part);
-    let footprint =
-        unsafe { NSAttributedString::new_with_attributes(&footprint_str, &tail_attrs) };
+    let footprint = unsafe { NSAttributedString::new_with_attributes(&footprint_str, &tail_attrs) };
     result.appendAttributedString(&footprint);
 
     if let Some(delta) = delta_part {
@@ -701,7 +701,8 @@ fn stat_row_attributed_colored(
 
         let delta_attrs = attrs_for(NSColor::systemOrangeColor(), font.clone());
         let delta_str = NSString::from_str(delta);
-        let delta_attr = unsafe { NSAttributedString::new_with_attributes(&delta_str, &delta_attrs) };
+        let delta_attr =
+            unsafe { NSAttributedString::new_with_attributes(&delta_str, &delta_attrs) };
         result.appendAttributedString(&delta_attr);
     }
 

@@ -24,7 +24,7 @@ cask "rami" do
   app "rami.app"
 
   zap trash: [
-    "~/Library/Preferences/com.proxynico.rami.plist",
-    "~/Library/Saved Application State/com.proxynico.rami.savedState",
+    "~/Library/Preferences/com.nicomontero.rami.plist",
+    "~/Library/Saved Application State/com.nicomontero.rami.savedState",
   ]
 end

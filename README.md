@@ -29,6 +29,10 @@ brew install --cask proxynico/tap/rami
 curl -fsSL https://raw.githubusercontent.com/proxynico/rami/main/scripts/install.sh | bash
 ```
 
+The installer downloads the latest notarized DMG, copies `rami.app` to
+`/Applications`, ejects the mounted image, and launches the app. It leaves
+macOS Gatekeeper quarantine handling intact.
+
 **Or grab the DMG** from the
 [latest release](https://github.com/proxynico/rami/releases/latest), drag
 `rami.app` into `/Applications`, and launch.
@@ -38,6 +42,13 @@ Open `Settings ▸ Launch at Login` if you want it to come back after reboot.
 ## Build from source
 
 See [BUILDING.md](BUILDING.md).
+
+## Troubleshooting
+
+If rami cannot read memory/process data or toggle Launch at Login, it keeps the
+menu bar app running and writes a short diagnostic to stderr. When debugging,
+launch it from Terminal with `cargo run` or run the app binary directly from the
+bundle to see those messages.
 
 ## License
 

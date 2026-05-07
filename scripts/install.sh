@@ -24,7 +24,14 @@ if [ "$(uname -m)" != "arm64" ]; then
 fi
 
 tmpdir="$(mktemp -d -t rami-install)"
-trap 'rm -rf "$tmpdir"' EXIT
+mount_point=""
+cleanup() {
+  if [ -n "$mount_point" ] && [ -d "$mount_point" ]; then
+    hdiutil detach "$mount_point" -quiet >/dev/null 2>&1 || true
+  fi
+  rm -rf "$tmpdir"
+}
+trap cleanup EXIT
 
 echo "==> Resolving latest release..."
 api_url="https://api.github.com/repos/$REPO/releases/latest"
@@ -72,9 +79,7 @@ cp -R "$mount_point/$APP_NAME.app" "$INSTALL_DIR/"
 
 echo "==> Ejecting DMG"
 hdiutil detach "$mount_point" -quiet
-
-# Clear quarantine attribute so Gatekeeper does not block the first launch.
-xattr -dr com.apple.quarantine "$INSTALL_DIR/$APP_NAME.app" 2>/dev/null || true
+mount_point=""
 
 echo "==> Launching $APP_NAME"
 open "$INSTALL_DIR/$APP_NAME.app"

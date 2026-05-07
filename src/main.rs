@@ -4,6 +4,9 @@ fn main() {
     match App::new() {
         Ok(Some(mut app)) => app.run(),
         Ok(None) => {}
-        Err(err) => panic!("failed to start rami: {err}"),
+        Err(err) => {
+            eprintln!("failed to start rami: {err}");
+            std::process::exit(1);
+        }
     }
 }

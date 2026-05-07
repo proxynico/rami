@@ -37,10 +37,6 @@ pub fn mem_text(bytes: u64) -> String {
     }
 }
 
-pub fn signed_delta_text(bytes: u64) -> String {
-    format!("+{}", mem_text(bytes))
-}
-
 pub fn signed_delta_pct_text(footprint_bytes: u64, delta_bytes: u64) -> String {
     let previous = footprint_bytes.saturating_sub(delta_bytes);
     if previous == 0 {
@@ -100,14 +96,15 @@ pub fn dropdown_model(snapshot: MemorySnapshot) -> DropdownModel {
     dropdown_model_with_apps_and_trend(snapshot, MemoryTrend::Stable, &AppMemorySnapshot::Hidden)
 }
 
-pub fn dropdown_model_with_apps(
+#[cfg(test)]
+pub(crate) fn dropdown_model_with_apps(
     snapshot: MemorySnapshot,
     apps: &AppMemorySnapshot,
 ) -> DropdownModel {
     dropdown_model_with_apps_and_trend(snapshot, MemoryTrend::Stable, apps)
 }
 
-pub fn dropdown_model_with_apps_and_trend(
+pub(crate) fn dropdown_model_with_apps_and_trend(
     snapshot: MemorySnapshot,
     trend: MemoryTrend,
     apps: &AppMemorySnapshot,

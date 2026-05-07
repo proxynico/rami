@@ -156,7 +156,8 @@ impl AppState {
                     mtm,
                 );
             }
-            Err(_) => {
+            Err(err) => {
+                eprintln!("memory sample failed: {err}");
                 self.tray
                     .set_placeholder(self.launch_at_login_status.get(), mtm);
             }
@@ -197,7 +198,8 @@ impl AppState {
                     self.last_app_sample_at.set(Some(result.completed_at));
                     AppMemorySnapshot::Loaded(ranked)
                 }
-                Err(_) => {
+                Err(err) => {
+                    eprintln!("process memory scan failed: {err}");
                     self.last_app_rows.borrow_mut().clear();
                     self.last_app_sample_at.set(None);
                     AppMemorySnapshot::Unavailable
@@ -242,7 +244,9 @@ impl AppState {
             _ => None,
         };
         if let Some(usage) = usage.filter(|usage| usage.can_quit) {
-            let _ = quit_app_group(&usage);
+            if let Err(err) = quit_app_group(&usage) {
+                eprintln!("failed to quit {}: {err}", usage.name);
+            }
             self.refresh(true);
         }
     }
@@ -250,9 +254,11 @@ impl AppState {
     fn toggle_launch_at_login(&self) {
         match self.launch_at_login.toggle() {
             Ok(status) => self.launch_at_login_status.set(status),
-            Err(_) => self
-                .launch_at_login_status
-                .set(self.launch_at_login.status()),
+            Err(err) => {
+                eprintln!("failed to toggle launch at login: {err}");
+                self.launch_at_login_status
+                    .set(self.launch_at_login.status());
+            }
         }
         self.refresh(true);
     }

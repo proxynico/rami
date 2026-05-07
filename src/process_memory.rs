@@ -212,7 +212,7 @@ fn aggregate(records: Vec<ProcessMemoryRecord>, top_n: usize) -> Vec<AppMemoryUs
         let entry = by_group
             .entry(r.group_key)
             .or_insert_with(|| (r.display_name.clone(), 0, Vec::new()));
-        entry.1 += r.footprint_bytes;
+        entry.1 = entry.1.saturating_add(r.footprint_bytes);
         entry.2.push(r.pid);
     }
 
@@ -306,8 +306,8 @@ mod tests {
 
     #[test]
     fn owning_bundle_uses_pid_path_when_inside_app() {
-        let mut lookup = FakeProcLookup::new()
-            .with_path(42, "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        let mut lookup =
+            FakeProcLookup::new().with_path(42, "/Applications/Cursor.app/Contents/MacOS/Cursor");
         let (key, name) = owning_app_bundle(42, &mut lookup).expect("bundle");
         assert_eq!(key, "/Applications/Cursor.app");
         assert_eq!(name, "Cursor");
@@ -316,7 +316,10 @@ mod tests {
     #[test]
     fn owning_bundle_walks_responsibility_chain_to_app() {
         let mut lookup = FakeProcLookup::new()
-            .with_path(100, "/System/Library/Frameworks/WebKit.framework/.../com.apple.WebKit.WebContent")
+            .with_path(
+                100,
+                "/System/Library/Frameworks/WebKit.framework/.../com.apple.WebKit.WebContent",
+            )
             .with_path(7, "/Applications/Safari.app/Contents/MacOS/Safari")
             .responsible(100, 7);
         let (key, name) = owning_app_bundle(100, &mut lookup).expect("rolled up");
