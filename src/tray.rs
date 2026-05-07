@@ -92,11 +92,11 @@ impl TrayController {
 
         let placeholder_icon = make_placeholder_icon();
         let memory_item = make_stat_item(mtm);
-        memory_item.setImage(Some(&placeholder_icon));
+        set_row_icon(&memory_item, "memorychip", &placeholder_icon);
         let pressure_item = make_stat_item(mtm);
-        pressure_item.setImage(Some(&placeholder_icon));
+        set_row_icon(&pressure_item, "gauge.with.dots.needle.bottom.50percent", &placeholder_icon);
         let swap_item = make_stat_item(mtm);
-        swap_item.setImage(Some(&placeholder_icon));
+        set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
         let loading_item = make_stat_item(mtm);
         loading_item.setImage(Some(&placeholder_icon));
         loading_item.setAttributedTitle(Some(&loading_attributed_title()));
@@ -107,7 +107,7 @@ impl TrayController {
         app_unavailable_item.setImage(Some(&placeholder_icon));
         app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
         let app_culprit_item = make_stat_item(mtm);
-        app_culprit_item.setImage(Some(&placeholder_icon));
+        set_row_icon(&app_culprit_item, "flame", &placeholder_icon);
         let app_items: Vec<Retained<NSMenuItem>> =
             (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
         let app_quit_items: Vec<Retained<NSMenuItem>> = (0..APP_ROW_POOL)
@@ -619,6 +619,25 @@ fn make_placeholder_icon() -> Retained<NSImage> {
         NSImage::alloc(),
         NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE),
     )
+}
+
+fn make_row_icon(name: &str) -> Option<Retained<NSImage>> {
+    let symbol_name = NSString::from_str(name);
+    let desc = NSString::from_str("");
+    let base =
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
+    let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Medium);
+    let image = base.imageWithSymbolConfiguration(&config)?;
+    image.setSize(NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE));
+    image.setTemplate(true);
+    Some(image)
+}
+
+fn set_row_icon(item: &NSMenuItem, name: &str, fallback: &NSImage) {
+    match make_row_icon(name) {
+        Some(icon) => item.setImage(Some(&icon)),
+        None => item.setImage(Some(fallback)),
+    }
 }
 
 fn make_action_icon(name: &str) -> Option<Retained<NSImage>> {
