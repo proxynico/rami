@@ -986,8 +986,8 @@ mod tests {
             vec![
                 MenuEntry::SectionHeader("Memory"),
                 MenuEntry::Stat {
-                    primary: "47%",
-                    tail: Some("5.7 / 16.0 GB"),
+                    primary: "5.7 / 16.0 GB",
+                    tail: Some("47%"),
                     is_high: false,
                 },
                 MenuEntry::Stat {
@@ -1135,7 +1135,13 @@ mod tests {
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
 
         assert_eq!(entries[0], MenuEntry::SectionHeader("Memory"));
-        assert!(matches!(entries[1], MenuEntry::Stat { primary: "47%", .. }));
+        assert!(matches!(
+            entries[1],
+            MenuEntry::Stat {
+                primary: "5.7 / 16.0 GB",
+                ..
+            }
+        ));
         assert!(matches!(
             entries[2],
             MenuEntry::Stat {

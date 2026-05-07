@@ -62,8 +62,8 @@ fn dropdown_model_splits_memory_into_primary_and_tail() {
         panic!("expected Loaded model");
     };
 
-    assert_eq!(memory.primary, "53%");
-    assert_eq!(memory.tail.as_deref(), Some("9.0 / 17.2 GB"));
+    assert_eq!(memory.primary, "9.0 / 17.2 GB");
+    assert_eq!(memory.tail.as_deref(), Some("53%"));
     assert_eq!(pressure.text, "Elevated");
     assert!(!pressure.is_high);
     assert!(pressure.is_elevated);

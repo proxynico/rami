@@ -114,8 +114,8 @@ pub fn dropdown_model_with_apps_and_trend(
 ) -> DropdownModel {
     DropdownModel::Loaded {
         memory: StatRow {
-            primary: format!("{}%", snapshot.used_percent),
-            tail: memory_tail(snapshot.used_bytes, snapshot.total_bytes, trend),
+            primary: gb_pair(snapshot.used_bytes, snapshot.total_bytes),
+            tail: Some(memory_percent_tail(snapshot.used_percent, trend)),
             action_tag: None,
             bundle_path: None,
         },
@@ -169,12 +169,12 @@ fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
     }
 }
 
-fn memory_tail(used_bytes: u64, total_bytes: u64, trend: MemoryTrend) -> Option<String> {
-    let base = gb_pair(used_bytes, total_bytes);
+fn memory_percent_tail(used_percent: u8, trend: MemoryTrend) -> String {
+    let base = format!("{used_percent}%");
     match trend {
-        MemoryTrend::Stable => Some(base),
-        MemoryTrend::Rising => Some(format!("{base}  Rising")),
-        MemoryTrend::RisingFast => Some(format!("{base}  Rising fast")),
+        MemoryTrend::Stable => base,
+        MemoryTrend::Rising => format!("{base}  Rising"),
+        MemoryTrend::RisingFast => format!("{base}  Rising fast"),
     }
 }
 
