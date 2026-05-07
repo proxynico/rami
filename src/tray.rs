@@ -58,6 +58,8 @@ pub struct TrayController {
     auto_refresh_item: Retained<NSMenuItem>,
     show_app_usage_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
+    settings_item: Retained<NSMenuItem>,
+    _settings_submenu: Retained<NSMenu>,
     quit_item: Retained<NSMenuItem>,
     pause_icon: Option<Retained<NSImage>>,
     play_icon: Option<Retained<NSImage>>,
@@ -176,6 +178,27 @@ impl TrayController {
         launch_at_login_item.setState(NSControlStateValueOff);
         launch_at_login_item.setEnabled(false);
 
+        let settings_submenu = NSMenu::new(mtm);
+        settings_submenu.setAutoenablesItems(false);
+        settings_submenu.addItem(&auto_refresh_item);
+        settings_submenu.addItem(&NSMenuItem::separatorItem(mtm));
+        settings_submenu.addItem(&show_app_usage_item);
+        settings_submenu.addItem(&launch_at_login_item);
+
+        let settings_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Settings"),
+                None,
+                &empty,
+            )
+        };
+        settings_item.setSubmenu(Some(&settings_submenu));
+        settings_item.setEnabled(true);
+        if let Some(img) = make_action_icon("gearshape") {
+            settings_item.setImage(Some(&img));
+        }
+
         let quit_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
@@ -212,6 +235,8 @@ impl TrayController {
             auto_refresh_item,
             show_app_usage_item,
             launch_at_login_item,
+            settings_item,
+            _settings_submenu: settings_submenu,
             quit_item,
             pause_icon,
             play_icon,
@@ -441,10 +466,7 @@ impl TrayController {
         }
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
         self.menu.addItem(&self.refresh_item);
-        self.menu.addItem(&self.auto_refresh_item);
-        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-        self.menu.addItem(&self.show_app_usage_item);
-        self.menu.addItem(&self.launch_at_login_item);
+        self.menu.addItem(&self.settings_item);
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
         self.menu.addItem(&self.quit_item);
     }
@@ -734,13 +756,11 @@ pub(crate) enum MenuEntry<'a> {
     },
     Separator,
     Refresh,
-    AutoRefresh {
-        enabled: bool,
+    Settings {
+        auto_refresh_enabled: bool,
+        show_app_usage: bool,
+        launch_at_login: LaunchAtLoginStatus,
     },
-    ShowAppUsage {
-        enabled: bool,
-    },
-    LaunchAtLogin(LaunchAtLoginStatus),
     Quit,
 }
 
@@ -822,14 +842,11 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
     }
     entries.push(MenuEntry::Separator);
     entries.push(MenuEntry::Refresh);
-    entries.push(MenuEntry::AutoRefresh {
-        enabled: auto_refresh_enabled,
+    entries.push(MenuEntry::Settings {
+        auto_refresh_enabled,
+        show_app_usage,
+        launch_at_login: launch_at_login_status,
     });
-    entries.push(MenuEntry::Separator);
-    entries.push(MenuEntry::ShowAppUsage {
-        enabled: show_app_usage,
-    });
-    entries.push(MenuEntry::LaunchAtLogin(launch_at_login_status));
     entries.push(MenuEntry::Separator);
     entries.push(MenuEntry::Quit);
     entries
@@ -897,10 +914,11 @@ mod tests {
                 MenuEntry::Loading,
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
-                MenuEntry::AutoRefresh { enabled: true },
-                MenuEntry::Separator,
-                MenuEntry::ShowAppUsage { enabled: false },
-                MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Disabled),
+                MenuEntry::Settings {
+                    auto_refresh_enabled: true,
+                    show_app_usage: false,
+                    launch_at_login: LaunchAtLoginStatus::Disabled,
+                },
                 MenuEntry::Separator,
                 MenuEntry::Quit,
             ]
@@ -939,10 +957,11 @@ mod tests {
                 },
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
-                MenuEntry::AutoRefresh { enabled: true },
-                MenuEntry::Separator,
-                MenuEntry::ShowAppUsage { enabled: false },
-                MenuEntry::LaunchAtLogin(LaunchAtLoginStatus::Enabled),
+                MenuEntry::Settings {
+                    auto_refresh_enabled: true,
+                    show_app_usage: false,
+                    launch_at_login: LaunchAtLoginStatus::Enabled,
+                },
                 MenuEntry::Separator,
                 MenuEntry::Quit,
             ]
@@ -988,9 +1007,13 @@ mod tests {
                 is_high: true,
             }
         );
-        assert!(entries
-            .iter()
-            .any(|e| matches!(e, MenuEntry::AutoRefresh { enabled: false })));
+        assert!(entries.iter().any(|e| matches!(
+            e,
+            MenuEntry::Settings {
+                auto_refresh_enabled: false,
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -1024,15 +1047,23 @@ mod tests {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
         let on =
             loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, true);
-        assert!(on
-            .iter()
-            .any(|e| matches!(e, MenuEntry::ShowAppUsage { enabled: true })));
+        assert!(on.iter().any(|e| matches!(
+            e,
+            MenuEntry::Settings {
+                show_app_usage: true,
+                ..
+            }
+        )));
 
         let off =
             loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, false);
-        assert!(off
-            .iter()
-            .any(|e| matches!(e, MenuEntry::ShowAppUsage { enabled: false })));
+        assert!(off.iter().any(|e| matches!(
+            e,
+            MenuEntry::Settings {
+                show_app_usage: false,
+                ..
+            }
+        )));
     }
 
     #[test]

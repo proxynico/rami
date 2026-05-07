@@ -26,6 +26,21 @@ pub fn gb_pair(used_bytes: u64, total_bytes: u64) -> String {
     format!("{used:.1} / {total:.1} GB")
 }
 
+const ONE_GB_BYTES: u64 = 1_000_000_000;
+
+pub fn mem_text(bytes: u64) -> String {
+    if bytes >= ONE_GB_BYTES {
+        gb_text(bytes)
+    } else {
+        let mb = (bytes as f64 / 1_000_000_f64).round() as u64;
+        format!("{mb} MB")
+    }
+}
+
+pub fn signed_delta_text(bytes: u64) -> String {
+    format!("+{}", mem_text(bytes))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatRow {
     pub primary: String,
@@ -103,7 +118,7 @@ pub fn dropdown_model_with_apps_and_trend(
         },
         swap: (snapshot.swap_used_bytes > 0).then(|| StatRow {
             primary: "Swap".to_string(),
-            tail: Some(gb_text(snapshot.swap_used_bytes)),
+            tail: Some(mem_text(snapshot.swap_used_bytes)),
             action_tag: None,
             bundle_path: None,
         }),
@@ -127,7 +142,7 @@ fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
                 tail: Some(format!(
                     "{} {}",
                     culprit.name,
-                    delta_text(culprit.delta_bytes)
+                    signed_delta_text(culprit.delta_bytes)
                 )),
                 action_tag: None,
                 bundle_path: None,
@@ -158,11 +173,11 @@ fn app_row(index: usize, app: &AppMemoryUsage) -> StatRow {
     let tail = if let Some(delta) = app.delta_bytes.filter(|delta| *delta >= 50_000_000) {
         format!(
             "{}  {}",
-            gb_text(app.footprint_bytes),
-            delta_text(delta as u64)
+            mem_text(app.footprint_bytes),
+            signed_delta_text(delta as u64)
         )
     } else {
-        gb_text(app.footprint_bytes)
+        mem_text(app.footprint_bytes)
     };
     StatRow {
         primary: truncate_name(&app.name, APP_NAME_MAX_CHARS),
@@ -173,10 +188,6 @@ fn app_row(index: usize, app: &AppMemoryUsage) -> StatRow {
             .ends_with(".app")
             .then(|| app.group_key.clone()),
     }
-}
-
-fn delta_text(bytes: u64) -> String {
-    format!("+{} MB", bytes / 1_000_000)
 }
 
 fn truncate_name(name: &str, max_chars: usize) -> String {
@@ -290,6 +301,29 @@ mod tests {
     }
 
     #[test]
+    fn dropdown_model_app_row_under_one_gb_uses_mb() {
+        let usage = vec![AppMemoryUsage {
+            name: "Tiny".to_string(),
+            group_key: "/Applications/Tiny.app".to_string(),
+            footprint_bytes: 245_000_000,
+            pids: vec![1],
+            can_quit: true,
+            delta_bytes: None,
+        }];
+        let model =
+            dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
+        match model {
+            DropdownModel::Loaded { apps, .. } => match apps {
+                AppSectionDisplay::Rows { rows, .. } => {
+                    assert_eq!(rows[0].tail.as_deref(), Some("245 MB"));
+                }
+                _ => panic!("expected Rows"),
+            },
+            _ => panic!("expected Loaded"),
+        }
+    }
+
+    #[test]
     fn dropdown_model_with_apps_keeps_top_five_sorted() {
         let usage = vec![
             usage("Six", 6, None),
@@ -330,7 +364,7 @@ mod tests {
                 assert_eq!(culprit.primary, "Likely culprit:");
                 assert_eq!(culprit.tail.as_deref(), Some("Zen +300 MB"));
                 assert_eq!(rows[0].primary, "Zen");
-                assert_eq!(rows[0].tail.as_deref(), Some("0.7 GB  +300 MB"));
+                assert_eq!(rows[0].tail.as_deref(), Some("700 MB  +300 MB"));
                 assert_eq!(rows[0].action_tag, Some(0));
             }
             _ => panic!("expected app rows"),

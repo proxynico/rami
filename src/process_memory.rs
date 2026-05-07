@@ -110,6 +110,9 @@ fn sample_pid(pid: pid_t) -> Option<ProcessMemoryRecord> {
     }
 
     let (group_key, display_name) = group_key_and_name(&path, &name);
+    if looks_like_version_junk(&display_name) {
+        return None;
+    }
     Some(ProcessMemoryRecord {
         pid,
         group_key,
@@ -158,12 +161,20 @@ fn group_key_and_name(exec_path: &str, proc_name: &str) -> (String, String) {
         return (bundle_path, display);
     }
 
+    let basename = exec_path.rsplit('/').next().unwrap_or("");
+    if !basename.is_empty() && !looks_like_version_junk(basename) {
+        return (basename.to_string(), basename.to_string());
+    }
+
     if !proc_name.is_empty() {
         return (proc_name.to_string(), proc_name.to_string());
     }
 
-    let basename = exec_path.rsplit('/').next().unwrap_or("").to_string();
-    (basename.clone(), basename)
+    (basename.to_string(), basename.to_string())
+}
+
+fn looks_like_version_junk(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
 fn first_app_bundle(exec_path: &str) -> Option<(String, &str)> {
@@ -258,10 +269,26 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_proc_name_for_non_app() {
+    fn falls_back_to_path_basename_for_non_app() {
         let (key, name) = group_key_and_name("/usr/sbin/cfprefsd", "cfprefsd");
         assert_eq!(key, "cfprefsd");
         assert_eq!(name, "cfprefsd");
+    }
+
+    #[test]
+    fn path_basename_wins_when_proc_name_is_version_junk() {
+        let (key, name) = group_key_and_name("/usr/libexec/mediaanalysisd", "2.132");
+        assert_eq!(key, "mediaanalysisd");
+        assert_eq!(name, "mediaanalysisd");
+    }
+
+    #[test]
+    fn version_only_proc_name_is_filtered_when_path_empty() {
+        assert!(looks_like_version_junk("2.132"));
+        assert!(looks_like_version_junk("1"));
+        assert!(looks_like_version_junk("..."));
+        assert!(!looks_like_version_junk("cfprefsd"));
+        assert!(!looks_like_version_junk(""));
     }
 
     #[test]
