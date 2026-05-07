@@ -190,7 +190,6 @@ impl TrayController {
         let settings_submenu = NSMenu::new(mtm);
         settings_submenu.setAutoenablesItems(false);
         settings_submenu.addItem(&auto_refresh_item);
-        settings_submenu.addItem(&NSMenuItem::separatorItem(mtm));
         settings_submenu.addItem(&show_app_usage_item);
         settings_submenu.addItem(&launch_at_login_item);
 
