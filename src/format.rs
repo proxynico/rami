@@ -41,6 +41,15 @@ pub fn signed_delta_text(bytes: u64) -> String {
     format!("+{}", mem_text(bytes))
 }
 
+pub fn signed_delta_pct_text(footprint_bytes: u64, delta_bytes: u64) -> String {
+    let previous = footprint_bytes.saturating_sub(delta_bytes);
+    if previous == 0 {
+        return "+new".to_string();
+    }
+    let pct = (delta_bytes as f64 * 100.0 / previous as f64).round() as u64;
+    format!("+{pct}%")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatRow {
     pub primary: String,
@@ -142,7 +151,7 @@ fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
                 tail: Some(format!(
                     "{} {}",
                     culprit.name,
-                    signed_delta_text(culprit.delta_bytes)
+                    signed_delta_pct_text(culprit.footprint_bytes, culprit.delta_bytes)
                 )),
                 action_tag: None,
                 bundle_path: None,
@@ -172,9 +181,9 @@ fn memory_tail(used_bytes: u64, total_bytes: u64, trend: MemoryTrend) -> Option<
 fn app_row(index: usize, app: &AppMemoryUsage) -> StatRow {
     let tail = if let Some(delta) = app.delta_bytes.filter(|delta| *delta >= 50_000_000) {
         format!(
-            "{}  {}",
+            "{}\t{}",
             mem_text(app.footprint_bytes),
-            signed_delta_text(delta as u64)
+            signed_delta_pct_text(app.footprint_bytes, delta as u64)
         )
     } else {
         mem_text(app.footprint_bytes)
@@ -362,9 +371,9 @@ mod tests {
             } => {
                 let culprit = culprit.expect("culprit");
                 assert_eq!(culprit.primary, "Likely culprit:");
-                assert_eq!(culprit.tail.as_deref(), Some("Zen +300 MB"));
+                assert_eq!(culprit.tail.as_deref(), Some("Zen +75%"));
                 assert_eq!(rows[0].primary, "Zen");
-                assert_eq!(rows[0].tail.as_deref(), Some("700 MB  +300 MB"));
+                assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+75%"));
                 assert_eq!(rows[0].action_tag, Some(0));
             }
             _ => panic!("expected app rows"),

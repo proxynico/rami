@@ -581,41 +581,30 @@ fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
     stat_row_attributed_colored(row, NSColor::labelColor(), NSColor::secondaryLabelColor())
 }
 
-const ROW_TAIL_TAB: f64 = 280.0;
+const ROW_FOOTPRINT_TAB: f64 = 260.0;
+const ROW_DELTA_TAB: f64 = 360.0;
 
-fn tail_paragraph_style() -> Retained<NSMutableParagraphStyle> {
+fn row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
     let style = NSMutableParagraphStyle::new();
-    let tab_stop = unsafe {
+    let footprint_tab = unsafe {
         NSTextTab::initWithTextAlignment_location_options(
             NSTextTab::alloc(),
             NSTextAlignment::Right,
-            ROW_TAIL_TAB,
+            ROW_FOOTPRINT_TAB,
             &NSDictionary::new(),
         )
     };
-    let tabs = NSArray::from_retained_slice(&[tab_stop]);
+    let delta_tab = unsafe {
+        NSTextTab::initWithTextAlignment_location_options(
+            NSTextTab::alloc(),
+            NSTextAlignment::Right,
+            ROW_DELTA_TAB,
+            &NSDictionary::new(),
+        )
+    };
+    let tabs = NSArray::from_retained_slice(&[footprint_tab, delta_tab]);
     style.setTabStops(Some(&tabs));
     style
-}
-
-fn attrs_for_with_paragraph(
-    color: Retained<NSColor>,
-    font: Retained<NSFont>,
-    paragraph: Retained<NSMutableParagraphStyle>,
-) -> Retained<NSDictionary<NSString, AnyObject>> {
-    unsafe {
-        let color_obj = Retained::cast_unchecked::<AnyObject>(color);
-        let font_obj = Retained::cast_unchecked::<AnyObject>(font);
-        let paragraph_obj = Retained::cast_unchecked::<AnyObject>(paragraph);
-        NSDictionary::from_retained_objects(
-            &[
-                NSForegroundColorAttributeName,
-                NSFontAttributeName,
-                NSParagraphStyleAttributeName,
-            ],
-            &[color_obj, font_obj, paragraph_obj],
-        )
-    }
 }
 
 fn make_action_icon(name: &str) -> Option<Retained<NSImage>> {
@@ -678,12 +667,45 @@ fn stat_row_attributed_colored(
         unsafe { NSAttributedString::new_with_attributes(&separator_str, &separator_attrs) };
     result.appendAttributedString(&separator);
 
-    let tail_attrs = attrs_for_with_paragraph(tail_color, font, tail_paragraph_style());
-    let tail_str = NSString::from_str(tail);
-    let tail_attr = unsafe { NSAttributedString::new_with_attributes(&tail_str, &tail_attrs) };
-    result.appendAttributedString(&tail_attr);
+    // Split tail on \t so the delta column gets its own right-aligned tab stop and
+    // can be styled independently (e.g. green for "+%" risers).
+    let mut tail_parts = tail.splitn(2, '\t');
+    let footprint_part = tail_parts.next().unwrap_or("");
+    let delta_part = tail_parts.next();
 
+    let tail_attrs = attrs_for(tail_color.clone(), font.clone());
+    let footprint_str = NSString::from_str(footprint_part);
+    let footprint =
+        unsafe { NSAttributedString::new_with_attributes(&footprint_str, &tail_attrs) };
+    result.appendAttributedString(&footprint);
+
+    if let Some(delta) = delta_part {
+        let delta_separator_str = NSString::from_str("\t");
+        let delta_separator = unsafe {
+            NSAttributedString::new_with_attributes(&delta_separator_str, &separator_attrs)
+        };
+        result.appendAttributedString(&delta_separator);
+
+        let delta_attrs = attrs_for(NSColor::systemOrangeColor(), font.clone());
+        let delta_str = NSString::from_str(delta);
+        let delta_attr = unsafe { NSAttributedString::new_with_attributes(&delta_str, &delta_attrs) };
+        result.appendAttributedString(&delta_attr);
+    }
+
+    apply_paragraph_style(&result);
     Retained::into_super(result)
+}
+
+fn apply_paragraph_style(s: &NSMutableAttributedString) {
+    let style = row_paragraph_style();
+    let style_obj = unsafe { Retained::cast_unchecked::<AnyObject>(style) };
+    let range = objc2_foundation::NSRange {
+        location: 0,
+        length: s.length(),
+    };
+    unsafe {
+        s.addAttribute_value_range(NSParagraphStyleAttributeName, &style_obj, range);
+    }
 }
 
 fn pressure_attributed(display: &PressureDisplay) -> Retained<NSAttributedString> {

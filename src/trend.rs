@@ -18,6 +18,7 @@ pub enum MemoryTrend {
 pub struct LikelyCulprit {
     pub name: String,
     pub delta_bytes: u64,
+    pub footprint_bytes: u64,
 }
 
 #[derive(Debug, Default)]
@@ -111,6 +112,7 @@ pub fn likely_culprit(rows: &[AppMemoryUsage]) -> Option<LikelyCulprit> {
         .map(|(row, delta_bytes)| LikelyCulprit {
             name: row.name.clone(),
             delta_bytes,
+            footprint_bytes: row.footprint_bytes,
         })
 }
 
@@ -168,6 +170,7 @@ mod tests {
         let culprit = likely_culprit(&rows).expect("culprit");
         assert_eq!(culprit.name, "Zen");
         assert_eq!(culprit.delta_bytes, 120_000_000);
+        assert_eq!(culprit.footprint_bytes, 5_000_000_000);
     }
 
     fn usage(group_key: &str, name: &str, footprint_bytes: u64) -> AppMemoryUsage {
