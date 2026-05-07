@@ -326,7 +326,6 @@ impl TrayController {
         }
 
         if let Some(button) = self.status_item.button(mtm) {
-            let warning = matches!(pressure, MemoryPressure::High);
             match make_status_image(name, pressure, trend) {
                 Some(StatusImage { image, template }) => {
                     image.setTemplate(template);
@@ -338,11 +337,9 @@ impl TrayController {
                     *self.last_image_name.borrow_mut() = None;
                 }
             }
-            if warning {
-                button.setContentTintColor(Some(&NSColor::systemRedColor()));
-            } else {
-                button.setContentTintColor(None);
-            }
+            // Pressure colors are baked into the image (non-template render); no system
+            // tint, which used to bleed into a soft halo around the glyph.
+            button.setContentTintColor(None);
             self.last_pressure.set(pressure);
             self.last_trend.set(trend);
         }
