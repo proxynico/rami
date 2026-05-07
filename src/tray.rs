@@ -578,8 +578,8 @@ fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
     stat_row_attributed_colored(row, NSColor::labelColor(), NSColor::secondaryLabelColor())
 }
 
-const ROW_FOOTPRINT_TAB: f64 = 260.0;
-const ROW_DELTA_TAB: f64 = 360.0;
+const ROW_FOOTPRINT_TAB: f64 = 210.0;
+const ROW_DELTA_TAB: f64 = 280.0;
 
 fn row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
     let style = NSMutableParagraphStyle::new();

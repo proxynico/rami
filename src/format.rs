@@ -2,7 +2,7 @@ use crate::model::{MemoryPressure, MemorySnapshot};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::trend::{likely_culprit, rank_app_rows, MemoryTrend};
 
-const APP_NAME_MAX_CHARS: usize = 28;
+const APP_NAME_MAX_CHARS: usize = 20;
 const APP_USAGE_ROW_LIMIT: usize = 5;
 
 pub fn gauge_symbol_name(percent: u8) -> &'static str {
