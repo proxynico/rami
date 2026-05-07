@@ -42,8 +42,6 @@ enum MenuShape {
 pub struct TrayController {
     status_item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
-    memory_section: Retained<NSMenuItem>,
-    apps_section: Retained<NSMenuItem>,
     memory_item: Retained<NSMenuItem>,
     pressure_item: Retained<NSMenuItem>,
     swap_item: Retained<NSMenuItem>,
@@ -86,9 +84,6 @@ impl TrayController {
         let menu = NSMenu::new(mtm);
         menu.setAutoenablesItems(false);
         let empty = NSString::from_str("");
-
-        let memory_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Memory"), mtm);
-        let apps_section = NSMenuItem::sectionHeaderWithTitle(&NSString::from_str("Apps"), mtm);
 
         let placeholder_icon = make_placeholder_icon();
         let memory_item = make_stat_item(mtm);
@@ -227,8 +222,6 @@ impl TrayController {
         let controller = Self {
             status_item,
             menu,
-            memory_section,
-            apps_section,
             memory_item,
             pressure_item,
             swap_item,
@@ -438,11 +431,9 @@ impl TrayController {
         match shape {
             MenuShape::Uninitialized => {}
             MenuShape::Loading => {
-                self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.loading_item);
             }
             MenuShape::Loaded { apps, show_swap } => {
-                self.menu.addItem(&self.memory_section);
                 self.menu.addItem(&self.memory_item);
                 self.menu.addItem(&self.pressure_item);
                 if show_swap {
@@ -451,15 +442,15 @@ impl TrayController {
                 match apps {
                     AppShape::Hidden => {}
                     AppShape::Loading => {
-                        self.menu.addItem(&self.apps_section);
+                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                         self.menu.addItem(&self.app_loading_item);
                     }
                     AppShape::Unavailable => {
-                        self.menu.addItem(&self.apps_section);
+                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                         self.menu.addItem(&self.app_unavailable_item);
                     }
                     AppShape::Rows { rows, culprit } => {
-                        self.menu.addItem(&self.apps_section);
+                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                         if culprit {
                             self.menu.addItem(&self.app_culprit_item);
                         }
@@ -785,7 +776,6 @@ fn unavailable_attributed_title() -> Retained<NSAttributedString> {
 #[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MenuEntry<'a> {
-    SectionHeader(&'a str),
     Stat {
         primary: &'a str,
         tail: Option<&'a str>,
@@ -828,7 +818,6 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
     let mut entries = Vec::new();
     match model {
         DropdownModel::Loading => {
-            entries.push(MenuEntry::SectionHeader("Memory"));
             entries.push(MenuEntry::Loading);
         }
         DropdownModel::Loaded {
@@ -837,7 +826,6 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
             pressure,
             swap,
         } => {
-            entries.push(MenuEntry::SectionHeader("Memory"));
             entries.push(MenuEntry::Stat {
                 primary: &memory.primary,
                 tail: memory.tail.as_deref(),
@@ -858,15 +846,15 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
             match apps {
                 AppSectionDisplay::Hidden => {}
                 AppSectionDisplay::Loading => {
-                    entries.push(MenuEntry::SectionHeader("Apps"));
+                    entries.push(MenuEntry::Separator);
                     entries.push(MenuEntry::AppLoading);
                 }
                 AppSectionDisplay::Unavailable => {
-                    entries.push(MenuEntry::SectionHeader("Apps"));
+                    entries.push(MenuEntry::Separator);
                     entries.push(MenuEntry::AppUnavailable);
                 }
                 AppSectionDisplay::Rows { culprit, rows } => {
-                    entries.push(MenuEntry::SectionHeader("Apps"));
+                    entries.push(MenuEntry::Separator);
                     if let Some(culprit) = culprit {
                         entries.push(MenuEntry::AppRow {
                             primary: &culprit.primary,
@@ -955,7 +943,6 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                MenuEntry::SectionHeader("Memory"),
                 MenuEntry::Loading,
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
@@ -984,7 +971,6 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                MenuEntry::SectionHeader("Memory"),
                 MenuEntry::Stat {
                     primary: "5.7 / 16.0 GB",
                     tail: Some("47%"),
@@ -1045,7 +1031,7 @@ mod tests {
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, false);
         assert_eq!(
-            entries[2],
+            entries[1],
             MenuEntry::Stat {
                 primary: "Pressure",
                 tail: Some("High"),
@@ -1065,25 +1051,26 @@ mod tests {
     fn loaded_with_apps_hidden_omits_apps_section() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert!(!entries
-            .iter()
-            .any(|e| matches!(e, MenuEntry::SectionHeader("Apps"))));
+        assert!(!entries.iter().any(|e| matches!(
+            e,
+            MenuEntry::AppRow { .. } | MenuEntry::AppLoading | MenuEntry::AppUnavailable
+        )));
     }
 
     #[test]
     fn loaded_with_apps_loading_renders_loading_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[4], MenuEntry::SectionHeader("Apps"));
-        assert_eq!(entries[5], MenuEntry::AppLoading);
+        assert_eq!(entries[3], MenuEntry::Separator);
+        assert_eq!(entries[4], MenuEntry::AppLoading);
     }
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[4], MenuEntry::SectionHeader("Apps"));
-        assert_eq!(entries[5], MenuEntry::AppUnavailable);
+        assert_eq!(entries[3], MenuEntry::Separator);
+        assert_eq!(entries[4], MenuEntry::AppUnavailable);
     }
 
     #[test]
@@ -1134,31 +1121,30 @@ mod tests {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage));
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
 
-        assert_eq!(entries[0], MenuEntry::SectionHeader("Memory"));
         assert!(matches!(
-            entries[1],
+            entries[0],
             MenuEntry::Stat {
                 primary: "5.7 / 16.0 GB",
                 ..
             }
         ));
         assert!(matches!(
-            entries[2],
+            entries[1],
             MenuEntry::Stat {
                 primary: "Pressure",
                 ..
             }
         ));
         assert!(matches!(
-            entries[3],
+            entries[2],
             MenuEntry::Stat {
                 primary: "Swap",
                 ..
             }
         ));
-        assert_eq!(entries[4], MenuEntry::SectionHeader("Apps"));
+        assert_eq!(entries[3], MenuEntry::Separator);
         assert_eq!(
-            entries[5],
+            entries[4],
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
@@ -1166,13 +1152,13 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[6],
+            entries[5],
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
                 action_tag: Some(1),
             }
         );
-        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[6], MenuEntry::Separator);
     }
 }
