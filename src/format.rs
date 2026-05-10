@@ -46,6 +46,10 @@ pub fn signed_delta_pct_text(footprint_bytes: u64, delta_bytes: u64) -> String {
     format!("+{pct}%")
 }
 
+pub fn delta_bytes_text(delta_bytes: u64) -> String {
+    format!("+{}", mem_text(delta_bytes))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatRow {
     pub primary: String,
@@ -148,7 +152,7 @@ fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
                 tail: Some(format!(
                     "{} {}",
                     culprit.name,
-                    signed_delta_pct_text(culprit.footprint_bytes, culprit.delta_bytes)
+                    delta_bytes_text(culprit.delta_bytes)
                 )),
                 action_tag: None,
                 bundle_path: None,
@@ -170,16 +174,17 @@ fn memory_percent_tail(used_percent: u8, trend: MemoryTrend) -> String {
     let base = format!("{used_percent}%");
     match trend {
         MemoryTrend::Stable => base,
-        MemoryTrend::Rising => format!("{base}  Rising"),
-        MemoryTrend::RisingFast => format!("{base}  Rising fast"),
+        MemoryTrend::Rising => format!("{base}  RAM rising"),
+        MemoryTrend::RisingFast => format!("{base}  RAM rising fast"),
     }
 }
 
 fn app_row(index: usize, app: &AppMemoryUsage) -> StatRow {
     let tail = if let Some(delta) = app.delta_bytes.filter(|delta| *delta >= 50_000_000) {
         format!(
-            "{}\t{}",
+            "{}\t{} / {}",
             mem_text(app.footprint_bytes),
+            delta_bytes_text(delta as u64),
             signed_delta_pct_text(app.footprint_bytes, delta as u64)
         )
     } else {
@@ -330,6 +335,18 @@ mod tests {
     }
 
     #[test]
+    fn memory_tail_explains_rising_badge_as_ram_growth() {
+        assert_eq!(
+            memory_percent_tail(61, MemoryTrend::Rising),
+            "61%  RAM rising"
+        );
+        assert_eq!(
+            memory_percent_tail(74, MemoryTrend::RisingFast),
+            "74%  RAM rising fast"
+        );
+    }
+
+    #[test]
     fn dropdown_model_with_apps_keeps_top_five_sorted() {
         let usage = vec![
             usage("Six", 6, None),
@@ -368,9 +385,9 @@ mod tests {
             } => {
                 let culprit = culprit.expect("culprit");
                 assert_eq!(culprit.primary, "Likely culprit:");
-                assert_eq!(culprit.tail.as_deref(), Some("Zen +75%"));
+                assert_eq!(culprit.tail.as_deref(), Some("Zen +300 MB"));
                 assert_eq!(rows[0].primary, "Zen");
-                assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+75%"));
+                assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB / +75%"));
                 assert_eq!(rows[0].action_tag, Some(0));
             }
             _ => panic!("expected app rows"),

@@ -1,4 +1,4 @@
-use crate::format::signed_delta_pct_text;
+use crate::format::delta_bytes_text;
 use crate::model::MemoryPressure;
 use crate::trend::LikelyCulprit;
 use std::time::{Duration, Instant};
@@ -25,7 +25,7 @@ pub fn high_pressure_notification_text(culprit: Option<&LikelyCulprit>) -> Strin
         Some(culprit) => format!(
             "Top riser: {} {}",
             culprit.name,
-            signed_delta_pct_text(culprit.footprint_bytes, culprit.delta_bytes)
+            delta_bytes_text(culprit.delta_bytes)
         ),
         None => "Open rami to check top apps".to_string(),
     }
@@ -90,7 +90,7 @@ mod tests {
         };
         assert_eq!(
             high_pressure_notification_text(Some(&culprit)),
-            "Top riser: Zen +150%"
+            "Top riser: Zen +420 MB"
         );
         assert_eq!(
             high_pressure_notification_text(None),
