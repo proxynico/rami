@@ -17,12 +17,19 @@ That's it. No dock icon, no window, no fuss.
 
 ## Install
 
+Public install is not live yet. The Homebrew Cask and notarized DMG flow are
+prepared, but they still need the Apple Developer signing/notarization setup
+before release.
+
+For now, build the local app bundle:
+
 ```sh
-brew install --cask proxynico/tap/rami
+./scripts/build-app.sh
+open rami.app
 ```
 
-Or grab the DMG from the
-[latest release](https://github.com/proxynico/rami/releases/latest).
+Release notes for the future DMG and Homebrew Cask live in
+[BUILDING.md](BUILDING.md).
 
 ## License
 
