@@ -9,7 +9,9 @@ A tiny memory monitor that lives in your Mac menu bar.
 One little gauge tells you how full your RAM is. Click it and you'll see
 exactly where it's going — total used, system pressure, swap, and the apps
 hogging the most. Spot a runaway app climbing fast? It'll be glowing orange.
-Quit it right from the menu.
+Click the menu and rami spells out the cue: `RAM rising` or
+`RAM rising fast`, plus app rows show both the real memory jump and the
+percentage jump. Quit a runaway app right from the menu.
 
 That's it. No dock icon, no window, no fuss.
 
