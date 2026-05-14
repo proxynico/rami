@@ -64,6 +64,7 @@ fn dropdown_model_splits_memory_into_primary_and_tail() {
 
     assert_eq!(memory.primary, "9.0 / 17.2 GB");
     assert_eq!(memory.tail.as_deref(), Some("53%"));
+    let pressure = pressure.expect("pressure row present when not Normal");
     assert_eq!(pressure.text, "Elevated");
     assert!(!pressure.is_high);
     assert!(pressure.is_elevated);
@@ -90,6 +91,23 @@ fn dropdown_model_hides_swap_when_zero() {
 }
 
 #[test]
+fn dropdown_model_hides_pressure_when_normal() {
+    let snapshot = MemorySnapshot {
+        used_bytes: 5_000_000_000,
+        total_bytes: 16_000_000_000,
+        used_percent: 31,
+        pressure: MemoryPressure::Normal,
+        swap_used_bytes: 0,
+    };
+
+    let DropdownModel::Loaded { pressure, .. } = dropdown_model(snapshot) else {
+        panic!("expected Loaded model");
+    };
+
+    assert!(pressure.is_none());
+}
+
+#[test]
 fn dropdown_model_marks_high_pressure_for_red_rendering() {
     let snapshot = MemorySnapshot {
         used_bytes: 14_000_000_000,
@@ -103,6 +121,7 @@ fn dropdown_model_marks_high_pressure_for_red_rendering() {
         panic!("expected Loaded model");
     };
 
+    let pressure = pressure.expect("pressure row present when High");
     assert_eq!(pressure.text, "High");
     assert!(pressure.is_high);
 }

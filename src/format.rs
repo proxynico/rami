@@ -1,6 +1,6 @@
 use crate::model::{MemoryPressure, MemorySnapshot};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
-use crate::trend::{likely_culprit, rank_app_rows, MemoryTrend};
+use crate::trend::rank_app_rows;
 
 const APP_NAME_MAX_CHARS: usize = 18;
 const APP_USAGE_ROW_LIMIT: usize = 5;
@@ -70,7 +70,6 @@ pub enum AppSectionDisplay {
     Hidden,
     Loading,
     Rows {
-        culprit: Option<StatRow>,
         rows: Vec<StatRow>,
     },
     Unavailable,
@@ -83,7 +82,7 @@ pub enum DropdownModel {
     Loaded {
         memory: StatRow,
         apps: AppSectionDisplay,
-        pressure: PressureDisplay,
+        pressure: Option<PressureDisplay>,
         swap: Option<StatRow>,
     },
 }
@@ -97,40 +96,38 @@ fn pressure_text(p: MemoryPressure) -> &'static str {
 }
 
 pub fn dropdown_model(snapshot: MemorySnapshot) -> DropdownModel {
-    dropdown_model_with_apps_and_trend(snapshot, MemoryTrend::Stable, &AppMemorySnapshot::Hidden)
+    dropdown_model_with_apps(snapshot, &AppMemorySnapshot::Hidden)
 }
 
-#[cfg(test)]
-pub(crate) fn dropdown_model_with_apps(
+pub fn dropdown_model_with_apps(
     snapshot: MemorySnapshot,
-    apps: &AppMemorySnapshot,
-) -> DropdownModel {
-    dropdown_model_with_apps_and_trend(snapshot, MemoryTrend::Stable, apps)
-}
-
-pub(crate) fn dropdown_model_with_apps_and_trend(
-    snapshot: MemorySnapshot,
-    trend: MemoryTrend,
     apps: &AppMemorySnapshot,
 ) -> DropdownModel {
     DropdownModel::Loaded {
         memory: StatRow {
             primary: gb_pair(snapshot.used_bytes, snapshot.total_bytes),
-            tail: Some(memory_percent_tail(snapshot.used_percent, trend)),
+            tail: Some(format!("{}%", snapshot.used_percent)),
             action_tag: None,
             bundle_path: None,
         },
         apps: app_section_display(apps),
-        pressure: PressureDisplay {
-            text: pressure_text(snapshot.pressure).to_string(),
-            is_high: matches!(snapshot.pressure, MemoryPressure::High),
-            is_elevated: matches!(snapshot.pressure, MemoryPressure::Elevated),
-        },
+        pressure: pressure_display(snapshot.pressure),
         swap: (snapshot.swap_used_bytes > 0).then(|| StatRow {
             primary: "Swap".to_string(),
             tail: Some(mem_text(snapshot.swap_used_bytes)),
             action_tag: None,
             bundle_path: None,
+        }),
+    }
+}
+
+fn pressure_display(pressure: MemoryPressure) -> Option<PressureDisplay> {
+    match pressure {
+        MemoryPressure::Normal => None,
+        MemoryPressure::Elevated | MemoryPressure::High => Some(PressureDisplay {
+            text: pressure_text(pressure).to_string(),
+            is_high: matches!(pressure, MemoryPressure::High),
+            is_elevated: matches!(pressure, MemoryPressure::Elevated),
         }),
     }
 }
@@ -147,19 +144,8 @@ fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
         AppMemorySnapshot::Loaded(rows) => {
             let mut rows = rows.clone();
             rank_app_rows(&mut rows);
-            let culprit = likely_culprit(&rows).map(|culprit| StatRow {
-                primary: "Likely culprit:".to_string(),
-                tail: Some(format!(
-                    "{} {}",
-                    culprit.name,
-                    delta_bytes_text(culprit.delta_bytes)
-                )),
-                action_tag: None,
-                bundle_path: None,
-            });
             rows.truncate(APP_USAGE_ROW_LIMIT);
             AppSectionDisplay::Rows {
-                culprit,
                 rows: rows
                     .iter()
                     .enumerate()
@@ -167,15 +153,6 @@ fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
                     .collect(),
             }
         }
-    }
-}
-
-fn memory_percent_tail(used_percent: u8, trend: MemoryTrend) -> String {
-    let base = format!("{used_percent}%");
-    match trend {
-        MemoryTrend::Stable => base,
-        MemoryTrend::Rising => format!("{base}  RAM rising"),
-        MemoryTrend::RisingFast => format!("{base}  RAM rising fast"),
     }
 }
 
@@ -298,8 +275,7 @@ mod tests {
             dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
         match model {
             DropdownModel::Loaded { apps, .. } => match apps {
-                AppSectionDisplay::Rows { culprit, rows } => {
-                    assert!(culprit.is_none());
+                AppSectionDisplay::Rows { rows } => {
                     assert_eq!(rows.len(), 1);
                     assert_eq!(rows[0].primary, "Cursor");
                     assert_eq!(rows[0].tail.as_deref(), Some("2.0 GB"));
@@ -335,15 +311,33 @@ mod tests {
     }
 
     #[test]
-    fn memory_tail_explains_rising_badge_as_ram_growth() {
-        assert_eq!(
-            memory_percent_tail(61, MemoryTrend::Rising),
-            "61%  RAM rising"
-        );
-        assert_eq!(
-            memory_percent_tail(74, MemoryTrend::RisingFast),
-            "74%  RAM rising fast"
-        );
+    fn dropdown_model_memory_tail_is_just_percent() {
+        let snapshot = MemorySnapshot {
+            used_bytes: 9_000_000_000,
+            total_bytes: 16_000_000_000,
+            used_percent: 56,
+            pressure: MemoryPressure::Normal,
+            swap_used_bytes: 0,
+        };
+        let DropdownModel::Loaded { memory, .. } = dropdown_model(snapshot) else {
+            panic!("expected Loaded model");
+        };
+        assert_eq!(memory.tail.as_deref(), Some("56%"));
+    }
+
+    #[test]
+    fn dropdown_model_hides_pressure_when_normal() {
+        let snapshot = MemorySnapshot {
+            used_bytes: 5_000_000_000,
+            total_bytes: 16_000_000_000,
+            used_percent: 31,
+            pressure: MemoryPressure::Normal,
+            swap_used_bytes: 0,
+        };
+        let DropdownModel::Loaded { pressure, .. } = dropdown_model(snapshot) else {
+            panic!("expected Loaded model");
+        };
+        assert!(pressure.is_none());
     }
 
     #[test]
@@ -370,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn dropdown_model_with_apps_prefers_positive_deltas_and_culprit() {
+    fn dropdown_model_with_apps_prefers_positive_deltas() {
         let usage = vec![
             usage("Chrome", 4_000_000_000, None),
             usage("Zen", 700_000_000, Some(300_000_000)),
@@ -380,12 +374,9 @@ mod tests {
             dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
         match model {
             DropdownModel::Loaded {
-                apps: AppSectionDisplay::Rows { culprit, rows },
+                apps: AppSectionDisplay::Rows { rows },
                 ..
             } => {
-                let culprit = culprit.expect("culprit");
-                assert_eq!(culprit.primary, "Likely culprit:");
-                assert_eq!(culprit.tail.as_deref(), Some("Zen +300 MB"));
                 assert_eq!(rows[0].primary, "Zen");
                 assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB / +75%"));
                 assert_eq!(rows[0].action_tag, Some(0));

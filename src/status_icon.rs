@@ -10,7 +10,6 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BadgeKind {
     None,
-    Rising,
     RisingFast,
     Elevated,
     High,
@@ -22,8 +21,7 @@ pub(crate) fn badge_for_state(pressure: MemoryPressure, trend: MemoryTrend) -> B
         MemoryPressure::Elevated => BadgeKind::Elevated,
         MemoryPressure::Normal => match trend {
             MemoryTrend::RisingFast => BadgeKind::RisingFast,
-            MemoryTrend::Rising => BadgeKind::Rising,
-            MemoryTrend::Stable => BadgeKind::None,
+            MemoryTrend::Rising | MemoryTrend::Stable => BadgeKind::None,
         },
     }
 }
@@ -45,15 +43,6 @@ pub(crate) fn make_status_image(
             image: base_template,
             template: true,
         }),
-        BadgeKind::Rising => {
-            let badge_image =
-                render_template_symbol("arrow.up.right.circle.fill", NSImageSymbolScale::Small)?;
-            let composite = compose_with_badge(&base_template, &badge_image)?;
-            Some(StatusImage {
-                image: composite,
-                template: true,
-            })
-        }
         BadgeKind::High => {
             let red = NSColor::systemRedColor();
             let base_colored = render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &red)?;

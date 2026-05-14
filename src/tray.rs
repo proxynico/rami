@@ -1,6 +1,6 @@
 use crate::format::{
-    dropdown_model_with_apps_and_trend, gauge_symbol_name, placeholder_dropdown_model,
-    AppSectionDisplay, DropdownModel, PressureDisplay, StatRow,
+    dropdown_model_with_apps, gauge_symbol_name, placeholder_dropdown_model, AppSectionDisplay,
+    DropdownModel, PressureDisplay, StatRow,
 };
 use crate::login_item::LaunchAtLoginStatus;
 use crate::model::{MemoryPressure, MemorySnapshot};
@@ -29,14 +29,18 @@ enum AppShape {
     Hidden,
     Loading,
     Unavailable,
-    Rows { rows: usize, culprit: bool },
+    Rows { rows: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuShape {
     Uninitialized,
     Loading,
-    Loaded { apps: AppShape, show_swap: bool },
+    Loaded {
+        apps: AppShape,
+        show_pressure: bool,
+        show_swap: bool,
+    },
 }
 
 pub struct TrayController {
@@ -48,7 +52,6 @@ pub struct TrayController {
     loading_item: Retained<NSMenuItem>,
     app_loading_item: Retained<NSMenuItem>,
     app_unavailable_item: Retained<NSMenuItem>,
-    app_culprit_item: Retained<NSMenuItem>,
     app_items: Vec<Retained<NSMenuItem>>,
     app_quit_items: Vec<Retained<NSMenuItem>>,
     app_submenus: Vec<Retained<NSMenu>>,
@@ -105,8 +108,6 @@ impl TrayController {
         let app_unavailable_item = make_stat_item(mtm);
         app_unavailable_item.setImage(Some(&placeholder_icon));
         app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
-        let app_culprit_item = make_stat_item(mtm);
-        set_row_icon(&app_culprit_item, "flame", &placeholder_icon);
         let app_items: Vec<Retained<NSMenuItem>> =
             (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
         let app_quit_items: Vec<Retained<NSMenuItem>> = (0..APP_ROW_POOL)
@@ -232,7 +233,6 @@ impl TrayController {
             loading_item,
             app_loading_item,
             app_unavailable_item,
-            app_culprit_item,
             app_items,
             app_quit_items,
             app_submenus,
@@ -280,7 +280,7 @@ impl TrayController {
     ) {
         self.set_gauge(snapshot.used_percent, snapshot.pressure, trend, mtm);
         self.apply_model(
-            &dropdown_model_with_apps_and_trend(snapshot, trend, apps),
+            &dropdown_model_with_apps(snapshot, apps),
             launch_at_login_status,
             auto_refresh_enabled,
             mtm,
@@ -380,10 +380,12 @@ impl TrayController {
                 *self.last_memory_row.borrow_mut() = Some(memory.clone());
             }
             self.update_app_section(apps);
-            if self.last_pressure_display.borrow().as_ref() != Some(pressure) {
-                self.pressure_item
-                    .setAttributedTitle(Some(&pressure_attributed(pressure)));
-                *self.last_pressure_display.borrow_mut() = Some(pressure.clone());
+            if self.last_pressure_display.borrow().as_ref() != pressure.as_ref() {
+                if let Some(pressure_row) = pressure {
+                    self.pressure_item
+                        .setAttributedTitle(Some(&pressure_attributed(pressure_row)));
+                }
+                *self.last_pressure_display.borrow_mut() = pressure.clone();
             }
             if self.last_swap_row.borrow().as_ref() != swap.as_ref() {
                 if let Some(swap_row) = swap {
@@ -405,11 +407,7 @@ impl TrayController {
         if self.last_app_section.borrow().as_ref() == Some(apps) {
             return;
         }
-        if let AppSectionDisplay::Rows { culprit, rows } = apps {
-            if let Some(culprit) = culprit {
-                self.app_culprit_item
-                    .setAttributedTitle(Some(&culprit_attributed(culprit)));
-            }
+        if let AppSectionDisplay::Rows { rows } = apps {
             for (item, row) in self.app_items.iter().zip(rows.iter()) {
                 item.setAttributedTitle(Some(&app_row_attributed(row)));
                 item.setImage(app_row_icon(row).as_deref());
@@ -437,9 +435,15 @@ impl TrayController {
             MenuShape::Loading => {
                 self.menu.addItem(&self.loading_item);
             }
-            MenuShape::Loaded { apps, show_swap } => {
+            MenuShape::Loaded {
+                apps,
+                show_pressure,
+                show_swap,
+            } => {
                 self.menu.addItem(&self.memory_item);
-                self.menu.addItem(&self.pressure_item);
+                if show_pressure {
+                    self.menu.addItem(&self.pressure_item);
+                }
                 if show_swap {
                     self.menu.addItem(&self.swap_item);
                 }
@@ -453,11 +457,8 @@ impl TrayController {
                         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                         self.menu.addItem(&self.app_unavailable_item);
                     }
-                    AppShape::Rows { rows, culprit } => {
+                    AppShape::Rows { rows } => {
                         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        if culprit {
-                            self.menu.addItem(&self.app_culprit_item);
-                        }
                         for item in self.app_items.iter().take(rows) {
                             self.menu.addItem(item);
                         }
@@ -519,18 +520,23 @@ impl TrayController {
 fn menu_shape_for(model: &DropdownModel) -> MenuShape {
     match model {
         DropdownModel::Loading => MenuShape::Loading,
-        DropdownModel::Loaded { apps, swap, .. } => {
+        DropdownModel::Loaded {
+            apps,
+            pressure,
+            swap,
+            ..
+        } => {
             let app_shape = match apps {
                 AppSectionDisplay::Hidden => AppShape::Hidden,
                 AppSectionDisplay::Loading => AppShape::Loading,
                 AppSectionDisplay::Unavailable => AppShape::Unavailable,
-                AppSectionDisplay::Rows { culprit, rows } => AppShape::Rows {
+                AppSectionDisplay::Rows { rows } => AppShape::Rows {
                     rows: rows.len().min(APP_ROW_POOL),
-                    culprit: culprit.is_some(),
                 },
             };
             MenuShape::Loaded {
                 apps: app_shape,
+                show_pressure: pressure.is_some(),
                 show_swap: swap.is_some(),
             }
         }
@@ -581,7 +587,7 @@ fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
     stat_row_attributed_colored(row, NSColor::labelColor(), NSColor::secondaryLabelColor())
 }
 
-const ROW_TAIL_TAB: f64 = 175.0;
+const ROW_TAIL_TAB: f64 = 150.0;
 
 fn row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
     let style = NSMutableParagraphStyle::new();
@@ -725,10 +731,8 @@ fn apply_paragraph_style(s: &NSMutableAttributedString) {
 fn pressure_attributed(display: &PressureDisplay) -> Retained<NSAttributedString> {
     let tail_color = if display.is_high {
         NSColor::systemRedColor()
-    } else if display.is_elevated {
-        NSColor::systemOrangeColor()
     } else {
-        NSColor::secondaryLabelColor()
+        NSColor::systemOrangeColor()
     };
     stat_row_attributed_colored(
         &StatRow {
@@ -739,14 +743,6 @@ fn pressure_attributed(display: &PressureDisplay) -> Retained<NSAttributedString
         },
         NSColor::labelColor(),
         tail_color,
-    )
-}
-
-fn culprit_attributed(row: &StatRow) -> Retained<NSAttributedString> {
-    stat_row_attributed_colored(
-        row,
-        NSColor::secondaryLabelColor(),
-        NSColor::secondaryLabelColor(),
     )
 }
 
@@ -832,11 +828,13 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
                 tail: memory.tail.as_deref(),
                 is_high: false,
             });
-            entries.push(MenuEntry::Stat {
-                primary: "Pressure",
-                tail: Some(pressure.text.as_str()),
-                is_high: pressure.is_high,
-            });
+            if let Some(pressure) = pressure {
+                entries.push(MenuEntry::Stat {
+                    primary: "Pressure",
+                    tail: Some(pressure.text.as_str()),
+                    is_high: pressure.is_high,
+                });
+            }
             if let Some(swap) = swap {
                 entries.push(MenuEntry::Stat {
                     primary: &swap.primary,
@@ -854,15 +852,8 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
                     entries.push(MenuEntry::Separator);
                     entries.push(MenuEntry::AppUnavailable);
                 }
-                AppSectionDisplay::Rows { culprit, rows } => {
+                AppSectionDisplay::Rows { rows } => {
                     entries.push(MenuEntry::Separator);
-                    if let Some(culprit) = culprit {
-                        entries.push(MenuEntry::AppRow {
-                            primary: &culprit.primary,
-                            tail: culprit.tail.as_deref(),
-                            action_tag: None,
-                        });
-                    }
                     for row in rows.iter().take(APP_ROW_POOL) {
                         entries.push(MenuEntry::AppRow {
                             primary: &row.primary,
@@ -903,7 +894,7 @@ mod tests {
         );
         assert_eq!(
             badge_for_state(MemoryPressure::Normal, MemoryTrend::Rising),
-            BadgeKind::Rising
+            BadgeKind::None
         );
         assert_eq!(
             badge_for_state(MemoryPressure::Normal, MemoryTrend::RisingFast),
@@ -959,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_layout_renders_memory_section_with_pressure_and_swap_rows() {
+    fn loaded_layout_hides_pressure_row_when_normal() {
         let snapshot = MemorySnapshot {
             used_bytes: 5_700_000_000,
             total_bytes: 16_000_000_000,
@@ -978,11 +969,6 @@ mod tests {
                     is_high: false,
                 },
                 MenuEntry::Stat {
-                    primary: "Pressure",
-                    tail: Some("Normal"),
-                    is_high: false,
-                },
-                MenuEntry::Stat {
                     primary: "Swap",
                     tail: Some("1.2 GB"),
                     is_high: false,
@@ -997,6 +983,27 @@ mod tests {
                 MenuEntry::Separator,
                 MenuEntry::Quit,
             ]
+        );
+    }
+
+    #[test]
+    fn loaded_layout_renders_pressure_row_when_elevated() {
+        let snapshot = MemorySnapshot {
+            used_bytes: 12_000_000_000,
+            total_bytes: 16_000_000_000,
+            used_percent: 75,
+            pressure: MemoryPressure::Elevated,
+            swap_used_bytes: 1_200_000_000,
+        };
+        let model = dropdown_model(snapshot);
+        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Enabled, true);
+        assert_eq!(
+            entries[1],
+            MenuEntry::Stat {
+                primary: "Pressure",
+                tail: Some("Elevated"),
+                is_high: false,
+            }
         );
     }
 
@@ -1031,9 +1038,13 @@ mod tests {
         };
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, false);
+        let pressure_entry = entries
+            .iter()
+            .find(|e| matches!(e, MenuEntry::Stat { primary: "Pressure", .. }))
+            .expect("pressure row");
         assert_eq!(
-            entries[1],
-            MenuEntry::Stat {
+            pressure_entry,
+            &MenuEntry::Stat {
                 primary: "Pressure",
                 tail: Some("High"),
                 is_high: true,
@@ -1062,16 +1073,17 @@ mod tests {
     fn loaded_with_apps_loading_renders_loading_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[3], MenuEntry::Separator);
-        assert_eq!(entries[4], MenuEntry::AppLoading);
+        // Memory, Swap, Separator, AppLoading — Pressure (Normal) is hidden.
+        assert_eq!(entries[2], MenuEntry::Separator);
+        assert_eq!(entries[3], MenuEntry::AppLoading);
     }
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[3], MenuEntry::Separator);
-        assert_eq!(entries[4], MenuEntry::AppUnavailable);
+        assert_eq!(entries[2], MenuEntry::Separator);
+        assert_eq!(entries[3], MenuEntry::AppUnavailable);
     }
 
     #[test]
@@ -1122,6 +1134,7 @@ mod tests {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage));
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
 
+        // Normal pressure → row hidden. Memory, Swap, separator, two app rows, separator…
         assert!(matches!(
             entries[0],
             MenuEntry::Stat {
@@ -1132,20 +1145,13 @@ mod tests {
         assert!(matches!(
             entries[1],
             MenuEntry::Stat {
-                primary: "Pressure",
-                ..
-            }
-        ));
-        assert!(matches!(
-            entries[2],
-            MenuEntry::Stat {
                 primary: "Swap",
                 ..
             }
         ));
-        assert_eq!(entries[3], MenuEntry::Separator);
+        assert_eq!(entries[2], MenuEntry::Separator);
         assert_eq!(
-            entries[4],
+            entries[3],
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
@@ -1153,13 +1159,13 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[5],
+            entries[4],
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
                 action_tag: Some(1),
             }
         );
-        assert_eq!(entries[6], MenuEntry::Separator);
+        assert_eq!(entries[5], MenuEntry::Separator);
     }
 }
