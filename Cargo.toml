@@ -45,7 +45,6 @@ objc2-foundation = { version = "0.3", features = [
   "NSObject",
   "NSString",
   "NSTimer",
-  "NSUserNotification",
 ] }
 mach2 = "0.4"
 libc = "0.2"

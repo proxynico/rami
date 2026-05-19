@@ -1,4 +1,4 @@
-use crate::model::{MemoryPressure, MemorySnapshot};
+use crate::model::MemorySnapshot;
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::trend::rank_app_rows;
 
@@ -37,15 +37,6 @@ pub fn mem_text(bytes: u64) -> String {
     }
 }
 
-pub fn signed_delta_pct_text(footprint_bytes: u64, delta_bytes: u64) -> String {
-    let previous = footprint_bytes.saturating_sub(delta_bytes);
-    if previous == 0 {
-        return "+new".to_string();
-    }
-    let pct = (delta_bytes as f64 * 100.0 / previous as f64).round() as u64;
-    format!("+{pct}%")
-}
-
 pub fn delta_bytes_text(delta_bytes: u64) -> String {
     format!("+{}", mem_text(delta_bytes))
 }
@@ -59,19 +50,10 @@ pub struct StatRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PressureDisplay {
-    pub text: String,
-    pub is_high: bool,
-    pub is_elevated: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppSectionDisplay {
     Hidden,
     Loading,
-    Rows {
-        rows: Vec<StatRow>,
-    },
+    Rows { rows: Vec<StatRow> },
     Unavailable,
 }
 
@@ -82,17 +64,8 @@ pub enum DropdownModel {
     Loaded {
         memory: StatRow,
         apps: AppSectionDisplay,
-        pressure: Option<PressureDisplay>,
         swap: Option<StatRow>,
     },
-}
-
-fn pressure_text(p: MemoryPressure) -> &'static str {
-    match p {
-        MemoryPressure::Normal => "Normal",
-        MemoryPressure::Elevated => "Elevated",
-        MemoryPressure::High => "High",
-    }
 }
 
 pub fn dropdown_model(snapshot: MemorySnapshot) -> DropdownModel {
@@ -106,28 +79,16 @@ pub fn dropdown_model_with_apps(
     DropdownModel::Loaded {
         memory: StatRow {
             primary: gb_pair(snapshot.used_bytes, snapshot.total_bytes),
-            tail: Some(format!("{}%", snapshot.used_percent)),
+            tail: None,
             action_tag: None,
             bundle_path: None,
         },
         apps: app_section_display(apps),
-        pressure: pressure_display(snapshot.pressure),
         swap: (snapshot.swap_used_bytes > 0).then(|| StatRow {
             primary: "Swap".to_string(),
             tail: Some(mem_text(snapshot.swap_used_bytes)),
             action_tag: None,
             bundle_path: None,
-        }),
-    }
-}
-
-fn pressure_display(pressure: MemoryPressure) -> Option<PressureDisplay> {
-    match pressure {
-        MemoryPressure::Normal => None,
-        MemoryPressure::Elevated | MemoryPressure::High => Some(PressureDisplay {
-            text: pressure_text(pressure).to_string(),
-            is_high: matches!(pressure, MemoryPressure::High),
-            is_elevated: matches!(pressure, MemoryPressure::Elevated),
         }),
     }
 }
@@ -159,10 +120,9 @@ fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
 fn app_row(index: usize, app: &AppMemoryUsage) -> StatRow {
     let tail = if let Some(delta) = app.delta_bytes.filter(|delta| *delta >= 50_000_000) {
         format!(
-            "{}\t{} / {}",
+            "{}\t{}",
             mem_text(app.footprint_bytes),
-            delta_bytes_text(delta as u64),
-            signed_delta_pct_text(app.footprint_bytes, delta as u64)
+            delta_bytes_text(delta as u64)
         )
     } else {
         mem_text(app.footprint_bytes)
@@ -196,7 +156,6 @@ mod tests {
             used_bytes: total_bytes / 2,
             total_bytes,
             used_percent: 50,
-            pressure: MemoryPressure::Normal,
             swap_used_bytes: 0,
         }
     }
@@ -311,33 +270,17 @@ mod tests {
     }
 
     #[test]
-    fn dropdown_model_memory_tail_is_just_percent() {
+    fn dropdown_model_memory_row_has_no_tail() {
         let snapshot = MemorySnapshot {
             used_bytes: 9_000_000_000,
             total_bytes: 16_000_000_000,
             used_percent: 56,
-            pressure: MemoryPressure::Normal,
             swap_used_bytes: 0,
         };
         let DropdownModel::Loaded { memory, .. } = dropdown_model(snapshot) else {
             panic!("expected Loaded model");
         };
-        assert_eq!(memory.tail.as_deref(), Some("56%"));
-    }
-
-    #[test]
-    fn dropdown_model_hides_pressure_when_normal() {
-        let snapshot = MemorySnapshot {
-            used_bytes: 5_000_000_000,
-            total_bytes: 16_000_000_000,
-            used_percent: 31,
-            pressure: MemoryPressure::Normal,
-            swap_used_bytes: 0,
-        };
-        let DropdownModel::Loaded { pressure, .. } = dropdown_model(snapshot) else {
-            panic!("expected Loaded model");
-        };
-        assert!(pressure.is_none());
+        assert_eq!(memory.tail, None);
     }
 
     #[test]
@@ -378,7 +321,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(rows[0].primary, "Zen");
-                assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB / +75%"));
+                assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB"));
                 assert_eq!(rows[0].action_tag, Some(0));
             }
             _ => panic!("expected app rows"),

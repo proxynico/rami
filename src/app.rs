@@ -2,14 +2,9 @@ use crate::app_control::quit_app_group;
 use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
-use crate::model::MemoryPressure;
-use crate::notification::{
-    deliver_high_pressure_notification, high_pressure_notification_text,
-    should_notify_high_pressure,
-};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage, ProcessMemorySampler};
 use crate::tray::TrayController;
-use crate::trend::{app_rows_with_deltas, likely_culprit, MemoryTrendTracker};
+use crate::trend::{app_rows_with_deltas, MemoryTrendTracker};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
@@ -42,8 +37,6 @@ struct AppState {
     last_app_rows: RefCell<Vec<AppMemoryUsage>>,
     trend_tracker: RefCell<MemoryTrendTracker>,
     last_app_sample_at: Cell<Option<Instant>>,
-    last_pressure: Cell<MemoryPressure>,
-    last_high_pressure_notification: Cell<Option<Instant>>,
     ticks_until_app_refresh: Cell<u8>,
 }
 
@@ -117,20 +110,9 @@ impl AppState {
         match self.sampler.sample() {
             Ok(snapshot) => {
                 let trend = self.trend_tracker.borrow_mut().record(snapshot.used_bytes);
-                let previous_pressure = self.last_pressure.get();
-                let pressure_sampling = !matches!(snapshot.pressure, MemoryPressure::Normal);
-                let pressure_just_rose = !matches!(
-                    previous_pressure,
-                    MemoryPressure::Elevated | MemoryPressure::High
-                ) && pressure_sampling;
-                let high_pressure_just_started = !matches!(previous_pressure, MemoryPressure::High)
-                    && matches!(snapshot.pressure, MemoryPressure::High);
-                let app_sampling_enabled = self.show_app_usage.get() || pressure_sampling;
+                let app_sampling_enabled = self.show_app_usage.get();
                 if app_sampling_enabled {
-                    let should_scan = manual
-                        || self.ticks_until_app_refresh.get() == 0
-                        || pressure_just_rose
-                        || high_pressure_just_started;
+                    let should_scan = manual || self.ticks_until_app_refresh.get() == 0;
                     if should_scan {
                         self.start_app_scan();
                         self.ticks_until_app_refresh
@@ -143,8 +125,6 @@ impl AppState {
                     self.clear_app_usage();
                 }
 
-                self.maybe_notify_high_pressure(previous_pressure, snapshot.pressure);
-                self.last_pressure.set(snapshot.pressure);
                 let apps = self.app_memory.borrow();
                 let launch_at_login_status = self.launch_at_login_status.get();
                 self.tray.set_snapshot(
@@ -216,26 +196,6 @@ impl AppState {
         self.app_scan_in_flight.set(false);
         self.app_scan_generation
             .set(self.app_scan_generation.get().wrapping_add(1));
-    }
-
-    fn maybe_notify_high_pressure(&self, previous: MemoryPressure, current: MemoryPressure) {
-        let now = Instant::now();
-        if !should_notify_high_pressure(
-            previous,
-            current,
-            self.last_high_pressure_notification.get(),
-            now,
-        ) {
-            return;
-        }
-        let apps = self.app_memory.borrow();
-        let culprit = match &*apps {
-            AppMemorySnapshot::Loaded(rows) => likely_culprit(rows),
-            _ => None,
-        };
-        let body = high_pressure_notification_text(culprit.as_ref());
-        deliver_high_pressure_notification(&body);
-        self.last_high_pressure_notification.set(Some(now));
     }
 
     fn quit_app_at_index(&self, index: usize) {
@@ -435,8 +395,6 @@ impl App {
             last_app_rows: RefCell::new(Vec::new()),
             trend_tracker: RefCell::new(MemoryTrendTracker::new()),
             last_app_sample_at: Cell::new(None),
-            last_pressure: Cell::new(MemoryPressure::Normal),
-            last_high_pressure_notification: Cell::new(None),
             ticks_until_app_refresh: Cell::new(0),
         });
         install_app_state(&state);

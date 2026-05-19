@@ -9,9 +9,8 @@ A tiny memory monitor that lives in your Mac menu bar.
 One little gauge tells you how full your RAM is. Click it and you'll see
 where it's going — total used, swap when there is any, and the apps hogging
 the most. The top apps tag the orange jump in real bytes and as a percent,
-so a runaway is obvious at a glance. Pressure shows up only when it's
-Elevated or High, and an orange arrow joins the gauge when RAM is climbing
-fast. Quit a runaway app right from the menu.
+so a runaway is obvious at a glance. An orange arrow joins the gauge when RAM
+is climbing fast. Quit a runaway app right from the menu.
 
 That's it. No dock icon, no window, no fuss.
 

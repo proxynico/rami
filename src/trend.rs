@@ -5,20 +5,12 @@ const RISING_BYTES: i64 = 300_000_000;
 const RISING_FAST_BYTES: i64 = 1_000_000_000;
 const MEMORY_WINDOW_SAMPLES: usize = 25;
 const MEANINGFUL_APP_DELTA_BYTES: i64 = 50_000_000;
-const CULPRIT_DELTA_BYTES: i64 = 100_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryTrend {
     Stable,
     Rising,
     RisingFast,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LikelyCulprit {
-    pub name: String,
-    pub delta_bytes: u64,
-    pub footprint_bytes: u64,
 }
 
 #[derive(Debug, Default)]
@@ -93,29 +85,6 @@ pub fn rank_app_rows(rows: &mut [AppMemoryUsage]) {
     });
 }
 
-pub fn likely_culprit(rows: &[AppMemoryUsage]) -> Option<LikelyCulprit> {
-    rows.iter()
-        .filter_map(|row| {
-            let delta = row.delta_bytes?;
-            if delta >= CULPRIT_DELTA_BYTES {
-                Some((row, delta as u64))
-            } else {
-                None
-            }
-        })
-        .max_by(|(a, a_delta), (b, b_delta)| {
-            a_delta
-                .cmp(b_delta)
-                .then_with(|| a.footprint_bytes.cmp(&b.footprint_bytes))
-                .then_with(|| b.name.cmp(&a.name))
-        })
-        .map(|(row, delta_bytes)| LikelyCulprit {
-            name: row.name.clone(),
-            delta_bytes,
-            footprint_bytes: row.footprint_bytes,
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,21 +127,6 @@ mod tests {
         assert_eq!(ranked[1].name, "Chrome");
     }
 
-    #[test]
-    fn likely_culprit_requires_at_least_100mb_positive_delta() {
-        let small = vec![usage_with_delta("Zen", 99_000_000, 500_000_000)];
-        assert_eq!(likely_culprit(&small), None);
-
-        let rows = vec![
-            usage_with_delta("Chrome", 120_000_000, 4_000_000_000),
-            usage_with_delta("Zen", 120_000_000, 5_000_000_000),
-        ];
-        let culprit = likely_culprit(&rows).expect("culprit");
-        assert_eq!(culprit.name, "Zen");
-        assert_eq!(culprit.delta_bytes, 120_000_000);
-        assert_eq!(culprit.footprint_bytes, 5_000_000_000);
-    }
-
     fn usage(group_key: &str, name: &str, footprint_bytes: u64) -> AppMemoryUsage {
         AppMemoryUsage {
             name: name.to_string(),
@@ -181,17 +135,6 @@ mod tests {
             pids: vec![],
             can_quit: true,
             delta_bytes: None,
-        }
-    }
-
-    fn usage_with_delta(name: &str, delta_bytes: i64, footprint_bytes: u64) -> AppMemoryUsage {
-        AppMemoryUsage {
-            name: name.to_string(),
-            group_key: name.to_string(),
-            footprint_bytes,
-            pids: vec![],
-            can_quit: true,
-            delta_bytes: Some(delta_bytes),
         }
     }
 }

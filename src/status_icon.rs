@@ -1,4 +1,3 @@
-use crate::model::MemoryPressure;
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
 use objc2::AnyThread;
@@ -11,18 +10,12 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 pub(crate) enum BadgeKind {
     None,
     RisingFast,
-    Elevated,
-    High,
 }
 
-pub(crate) fn badge_for_state(pressure: MemoryPressure, trend: MemoryTrend) -> BadgeKind {
-    match pressure {
-        MemoryPressure::High => BadgeKind::High,
-        MemoryPressure::Elevated => BadgeKind::Elevated,
-        MemoryPressure::Normal => match trend {
-            MemoryTrend::RisingFast => BadgeKind::RisingFast,
-            MemoryTrend::Rising | MemoryTrend::Stable => BadgeKind::None,
-        },
+pub(crate) fn badge_for_state(trend: MemoryTrend) -> BadgeKind {
+    match trend {
+        MemoryTrend::RisingFast => BadgeKind::RisingFast,
+        MemoryTrend::Rising | MemoryTrend::Stable => BadgeKind::None,
     }
 }
 
@@ -33,30 +26,15 @@ pub(crate) struct StatusImage {
 
 pub(crate) fn make_status_image(
     gauge_name: &'static str,
-    pressure: MemoryPressure,
     trend: MemoryTrend,
 ) -> Option<StatusImage> {
-    let badge = badge_for_state(pressure, trend);
+    let badge = badge_for_state(trend);
     let base_template = render_template_symbol(gauge_name, NSImageSymbolScale::Large)?;
     match badge {
         BadgeKind::None => Some(StatusImage {
             image: base_template,
             template: true,
         }),
-        BadgeKind::High => {
-            let red = NSColor::systemRedColor();
-            let base_colored = render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &red)?;
-            let badge_image = render_colored_symbol(
-                "exclamationmark.triangle.fill",
-                NSImageSymbolScale::Small,
-                &red,
-            )?;
-            let composite = compose_with_badge(&base_colored, &badge_image)?;
-            Some(StatusImage {
-                image: composite,
-                template: false,
-            })
-        }
         BadgeKind::RisingFast => {
             let label = NSColor::labelColor();
             let orange = NSColor::systemOrangeColor();
@@ -64,22 +42,6 @@ pub(crate) fn make_status_image(
                 render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &label)?;
             let badge_image = render_colored_symbol(
                 "arrow.up.right.circle.fill",
-                NSImageSymbolScale::Small,
-                &orange,
-            )?;
-            let composite = compose_with_badge(&base_colored, &badge_image)?;
-            Some(StatusImage {
-                image: composite,
-                template: false,
-            })
-        }
-        BadgeKind::Elevated => {
-            let label = NSColor::labelColor();
-            let orange = NSColor::systemOrangeColor();
-            let base_colored =
-                render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &label)?;
-            let badge_image = render_colored_symbol(
-                "exclamationmark.circle.fill",
                 NSImageSymbolScale::Small,
                 &orange,
             )?;

@@ -1,15 +1,11 @@
-use crate::model::{MemoryPressure, MemorySnapshot};
+use crate::model::MemorySnapshot;
 use libc::{
-    boolean_t, c_int, c_void, host_statistics64, mach_msg_type_number_t, size_t, sysctlbyname,
+    boolean_t, c_void, host_statistics64, mach_msg_type_number_t, size_t, sysctlbyname,
     vm_page_size, vm_statistics64, HOST_VM_INFO64, HOST_VM_INFO64_COUNT,
 };
 use std::cell::Cell;
 use std::io;
 use std::mem::{size_of, MaybeUninit};
-
-pub const VM_PRESSURE_NORMAL: i32 = 1;
-pub const VM_PRESSURE_WARN: i32 = 2;
-pub const VM_PRESSURE_CRITICAL: i32 = 4;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -30,21 +26,7 @@ pub struct MemoryCounts {
     pub compressed_pages: u64,
 }
 
-pub fn pressure_from_raw(raw: i32) -> MemoryPressure {
-    if raw & VM_PRESSURE_CRITICAL != 0 {
-        MemoryPressure::High
-    } else if raw & VM_PRESSURE_WARN != 0 {
-        MemoryPressure::Elevated
-    } else {
-        MemoryPressure::Normal
-    }
-}
-
-pub fn snapshot_from_counts(
-    counts: MemoryCounts,
-    pressure: MemoryPressure,
-    swap_used_bytes: u64,
-) -> MemorySnapshot {
+pub fn snapshot_from_counts(counts: MemoryCounts, swap_used_bytes: u64) -> MemorySnapshot {
     let used_pages = counts
         .active_pages
         .saturating_add(counts.wired_pages)
@@ -63,7 +45,6 @@ pub fn snapshot_from_counts(
         used_bytes,
         total_bytes: counts.total_bytes,
         used_percent,
-        pressure,
         swap_used_bytes,
     }
 }
@@ -139,7 +120,6 @@ impl MemorySampler {
         }
 
         validate_stats_count(count)?;
-        let pressure = read_pressure_level()?;
         let swap_used_bytes = self.swap_used_bytes()?;
 
         Ok(snapshot_from_counts(
@@ -150,7 +130,6 @@ impl MemorySampler {
                 wired_pages: stats.wire_count as u64,
                 compressed_pages: stats.compressor_page_count as u64,
             },
-            pressure,
             swap_used_bytes,
         ))
     }
@@ -196,11 +175,6 @@ fn read_sysctl_value<T: Copy>(name: &[u8]) -> io::Result<T> {
     validate_sysctl_size(size, expected_size, name)?;
 
     Ok(unsafe { value.assume_init() })
-}
-
-fn read_pressure_level() -> io::Result<MemoryPressure> {
-    let raw: c_int = read_sysctl_value(b"kern.memorystatus_vm_pressure_level\0")?;
-    Ok(pressure_from_raw(raw))
 }
 
 fn read_swap_used_bytes() -> io::Result<u64> {
