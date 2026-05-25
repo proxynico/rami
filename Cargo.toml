@@ -31,6 +31,7 @@ objc2-app-kit = { version = "0.3", features = [
   "NSImage",
   "NSMenu",
   "NSMenuItem",
+  "NSPasteboard",
   "NSParagraphStyle",
   "NSRunningApplication",
   "NSStatusBar",

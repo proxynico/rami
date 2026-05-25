@@ -14,6 +14,8 @@ the gauge when RAM is climbing fast. Quit a runaway app right from the menu.
 
 That's it. No dock icon, no window, no fuss.
 
+Settings includes launch-at-login status and a local diagnostics copy action.
+
 ## Install
 
 Public install is not live yet. The Homebrew Cask and notarized DMG flow are

@@ -54,6 +54,7 @@ pub struct TrayController {
     auto_refresh_item: Retained<NSMenuItem>,
     show_app_usage_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
+    _diagnostics_item: Retained<NSMenuItem>,
     settings_item: Retained<NSMenuItem>,
     _settings_submenu: Retained<NSMenu>,
     quit_item: Retained<NSMenuItem>,
@@ -174,11 +175,28 @@ impl TrayController {
         launch_at_login_item.setState(NSControlStateValueOff);
         launch_at_login_item.setEnabled(false);
 
+        let diagnostics_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Copy Diagnostics"),
+                Some(sel!(copyDiagnostics:)),
+                &empty,
+            )
+        };
+        unsafe {
+            diagnostics_item.setTarget(Some(&refresh_target));
+        }
+        diagnostics_item.setEnabled(true);
+        if let Some(img) = make_action_icon("doc.on.doc") {
+            diagnostics_item.setImage(Some(&img));
+        }
+
         let settings_submenu = NSMenu::new(mtm);
         settings_submenu.setAutoenablesItems(false);
         settings_submenu.addItem(&auto_refresh_item);
         settings_submenu.addItem(&show_app_usage_item);
         settings_submenu.addItem(&launch_at_login_item);
+        settings_submenu.addItem(&diagnostics_item);
 
         let settings_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -226,6 +244,7 @@ impl TrayController {
             auto_refresh_item,
             show_app_usage_item,
             launch_at_login_item,
+            _diagnostics_item: diagnostics_item,
             settings_item,
             _settings_submenu: settings_submenu,
             quit_item,

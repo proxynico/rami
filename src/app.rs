@@ -1,4 +1,5 @@
 use crate::app_control::quit_app_group;
+use crate::diagnostics::{build_diagnostic_report, current_report_input};
 use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
@@ -8,8 +9,10 @@ use crate::trend::{app_rows_with_deltas, MemoryTrendTracker};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-use objc2_foundation::{NSObject, NSObjectProtocol, NSTimer};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSPasteboard, NSPasteboardTypeString,
+};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSString, NSTimer};
 use std::cell::{Cell, RefCell};
 use std::io;
 use std::rc::{Rc, Weak};
@@ -34,6 +37,7 @@ struct AppState {
     auto_refresh_enabled: Cell<bool>,
     show_app_usage: Cell<bool>,
     app_memory: RefCell<AppMemorySnapshot>,
+    last_snapshot: RefCell<Option<crate::model::MemorySnapshot>>,
     last_app_rows: RefCell<Vec<AppMemoryUsage>>,
     trend_tracker: RefCell<MemoryTrendTracker>,
     last_app_sample_at: Cell<Option<Instant>>,
@@ -109,6 +113,7 @@ impl AppState {
         self.drain_app_scan_results();
         match self.sampler.sample() {
             Ok(snapshot) => {
+                *self.last_snapshot.borrow_mut() = Some(snapshot);
                 let trend = self.trend_tracker.borrow_mut().record(snapshot.used_bytes);
                 let app_sampling_enabled = self.show_app_usage.get();
                 if app_sampling_enabled {
@@ -263,6 +268,21 @@ impl AppState {
             self.tray.pop_up_menu();
         }
     }
+
+    fn copy_diagnostic_report(&self) {
+        let apps = self.app_memory.borrow();
+        let report = build_diagnostic_report(current_report_input(
+            self.launch_at_login_status.get(),
+            *self.last_snapshot.borrow(),
+            &apps,
+        ));
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let string_type = unsafe { NSPasteboardTypeString };
+        if !pasteboard.setString_forType(&NSString::from_str(&report), string_type) {
+            eprintln!("failed to copy diagnostics to pasteboard");
+        }
+    }
 }
 
 fn install_app_state(state: &Rc<AppState>) {
@@ -322,6 +342,14 @@ define_class!(
             let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
             if let Some(state) = state {
                 state.toggle_show_app_usage();
+            }
+        }
+
+        #[unsafe(method(copyDiagnostics:))]
+        fn copy_diagnostics(&self, _sender: &AnyObject) {
+            let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+            if let Some(state) = state {
+                state.copy_diagnostic_report();
             }
         }
 
@@ -392,6 +420,7 @@ impl App {
             auto_refresh_enabled: Cell::new(true),
             show_app_usage: Cell::new(true),
             app_memory: RefCell::new(AppMemorySnapshot::Loading),
+            last_snapshot: RefCell::new(None),
             last_app_rows: RefCell::new(Vec::new()),
             trend_tracker: RefCell::new(MemoryTrendTracker::new()),
             last_app_sample_at: Cell::new(None),
