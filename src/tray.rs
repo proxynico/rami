@@ -1,6 +1,6 @@
 use crate::format::{
-    dropdown_model_with_apps, gauge_symbol_name, placeholder_dropdown_model, AppSectionDisplay,
-    DropdownModel, StatRow,
+    dropdown_model_with_apps, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
+    placeholder_dropdown_model, AppSectionDisplay, DropdownModel, StatRow,
 };
 use crate::login_item::LaunchAtLoginStatus;
 use crate::model::MemorySnapshot;
@@ -11,7 +11,7 @@ use crate::status_icon::{make_status_image, StatusImage};
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{sel, AnyThread, MainThreadMarker, MainThreadOnly};
+use objc2::{msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn,
     NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontWeightRegular,
@@ -282,6 +282,19 @@ impl TrayController {
         mtm: MainThreadMarker,
     ) {
         self.set_gauge(snapshot.used_percent, trend, mtm);
+        self.set_button_help(
+            &gauge_tooltip(
+                snapshot.used_percent,
+                snapshot.used_bytes,
+                snapshot.total_bytes,
+            ),
+            &gauge_accessibility_label(
+                snapshot.used_percent,
+                snapshot.used_bytes,
+                snapshot.total_bytes,
+            ),
+            mtm,
+        );
         self.apply_model(
             &dropdown_model_with_apps(snapshot, apps),
             launch_at_login_status,
@@ -310,12 +323,27 @@ impl TrayController {
         mtm: MainThreadMarker,
     ) {
         self.set_gauge(0, MemoryTrend::Stable, mtm);
+        self.set_button_help("rami — memory unavailable", "rami, memory unavailable", mtm);
         self.apply_model(
             &placeholder_dropdown_model(),
             launch_at_login_status,
             true,
             mtm,
         );
+    }
+
+    /// Set the menu-bar button's hover tooltip and VoiceOver label so the current
+    /// memory reading is available without opening the menu.
+    fn set_button_help(&self, tooltip: &str, accessibility_label: &str, mtm: MainThreadMarker) {
+        let Some(button) = self.status_item.button(mtm) else {
+            return;
+        };
+        let tooltip = NSString::from_str(tooltip);
+        let accessibility_label = NSString::from_str(accessibility_label);
+        unsafe {
+            let _: () = msg_send![&*button, setToolTip: &*tooltip];
+            let _: () = msg_send![&*button, setAccessibilityLabel: &*accessibility_label];
+        }
     }
 
     fn set_gauge(&self, percent: u8, trend: MemoryTrend, mtm: MainThreadMarker) {
@@ -393,10 +421,15 @@ impl TrayController {
             }
             for (idx, row) in rows.iter().enumerate() {
                 let item = &self.app_items[idx];
-                if let Some(tag) = row.action_tag {
+                if let Some(key) = &row.quit_key {
                     let quit_item = &self.app_quit_items[idx];
                     quit_item.setTitle(&NSString::from_str(&format!("Quit {}", row.primary)));
-                    quit_item.setTag(tag as isize);
+                    // Carry the app's stable identity on the menu item so the quit handler
+                    // targets the app the user saw, never a positional slot that may have shifted.
+                    let key_obj = NSString::from_str(key);
+                    unsafe {
+                        let _: () = msg_send![&**quit_item, setRepresentedObject: &*key_obj];
+                    }
                     quit_item.setEnabled(true);
                     item.setSubmenu(Some(&self.app_submenus[idx]));
                 } else {
@@ -530,7 +563,7 @@ fn make_quit_app_item(
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
             &NSString::from_str("Quit App"),
-            Some(sel!(quitAppAtIndex:)),
+            Some(sel!(quitApp:)),
             &NSString::from_str(""),
         )
     };
@@ -699,7 +732,7 @@ fn loading_attributed_title() -> Retained<NSAttributedString> {
         &StatRow {
             primary: "Loading…".to_string(),
             tail: None,
-            action_tag: None,
+            quit_key: None,
             bundle_path: None,
         },
         NSColor::secondaryLabelColor(),
@@ -711,7 +744,7 @@ fn unavailable_attributed_title() -> Retained<NSAttributedString> {
         &StatRow {
             primary: "Unavailable".to_string(),
             tail: None,
-            action_tag: None,
+            quit_key: None,
             bundle_path: None,
         },
         NSColor::secondaryLabelColor(),
@@ -732,7 +765,7 @@ pub(crate) enum MenuEntry<'a> {
     AppRow {
         primary: &'a str,
         tail: Option<&'a str>,
-        action_tag: Option<usize>,
+        quit_key: Option<&'a str>,
     },
     Separator,
     Refresh,
@@ -794,7 +827,7 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
                         entries.push(MenuEntry::AppRow {
                             primary: &row.primary,
                             tail: row.tail.as_deref(),
-                            action_tag: row.action_tag,
+                            quit_key: row.quit_key.as_deref(),
                         });
                     }
                 }
@@ -1012,7 +1045,7 @@ mod tests {
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
-                action_tag: Some(0),
+                quit_key: Some("/Applications/Cursor.app"),
             }
         );
         assert_eq!(
@@ -1020,7 +1053,7 @@ mod tests {
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
-                action_tag: Some(1),
+                quit_key: Some("/Applications/Chrome.app"),
             }
         );
         assert_eq!(entries[5], MenuEntry::Separator);

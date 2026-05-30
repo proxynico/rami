@@ -4,6 +4,7 @@ use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage, ProcessMemorySampler};
+use crate::settings::SettingsStore;
 use crate::tray::TrayController;
 use crate::trend::{app_rows_with_deltas, MemoryTrendTracker};
 use objc2::rc::Retained;
@@ -36,6 +37,7 @@ struct AppState {
     launch_at_login_status: Cell<LaunchAtLoginStatus>,
     auto_refresh_enabled: Cell<bool>,
     show_app_usage: Cell<bool>,
+    settings: SettingsStore,
     app_memory: RefCell<AppMemorySnapshot>,
     last_snapshot: RefCell<Option<crate::model::MemorySnapshot>>,
     last_app_rows: RefCell<Vec<AppMemoryUsage>>,
@@ -70,6 +72,14 @@ fn previous_app_rows_if_fresh(
     }
 }
 
+/// Resolve the app to quit by its stable `group_key` rather than a menu position.
+/// A background scan may reorder or drop rows between the menu being shown and the
+/// click landing; matching on identity guarantees we quit the app the user picked,
+/// or nothing if it is gone.
+fn find_quittable<'a>(rows: &'a [AppMemoryUsage], key: &str) -> Option<&'a AppMemoryUsage> {
+    rows.iter().find(|row| row.can_quit && row.group_key == key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +100,30 @@ mod tests {
         )
         .is_empty());
         assert!(previous_app_rows_if_fresh(None, now, &rows).is_empty());
+    }
+
+    #[test]
+    fn find_quittable_matches_identity_regardless_of_position() {
+        let rows = vec![usage("Chrome"), usage("Zen"), usage("Cursor")];
+        // The same key resolves to the same app no matter where it sits in the list,
+        // so a reorder between menu render and click cannot quit the wrong app.
+        assert_eq!(
+            find_quittable(&rows, "/Applications/Zen.app").map(|u| u.name.as_str()),
+            Some("Zen")
+        );
+        let reordered = vec![usage("Zen"), usage("Cursor"), usage("Chrome")];
+        assert_eq!(
+            find_quittable(&reordered, "/Applications/Zen.app").map(|u| u.name.as_str()),
+            Some("Zen")
+        );
+    }
+
+    #[test]
+    fn find_quittable_skips_unquittable_and_missing_keys() {
+        let mut rows = vec![usage("rami")];
+        rows[0].can_quit = false;
+        assert!(find_quittable(&rows, "/Applications/rami.app").is_none());
+        assert!(find_quittable(&rows, "/Applications/Ghost.app").is_none());
     }
 
     fn usage(name: &str) -> AppMemoryUsage {
@@ -203,12 +237,12 @@ impl AppState {
             .set(self.app_scan_generation.get().wrapping_add(1));
     }
 
-    fn quit_app_at_index(&self, index: usize) {
+    fn quit_app_with_key(&self, key: &str) {
         let usage = match &*self.app_memory.borrow() {
-            AppMemorySnapshot::Loaded(rows) => rows.get(index).cloned(),
+            AppMemorySnapshot::Loaded(rows) => find_quittable(rows, key).cloned(),
             _ => None,
         };
-        if let Some(usage) = usage.filter(|usage| usage.can_quit) {
+        if let Some(usage) = usage {
             if let Err(err) = quit_app_group(&usage) {
                 eprintln!("failed to quit {}: {err}", usage.name);
             }
@@ -229,14 +263,16 @@ impl AppState {
     }
 
     fn toggle_auto_refresh(&self) {
-        self.auto_refresh_enabled
-            .set(!self.auto_refresh_enabled.get());
+        let enabled = !self.auto_refresh_enabled.get();
+        self.auto_refresh_enabled.set(enabled);
+        self.settings.set_auto_refresh_enabled(enabled);
         self.refresh(true);
     }
 
     fn toggle_show_app_usage(&self) {
         let on = !self.show_app_usage.get();
         self.show_app_usage.set(on);
+        self.settings.set_show_app_usage(on);
         if on {
             *self.app_memory.borrow_mut() = AppMemorySnapshot::Loading;
             self.ticks_until_app_refresh.set(0);
@@ -361,15 +397,15 @@ define_class!(
             }
         }
 
-        #[unsafe(method(quitAppAtIndex:))]
-        fn quit_app_at_index(&self, sender: &AnyObject) {
-            let tag: isize = unsafe { msg_send![sender, tag] };
-            if tag < 0 {
+        #[unsafe(method(quitApp:))]
+        fn quit_app(&self, sender: &AnyObject) {
+            let key: Option<Retained<NSString>> = unsafe { msg_send![sender, representedObject] };
+            let Some(key) = key else {
                 return;
-            }
+            };
             let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
             if let Some(state) = state {
-                state.quit_app_at_index(tag as usize);
+                state.quit_app_with_key(&key.to_string());
             }
         }
     }
@@ -406,7 +442,14 @@ impl App {
         let tray = TrayController::new(mtm, refresh_target.clone());
         let launch_at_login = LaunchAtLoginController::new();
         let launch_at_login_status = launch_at_login.status();
+        let settings_store = SettingsStore::new();
+        let settings = settings_store.load();
         let (app_scan_sender, app_scan_receiver) = mpsc::channel();
+        let initial_app_memory = if settings.show_app_usage {
+            AppMemorySnapshot::Loading
+        } else {
+            AppMemorySnapshot::Hidden
+        };
         let state = Rc::new(AppState {
             tray,
             sampler: MemorySampler::new()?,
@@ -417,9 +460,10 @@ impl App {
             refresh_target: refresh_target.clone(),
             launch_at_login,
             launch_at_login_status: Cell::new(launch_at_login_status),
-            auto_refresh_enabled: Cell::new(true),
-            show_app_usage: Cell::new(true),
-            app_memory: RefCell::new(AppMemorySnapshot::Loading),
+            auto_refresh_enabled: Cell::new(settings.auto_refresh_enabled),
+            show_app_usage: Cell::new(settings.show_app_usage),
+            settings: settings_store,
+            app_memory: RefCell::new(initial_app_memory),
             last_snapshot: RefCell::new(None),
             last_app_rows: RefCell::new(Vec::new()),
             trend_tracker: RefCell::new(MemoryTrendTracker::new()),
@@ -427,6 +471,8 @@ impl App {
             ticks_until_app_refresh: Cell::new(0),
         });
         install_app_state(&state);
+        // Reflect the persisted "show apps" choice in the menu checkbox before first paint.
+        state.tray.set_show_app_usage(settings.show_app_usage);
         app.finishLaunching();
         state.refresh(true);
         let timer = unsafe {

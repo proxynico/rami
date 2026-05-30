@@ -8,6 +8,7 @@ mod app_control;
 mod diagnostics;
 mod login_item;
 mod process_memory;
+mod settings;
 mod status_icon;
 mod tray;
 mod trend;

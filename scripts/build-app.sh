@@ -29,7 +29,7 @@ if [ -z "$VERSION" ]; then
 fi
 
 toolchain_bin="$(dirname "$cargo_bin")"
-MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET_VALUE" PATH="$toolchain_bin:$PATH" "$cargo_bin" build --release --manifest-path "$ROOT_DIR/Cargo.toml"
+MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET_VALUE" PATH="$toolchain_bin:$PATH" "$cargo_bin" build --release --locked --manifest-path "$ROOT_DIR/Cargo.toml"
 xcrun swift "$ROOT_DIR/scripts/generate-icon.swift" "$ICON_PATH"
 
 rm -rf "$APP_DIR"
