@@ -6,8 +6,26 @@ use std::collections::HashMap;
 use std::io;
 use std::mem::MaybeUninit;
 
-extern "C" {
-    fn responsibility_get_pid_responsible_for_pid(pid: pid_t) -> pid_t;
+// `responsibility_get_pid_responsible_for_pid` is a private, undocumented libsystem SPI
+// that maps a helper/agent process to the user-facing app responsible for it (e.g. rolling
+// a "Google Chrome Helper" up to "Google Chrome"). Because it is not in the public SDK,
+// resolve it at runtime with dlsym and degrade gracefully — no responsibility roll-up —
+// if a future macOS removes it, rather than failing to launch on a missing symbol.
+type ResponsibleForPidFn = unsafe extern "C" fn(pid_t) -> pid_t;
+
+fn responsible_for_pid_fn() -> Option<ResponsibleForPidFn> {
+    use std::sync::OnceLock;
+    static FN: OnceLock<Option<ResponsibleForPidFn>> = OnceLock::new();
+    *FN.get_or_init(|| {
+        let name = c"responsibility_get_pid_responsible_for_pid";
+        let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
+        if sym.is_null() {
+            None
+        } else {
+            // SAFETY: the resolved symbol has the C signature `pid_t(pid_t)`.
+            Some(unsafe { std::mem::transmute::<*mut c_void, ResponsibleForPidFn>(sym) })
+        }
+    })
 }
 
 const RESPONSIBILITY_MAX_HOPS: usize = 8;
@@ -131,7 +149,11 @@ impl ProcLookup for LiveProcLookup {
     }
 
     fn responsible_pid(&mut self, pid: pid_t) -> pid_t {
-        unsafe { responsibility_get_pid_responsible_for_pid(pid) }
+        match responsible_for_pid_fn() {
+            // SAFETY: resolved symbol has the C signature `pid_t(pid_t)`.
+            Some(responsible_for_pid) => unsafe { responsible_for_pid(pid) },
+            None => 0, // SPI unavailable: terminate the walk, keeping the exec-path grouping.
+        }
     }
 }
 

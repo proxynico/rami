@@ -50,6 +50,21 @@ dmg_path="$tmpdir/rami.dmg"
 echo "==> Downloading $dmg_url"
 curl -fL --progress-bar -o "$dmg_path" "$dmg_url"
 
+echo "==> Verifying checksum"
+if curl -fsSL -o "$dmg_path.sha256" "$dmg_url.sha256" 2>/dev/null; then
+  expected="$(awk '{print $1}' "$dmg_path.sha256")"
+  actual="$(shasum -a 256 "$dmg_path" | awk '{print $1}')"
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    echo "Checksum mismatch — refusing to install." >&2
+    echo "  expected: ${expected:-<none>}" >&2
+    echo "  actual:   $actual" >&2
+    exit 1
+  fi
+  echo "    ok ($actual)"
+else
+  echo "    no published checksum for this release; relying on notarization + Gatekeeper." >&2
+fi
+
 echo "==> Mounting DMG"
 mount_output="$(hdiutil attach "$dmg_path" -nobrowse -quiet -plist)"
 mount_point="$(echo "$mount_output" \

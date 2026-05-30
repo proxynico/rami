@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- App Sandbox is disabled because rami reads every process's memory footprint
+	     (proc_pid_rusage) and walks the responsibility chain across processes, which the
+	     sandbox forbids. This precludes Mac App Store distribution. The hardened runtime
+	     is still enabled at sign time via `codesign --options runtime` in build-app.sh. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
 </dict>

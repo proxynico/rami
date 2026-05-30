@@ -24,6 +24,9 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+CI (`.github/workflows/ci.yml`) runs these same checks, plus the ignored
+syscall smoke test and `cargo audit`, on every push and pull request.
+
 ## Local app bundle
 
 ```sh
@@ -82,6 +85,7 @@ DMG to a GitHub Release on every `v*` tag push. Required repo secrets:
 | `MACOS_NOTARY_APPLE_ID` | Apple ID email |
 | `MACOS_NOTARY_TEAM_ID` | Apple developer team ID |
 | `MACOS_NOTARY_APP_PASSWORD` | app-specific password |
+| `HOMEBREW_TAP_TOKEN` | (optional) PAT with write access to `proxynico/homebrew-tap`; enables the automatic Cask bump |
 
 Export the `.p12` from Keychain Access (right-click cert → Export) and
 encode with `base64 -i cert.p12 | pbcopy`. Workflow runs on `macos-14`, so
@@ -96,17 +100,14 @@ git push origin v0.1.1
 
 ## Publishing the Homebrew Cask
 
-The Cask formula lives in this repo at `Casks/rami.rb` as a template. To
-distribute it via `brew install --cask proxynico/tap/rami`:
+`Casks/rami.rb` is the source-of-truth template. On every `v*` tag,
+`release.yml`'s `update-tap` job renders it — filling in `version` and the
+published DMG's `sha256` — and pushes it to `proxynico/homebrew-tap`, **if**
+the `HOMEBREW_TAP_TOKEN` secret is set. One-time setup:
 
-1. Create a `proxynico/homebrew-tap` repo on GitHub (one-time).
-2. After each release, copy `Casks/rami.rb` into that tap repo, updating:
-   - `version` to match the new tag
-   - `sha256` to the SHA of the published DMG (from
-     `shasum -a 256 dist/rami-*.dmg` or the GitHub release asset details)
-   - `zap` paths only if `CFBundleIdentifier` changes from
-     `com.nicomontero.rami`
-3. Commit and push to `homebrew-tap`.
+1. Create a `proxynico/homebrew-tap` repo on GitHub.
+2. Add a `HOMEBREW_TAP_TOKEN` repo secret (fine-grained PAT with contents
+   read/write on `homebrew-tap`).
 
 Users then run:
 
@@ -114,18 +115,23 @@ Users then run:
 brew install --cask proxynico/tap/rami
 ```
 
-The longer-term move is to script step 2 into `release.yml` so the tap
-auto-bumps on every release.
+If `HOMEBREW_TAP_TOKEN` is unset the job no-ops. To render the Cask by hand,
+set `version` to the tag and `sha256` from the release's `.sha256` asset
+(adjust the `zap` paths only if `CFBundleIdentifier` ever changes from
+`com.nicomontero.rami`), then commit it to the tap.
 
 ## Repo notes
 
 - `scripts/build-app.sh` builds the release binary and assembles `rami.app`.
 - `scripts/release.sh` builds the notarized DMG.
 - `scripts/install.sh` is the `curl | bash` end-user installer (downloads
-  the latest GitHub release DMG, copies into `/Applications`, ejects the DMG,
-  leaves Gatekeeper quarantine handling intact, launches).
+  the latest GitHub release DMG, verifies it against its published `.sha256`,
+  copies into `/Applications`, ejects the DMG, leaves Gatekeeper quarantine
+  handling intact, launches).
 - `macos/Info.plist` configures accessory-app behavior with `LSUIElement`.
-- `macos/rami.entitlements` carries the hardened-runtime entitlements.
+- `macos/rami.entitlements` disables the App Sandbox (needed for the
+  cross-process memory scan); the hardened runtime is enabled by
+  `codesign --options runtime` in `build-app.sh`, not by this file.
 - `scripts/generate-icon.swift` draws the app icon and emits the `.icns`.
 - `CFBundleShortVersionString` / `CFBundleVersion` are templated from
   `Cargo.toml` at build time.

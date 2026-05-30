@@ -62,6 +62,11 @@ fi
 
 DMG_PATH="$DIST_DIR/$APP_NAME-$VERSION.dmg"
 
+emit_checksum() {
+  (cd "$DIST_DIR" && shasum -a 256 "$(basename "$DMG_PATH")" > "$(basename "$DMG_PATH").sha256")
+  echo "==> Wrote $DMG_PATH.sha256"
+}
+
 echo "==> Building and signing $APP_NAME $VERSION"
 RAMI_SIGNING_IDENTITY="$RAMI_SIGNING_IDENTITY" "$ROOT_DIR/scripts/build-app.sh" >/dev/null
 
@@ -92,6 +97,7 @@ codesign --force --sign "$RAMI_SIGNING_IDENTITY" --timestamp "$DMG_PATH"
 
 if [ "${RAMI_SKIP_NOTARIZE:-0}" = "1" ]; then
   echo "==> Skipping notarization (RAMI_SKIP_NOTARIZE=1)"
+  emit_checksum
   echo "$DMG_PATH"
   exit 0
 fi
@@ -116,6 +122,8 @@ xcrun stapler validate "$DMG_PATH"
 
 echo "==> Final Gatekeeper assessment"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG_PATH"
+
+emit_checksum
 
 echo
 echo "Done: $DMG_PATH"

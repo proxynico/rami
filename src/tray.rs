@@ -150,7 +150,7 @@ impl TrayController {
         let show_app_usage_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
-                &NSString::from_str("Hide Apps"),
+                &NSString::from_str("Show Apps"),
                 Some(sel!(toggleShowAppUsage:)),
                 &empty,
             )
@@ -159,7 +159,7 @@ impl TrayController {
             show_app_usage_item.setTarget(Some(&refresh_target));
         }
         show_app_usage_item.setEnabled(true);
-        show_app_usage_item.setState(NSControlStateValueOff);
+        show_app_usage_item.setState(NSControlStateValueOn);
 
         let launch_at_login_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -304,11 +304,11 @@ impl TrayController {
     }
 
     pub fn set_show_app_usage(&self, enabled: bool) {
-        // Item label is "Hide Apps" — checked when apps are hidden, i.e. !enabled.
+        // "Show Apps" follows the macOS convention: checked when the app list is visible.
         self.show_app_usage_item.setState(if enabled {
-            NSControlStateValueOff
-        } else {
             NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
         });
     }
 

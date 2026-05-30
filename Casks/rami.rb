@@ -1,13 +1,10 @@
 # Cask formula template for rami.
 #
-# This file is the source of truth for the Homebrew Cask published at
-# proxynico/homebrew-tap. After cutting a new release, copy this file into
-# that tap repo with:
-#
-#   - `version` updated to match the new git tag
-#   - `sha256` set to the SHA-256 of the published DMG asset
-#
-# See BUILDING.md for the full release flow.
+# Source of truth for the Homebrew Cask published at proxynico/homebrew-tap.
+# On every v* tag, release.yml's update-tap job renders this file (filling in
+# `version` and the published DMG's `sha256`) and pushes it to the tap when the
+# HOMEBREW_TAP_TOKEN secret is configured. See BUILDING.md for setup and the
+# manual fallback.
 
 cask "rami" do
   version "0.1.0"

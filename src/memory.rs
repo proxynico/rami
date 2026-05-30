@@ -27,6 +27,9 @@ pub struct MemoryCounts {
 }
 
 pub fn snapshot_from_counts(counts: MemoryCounts, swap_used_bytes: u64) -> MemorySnapshot {
+    // "Used" = active + wired + compressed pages from host_statistics64. This is a simple,
+    // stable definition; Activity Monitor's "Memory Used" applies extra app-memory
+    // attribution, so this figure can drift from it by a few percent.
     let used_pages = counts
         .active_pages
         .saturating_add(counts.wired_pages)
