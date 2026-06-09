@@ -56,7 +56,7 @@ fn dropdown_model_splits_memory_and_swap_rows() {
     };
 
     assert_eq!(memory.primary, "9.0 / 17.2 GB");
-    assert_eq!(memory.tail, None);
+    assert_eq!(memory.tail.as_deref(), Some("53%"));
     let swap = swap.expect("swap row present when nonzero");
     assert_eq!(swap.primary, "Swap");
     assert_eq!(swap.tail.as_deref(), Some("4.4 GB"));

@@ -1,7 +1,7 @@
 use crate::model::MemorySnapshot;
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 
-const APP_NAME_MAX_CHARS: usize = 18;
+const APP_NAME_MAX_CHARS: usize = 16;
 const APP_USAGE_ROW_LIMIT: usize = 5;
 
 pub fn gauge_symbol_name(percent: u8) -> &'static str {
@@ -93,7 +93,7 @@ pub fn dropdown_model_with_apps(
     DropdownModel::Loaded {
         memory: StatRow {
             primary: gb_pair(snapshot.used_bytes, snapshot.total_bytes),
-            tail: None,
+            tail: Some(format!("{}%", snapshot.used_percent)),
             quit_key: None,
             bundle_path: None,
         },
@@ -297,7 +297,31 @@ mod tests {
     }
 
     #[test]
-    fn dropdown_model_memory_row_has_no_tail() {
+    fn dropdown_model_app_row_truncates_names_before_tail_column() {
+        let usage = vec![AppMemoryUsage {
+            name: "Codex Computer Use".to_string(),
+            group_key: "/Applications/Codex Computer Use.app".to_string(),
+            footprint_bytes: 81_000_000,
+            pids: vec![1],
+            can_quit: true,
+            delta_bytes: None,
+        }];
+        let model =
+            dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
+        match model {
+            DropdownModel::Loaded { apps, .. } => match apps {
+                AppSectionDisplay::Rows { rows, .. } => {
+                    assert_eq!(rows[0].primary, "Codex Computer …");
+                    assert_eq!(rows[0].tail.as_deref(), Some("81 MB"));
+                }
+                _ => panic!("expected Rows"),
+            },
+            _ => panic!("expected Loaded"),
+        }
+    }
+
+    #[test]
+    fn dropdown_model_memory_row_shows_percent_tail() {
         let snapshot = MemorySnapshot {
             used_bytes: 9_000_000_000,
             total_bytes: 16_000_000_000,
@@ -307,7 +331,7 @@ mod tests {
         let DropdownModel::Loaded { memory, .. } = dropdown_model(snapshot) else {
             panic!("expected Loaded model");
         };
-        assert_eq!(memory.tail, None);
+        assert_eq!(memory.tail.as_deref(), Some("56%"));
     }
 
     #[test]

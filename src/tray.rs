@@ -910,7 +910,7 @@ mod tests {
             vec![
                 MenuEntry::Stat {
                     primary: "5.7 / 16.0 GB",
-                    tail: None,
+                    tail: Some("47%"),
                     is_high: false,
                 },
                 MenuEntry::Stat {
