@@ -1,0 +1,32 @@
+name: CI
+
+# Format check, build, and tests on every pull request and on push to main.
+# Release/notarization lives in release.yml (tag-triggered).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    # objc2-app-kit bindings only build on macOS.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      # Toolchain (1.95.0 + clippy/rustfmt) is pinned by rust-toolchain.toml.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Test
+        run: cargo test --locked
