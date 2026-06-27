@@ -329,6 +329,16 @@ fn install_app_state(state: &Rc<AppState>) {
     });
 }
 
+/// Open the latest release page in the user's default browser. Uses `open`
+/// rather than NSWorkspace/NSURL to avoid pulling in extra framework
+/// features; the repository URL comes from Cargo.toml.
+fn open_releases_page() {
+    let url = format!("{}/releases/latest", env!("CARGO_PKG_REPOSITORY"));
+    if let Err(err) = std::process::Command::new("open").arg(&url).status() {
+        eprintln!("failed to open releases page: {err}");
+    }
+}
+
 fn refresh_current_app() {
     let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
     if let Some(state) = state {
@@ -389,6 +399,11 @@ define_class!(
             if let Some(state) = state {
                 state.copy_diagnostic_report();
             }
+        }
+
+        #[unsafe(method(checkForUpdates:))]
+        fn check_for_updates(&self, _sender: &AnyObject) {
+            open_releases_page();
         }
 
         #[unsafe(method(reopenMenu:))]

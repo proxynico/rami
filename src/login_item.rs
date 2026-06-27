@@ -2,10 +2,18 @@ use objc2::ffi::NSInteger;
 use objc2::rc::Retained;
 use objc2::{extern_class, extern_methods};
 use objc2_foundation::{NSError, NSObject};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 pub const BUNDLE_IDENTIFIER: &str = "com.nicomontero.rami";
+
+/// `sfltool dumpbtm` is slow and on Apple's deprecation path. We only need it
+/// to detect launch-at-login enabled via System Settings (the case SMAppService
+/// reports as Disabled), so cache that lookup for a short window rather than
+/// shelling out on every refresh.
+const EXTERNAL_CHECK_TTL: Duration = Duration::from_secs(30);
 
 #[link(name = "ServiceManagement", kind = "framework")]
 unsafe extern "C" {}
@@ -80,6 +88,7 @@ impl SMAppService {
 
 pub struct LaunchAtLoginController {
     service: Retained<SMAppService>,
+    external_cache: RefCell<Option<(bool, Instant)>>,
 }
 
 impl Default for LaunchAtLoginController {
@@ -92,6 +101,7 @@ impl LaunchAtLoginController {
     pub fn new() -> Self {
         Self {
             service: SMAppService::main_app_service(),
+            external_cache: RefCell::new(None),
         }
     }
 
@@ -103,7 +113,7 @@ impl LaunchAtLoginController {
         ) {
             return service_status;
         }
-        if external_login_item_is_enabled() {
+        if self.external_login_item_is_enabled_cached() {
             return LaunchAtLoginStatus::EnabledExternal;
         }
         service_status
@@ -119,9 +129,30 @@ impl LaunchAtLoginController {
                 return Ok(self.status())
             }
         }
-
+        // The SMAppService state we just changed is cheap to re-read, but clear
+        // the external cache so the post-toggle status reflects reality.
+        self.external_cache.borrow_mut().take();
         Ok(self.status())
     }
+
+    fn external_login_item_is_enabled_cached(&self) -> bool {
+        let now = Instant::now();
+        if let Some(value) = fresh_cached(*self.external_cache.borrow(), now, EXTERNAL_CHECK_TTL) {
+            return value;
+        }
+        let result = external_login_item_is_enabled();
+        *self.external_cache.borrow_mut() = Some((result, now));
+        result
+    }
+}
+
+/// Return the cached value if it is still within its TTL, else `None`.
+fn fresh_cached(cached: Option<(bool, Instant)>, now: Instant, ttl: Duration) -> Option<bool> {
+    let (value, sampled_at) = cached?;
+    now.duration_since(sampled_at)
+        .checked_sub(ttl)
+        .is_none()
+        .then_some(value)
 }
 
 pub(crate) fn current_app_bundle_path() -> Option<PathBuf> {
@@ -196,6 +227,24 @@ mod tests {
             app_bundle_path_from_executable(path).as_deref(),
             Some(std::path::Path::new("/Applications/rami.app"))
         );
+    }
+
+    #[test]
+    fn fresh_cached_returns_value_within_ttl() {
+        let now = Instant::now();
+        let cached = Some((true, now));
+        assert_eq!(fresh_cached(cached, now, EXTERNAL_CHECK_TTL), Some(true));
+        // Just inside the TTL window.
+        let just_stale = now + EXTERNAL_CHECK_TTL;
+        assert_eq!(
+            fresh_cached(Some((false, now)), just_stale, EXTERNAL_CHECK_TTL),
+            None
+        );
+    }
+
+    #[test]
+    fn fresh_cached_returns_none_when_unset_or_stale() {
+        assert_eq!(fresh_cached(None, Instant::now(), EXTERNAL_CHECK_TTL), None);
     }
 
     #[test]

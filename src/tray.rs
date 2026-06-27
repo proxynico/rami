@@ -3,7 +3,7 @@ use crate::format::{
     placeholder_dropdown_model, AppSectionDisplay, DropdownModel, StatRow,
 };
 use crate::login_item::LaunchAtLoginStatus;
-use crate::model::MemorySnapshot;
+use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot};
 use crate::process_memory::AppMemorySnapshot;
 use crate::sparkline;
 #[cfg(test)]
@@ -59,6 +59,8 @@ pub struct TrayController {
     show_app_usage_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
     _diagnostics_item: Retained<NSMenuItem>,
+    _about_item: Retained<NSMenuItem>,
+    _check_updates_item: Retained<NSMenuItem>,
     settings_item: Retained<NSMenuItem>,
     _settings_submenu: Retained<NSMenu>,
     quit_item: Retained<NSMenuItem>,
@@ -66,6 +68,7 @@ pub struct TrayController {
     play_icon: Option<Retained<NSImage>>,
     last_image_name: RefCell<Option<&'static str>>,
     last_trend: Cell<MemoryTrend>,
+    last_pressure: Cell<MemoryPressure>,
     shape: Cell<MenuShape>,
     last_memory_row: RefCell<Option<StatRow>>,
     last_available_row: RefCell<Option<StatRow>>,
@@ -204,12 +207,45 @@ impl TrayController {
             diagnostics_item.setImage(Some(&img));
         }
 
+        let version = env!("CARGO_PKG_VERSION");
+        let about_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&format!("rami {version}")),
+                None,
+                &empty,
+            )
+        };
+        about_item.setEnabled(false);
+        if let Some(img) = make_action_icon("info.circle") {
+            about_item.setImage(Some(&img));
+        }
+
+        let check_updates_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Check for Updates"),
+                Some(sel!(checkForUpdates:)),
+                &empty,
+            )
+        };
+        unsafe {
+            check_updates_item.setTarget(Some(&refresh_target));
+        }
+        check_updates_item.setEnabled(true);
+        if let Some(img) = make_action_icon("arrow.up.circle") {
+            check_updates_item.setImage(Some(&img));
+        }
+
         let settings_submenu = NSMenu::new(mtm);
         settings_submenu.setAutoenablesItems(false);
         settings_submenu.addItem(&auto_refresh_item);
         settings_submenu.addItem(&show_app_usage_item);
         settings_submenu.addItem(&launch_at_login_item);
         settings_submenu.addItem(&diagnostics_item);
+        settings_submenu.addItem(&NSMenuItem::separatorItem(mtm));
+        settings_submenu.addItem(&check_updates_item);
+        settings_submenu.addItem(&about_item);
 
         let settings_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -261,6 +297,8 @@ impl TrayController {
             show_app_usage_item,
             launch_at_login_item,
             _diagnostics_item: diagnostics_item,
+            _about_item: about_item,
+            _check_updates_item: check_updates_item,
             settings_item,
             _settings_submenu: settings_submenu,
             quit_item,
@@ -268,6 +306,7 @@ impl TrayController {
             play_icon,
             last_image_name: RefCell::new(None),
             last_trend: Cell::new(MemoryTrend::Stable),
+            last_pressure: Cell::new(MemoryPressure::Normal),
             shape: Cell::new(MenuShape::Uninitialized),
             last_memory_row: RefCell::new(None),
             last_available_row: RefCell::new(None),
@@ -279,7 +318,7 @@ impl TrayController {
             last_launch_checked: Cell::new(false),
             last_launch_enabled: Cell::new(false),
         };
-        controller.set_gauge(0, MemoryTrend::Stable, mtm);
+        controller.set_gauge(0, MemoryTrend::Stable, MemoryPressure::Normal, mtm);
         controller.apply_model(
             &placeholder_dropdown_model(),
             &[],
@@ -301,7 +340,8 @@ impl TrayController {
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
     ) {
-        self.set_gauge(snapshot.used_percent, trend, mtm);
+        let pressure = classify_pressure(snapshot.available_bytes, snapshot.total_bytes);
+        self.set_gauge(snapshot.used_percent, trend, pressure, mtm);
         self.set_button_help(
             &gauge_tooltip(
                 snapshot.used_percent,
@@ -343,7 +383,7 @@ impl TrayController {
         launch_at_login_status: LaunchAtLoginStatus,
         mtm: MainThreadMarker,
     ) {
-        self.set_gauge(0, MemoryTrend::Stable, mtm);
+        self.set_gauge(0, MemoryTrend::Stable, MemoryPressure::Normal, mtm);
         self.set_button_help("rami — memory unavailable", "rami, memory unavailable", mtm);
         self.apply_model(
             &placeholder_dropdown_model(),
@@ -368,11 +408,18 @@ impl TrayController {
         }
     }
 
-    fn set_gauge(&self, percent: u8, trend: MemoryTrend, mtm: MainThreadMarker) {
+    fn set_gauge(
+        &self,
+        percent: u8,
+        trend: MemoryTrend,
+        pressure: MemoryPressure,
+        mtm: MainThreadMarker,
+    ) {
         let name = gauge_symbol_name(percent);
         let name_unchanged = *self.last_image_name.borrow() == Some(name);
         let trend_unchanged = self.last_trend.get() == trend;
-        if name_unchanged && trend_unchanged {
+        let pressure_unchanged = self.last_pressure.get() == pressure;
+        if name_unchanged && trend_unchanged && pressure_unchanged {
             return;
         }
 
@@ -388,8 +435,18 @@ impl TrayController {
                     *self.last_image_name.borrow_mut() = None;
                 }
             }
-            button.setContentTintColor(None);
+            // Tint the template gauge to flag memory pressure: red when
+            // nearly exhausted, orange when tight, otherwise the default
+            // appearance. The non-template rising-fast composite ignores the
+            // tint, so the orange badge still reads as a distinct signal.
+            let tint = match pressure {
+                MemoryPressure::Critical => Some(NSColor::systemRedColor()),
+                MemoryPressure::Warning => Some(NSColor::systemOrangeColor()),
+                MemoryPressure::Normal => None,
+            };
+            button.setContentTintColor(tint.as_deref());
             self.last_trend.set(trend);
+            self.last_pressure.set(pressure);
         }
     }
 
