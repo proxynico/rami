@@ -77,6 +77,7 @@ pub enum DropdownModel {
     Loading,
     Loaded {
         memory: StatRow,
+        available: StatRow,
         apps: AppSectionDisplay,
         swap: Option<StatRow>,
     },
@@ -94,6 +95,12 @@ pub fn dropdown_model_with_apps(
         memory: StatRow {
             primary: gb_pair(snapshot.used_bytes, snapshot.total_bytes),
             tail: Some(format!("{}%", snapshot.used_percent)),
+            quit_key: None,
+            bundle_path: None,
+        },
+        available: StatRow {
+            primary: "Available".to_string(),
+            tail: Some(mem_text(snapshot.available_bytes)),
             quit_key: None,
             bundle_path: None,
         },
@@ -165,6 +172,7 @@ mod tests {
             total_bytes,
             used_percent: 50,
             swap_used_bytes: 0,
+            available_bytes: total_bytes / 2,
         }
     }
 
@@ -327,6 +335,7 @@ mod tests {
             total_bytes: 16_000_000_000,
             used_percent: 56,
             swap_used_bytes: 0,
+            available_bytes: 7_000_000_000,
         };
         let DropdownModel::Loaded { memory, .. } = dropdown_model(snapshot) else {
             panic!("expected Loaded model");

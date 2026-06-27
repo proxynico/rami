@@ -49,6 +49,7 @@ fn dropdown_model_splits_memory_and_swap_rows() {
         total_bytes: 17_179_869_184,
         used_percent: 53,
         swap_used_bytes: 4_414_120_000,
+        available_bytes: 8_160_449_024,
     };
 
     let DropdownModel::Loaded { memory, swap, .. } = dropdown_model(snapshot) else {
@@ -69,6 +70,7 @@ fn dropdown_model_hides_swap_when_zero() {
         total_bytes: 16_000_000_000,
         used_percent: 31,
         swap_used_bytes: 0,
+        available_bytes: 11_000_000_000,
     };
 
     let DropdownModel::Loaded { swap, .. } = dropdown_model(snapshot) else {

@@ -8,6 +8,10 @@ fn snapshot_uses_active_wired_and_compressed_bytes() {
         active_pages: 30,
         wired_pages: 20,
         compressed_pages: 10,
+        free_pages: 0,
+        inactive_pages: 0,
+        speculative_pages: 0,
+        purgeable_pages: 0,
     };
 
     let snapshot = snapshot_from_counts(counts, 0);
@@ -19,6 +23,26 @@ fn snapshot_uses_active_wired_and_compressed_bytes() {
 }
 
 #[test]
+fn snapshot_sums_available_from_reclaimable_pools() {
+    let counts = MemoryCounts {
+        total_bytes: 1000,
+        page_size: 10,
+        active_pages: 30,
+        wired_pages: 20,
+        compressed_pages: 10,
+        free_pages: 5,
+        inactive_pages: 4,
+        speculative_pages: 1,
+        purgeable_pages: 2,
+    };
+
+    let snapshot = snapshot_from_counts(counts, 0);
+
+    // (5 + 4 + 1 + 2) pages * 10 byte pages = 120 bytes reclaimable.
+    assert_eq!(snapshot.available_bytes, 120);
+}
+
+#[test]
 fn snapshot_rounds_to_nearest_whole_percent() {
     let counts = MemoryCounts {
         total_bytes: 1000,
@@ -26,6 +50,10 @@ fn snapshot_rounds_to_nearest_whole_percent() {
         active_pages: 524,
         wired_pages: 0,
         compressed_pages: 0,
+        free_pages: 0,
+        inactive_pages: 0,
+        speculative_pages: 0,
+        purgeable_pages: 0,
     };
 
     let snapshot = snapshot_from_counts(counts, 0);
@@ -41,6 +69,10 @@ fn snapshot_clamps_when_used_exceeds_total() {
         active_pages: 8,
         wired_pages: 3,
         compressed_pages: 2,
+        free_pages: 0,
+        inactive_pages: 0,
+        speculative_pages: 0,
+        purgeable_pages: 0,
     };
 
     let snapshot = snapshot_from_counts(counts, 0);
@@ -58,6 +90,10 @@ fn snapshot_returns_zero_percent_when_total_bytes_is_zero() {
         active_pages: 8,
         wired_pages: 3,
         compressed_pages: 2,
+        free_pages: 0,
+        inactive_pages: 0,
+        speculative_pages: 0,
+        purgeable_pages: 0,
     };
 
     let snapshot = snapshot_from_counts(counts, 0);
@@ -86,6 +122,10 @@ fn snapshot_carries_swap_usage() {
         active_pages: 30,
         wired_pages: 20,
         compressed_pages: 10,
+        free_pages: 0,
+        inactive_pages: 0,
+        speculative_pages: 0,
+        purgeable_pages: 0,
     };
 
     let snapshot = snapshot_from_counts(counts, 2_000);

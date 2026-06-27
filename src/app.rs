@@ -165,11 +165,13 @@ impl AppState {
                 }
 
                 let apps = self.app_memory.borrow();
+                let history = self.trend_tracker.borrow().samples();
                 let launch_at_login_status = self.launch_at_login_status.get();
                 self.tray.set_snapshot(
                     snapshot,
                     trend,
                     &apps,
+                    &history,
                     launch_at_login_status,
                     self.auto_refresh_enabled.get(),
                     mtm,

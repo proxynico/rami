@@ -3,6 +3,7 @@ pub mod format;
 pub mod lock;
 pub mod memory;
 pub mod model;
+pub mod sparkline;
 
 mod app_control;
 mod diagnostics;

@@ -5,6 +5,7 @@ use crate::format::{
 use crate::login_item::LaunchAtLoginStatus;
 use crate::model::MemorySnapshot;
 use crate::process_memory::AppMemorySnapshot;
+use crate::sparkline;
 #[cfg(test)]
 use crate::status_icon::{badge_for_state, BadgeKind};
 use crate::status_icon::{make_status_image, StatusImage};
@@ -43,7 +44,10 @@ pub struct TrayController {
     status_item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
     memory_item: Retained<NSMenuItem>,
+    available_item: Retained<NSMenuItem>,
     swap_item: Retained<NSMenuItem>,
+    sparkline_item: Retained<NSMenuItem>,
+    sparkline_view: Retained<sparkline::SparklineView>,
     loading_item: Retained<NSMenuItem>,
     app_loading_item: Retained<NSMenuItem>,
     app_unavailable_item: Retained<NSMenuItem>,
@@ -64,7 +68,9 @@ pub struct TrayController {
     last_trend: Cell<MemoryTrend>,
     shape: Cell<MenuShape>,
     last_memory_row: RefCell<Option<StatRow>>,
+    last_available_row: RefCell<Option<StatRow>>,
     last_swap_row: RefCell<Option<StatRow>>,
+    last_history: RefCell<Vec<u64>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
     last_auto_refresh_enabled: Cell<bool>,
     last_launch_title: RefCell<String>,
@@ -85,8 +91,15 @@ impl TrayController {
         let placeholder_icon = make_placeholder_icon();
         let memory_item = make_stat_item(mtm);
         set_row_icon(&memory_item, "memorychip", &placeholder_icon);
+        let available_item = make_stat_item(mtm);
+        set_row_icon(&available_item, "tray.and.arrow.down", &placeholder_icon);
         let swap_item = make_stat_item(mtm);
         set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
+        let sparkline_item = make_stat_item(mtm);
+        let sparkline_view = sparkline::SparklineView::new(mtm, Vec::new());
+        unsafe {
+            let _: () = msg_send![&sparkline_item, setView: &*sparkline_view];
+        }
         let loading_item = make_stat_item(mtm);
         loading_item.setImage(Some(&placeholder_icon));
         loading_item.setAttributedTitle(Some(&loading_attributed_title()));
@@ -233,7 +246,10 @@ impl TrayController {
             status_item,
             menu,
             memory_item,
+            available_item,
             swap_item,
+            sparkline_item,
+            sparkline_view,
             loading_item,
             app_loading_item,
             app_unavailable_item,
@@ -254,7 +270,9 @@ impl TrayController {
             last_trend: Cell::new(MemoryTrend::Stable),
             shape: Cell::new(MenuShape::Uninitialized),
             last_memory_row: RefCell::new(None),
+            last_available_row: RefCell::new(None),
             last_swap_row: RefCell::new(None),
+            last_history: RefCell::new(Vec::new()),
             last_app_section: RefCell::new(None),
             last_auto_refresh_enabled: Cell::new(true),
             last_launch_title: RefCell::new(String::new()),
@@ -264,6 +282,7 @@ impl TrayController {
         controller.set_gauge(0, MemoryTrend::Stable, mtm);
         controller.apply_model(
             &placeholder_dropdown_model(),
+            &[],
             LaunchAtLoginStatus::Disabled,
             true,
             mtm,
@@ -277,6 +296,7 @@ impl TrayController {
         snapshot: MemorySnapshot,
         trend: MemoryTrend,
         apps: &AppMemorySnapshot,
+        history: &[u64],
         launch_at_login_status: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
@@ -297,6 +317,7 @@ impl TrayController {
         );
         self.apply_model(
             &dropdown_model_with_apps(snapshot, apps),
+            history,
             launch_at_login_status,
             auto_refresh_enabled,
             mtm,
@@ -326,6 +347,7 @@ impl TrayController {
         self.set_button_help("rami — memory unavailable", "rami, memory unavailable", mtm);
         self.apply_model(
             &placeholder_dropdown_model(),
+            &[],
             launch_at_login_status,
             true,
             mtm,
@@ -374,6 +396,7 @@ impl TrayController {
     fn apply_model(
         &self,
         model: &DropdownModel,
+        history: &[u64],
         launch_at_login_status: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
@@ -383,15 +406,31 @@ impl TrayController {
             self.rebuild_menu(new_shape, mtm);
             self.shape.set(new_shape);
             self.last_memory_row.borrow_mut().take();
+            self.last_available_row.borrow_mut().take();
             self.last_swap_row.borrow_mut().take();
+            self.last_history.borrow_mut().clear();
             self.last_app_section.borrow_mut().take();
         }
 
-        if let DropdownModel::Loaded { memory, apps, swap } = model {
+        if let DropdownModel::Loaded {
+            memory,
+            available,
+            apps,
+            swap,
+        } = model
+        {
             if self.last_memory_row.borrow().as_ref() != Some(memory) {
                 self.memory_item
                     .setAttributedTitle(Some(&stat_row_attributed(memory, NSColor::labelColor())));
                 *self.last_memory_row.borrow_mut() = Some(memory.clone());
+            }
+            if self.last_available_row.borrow().as_ref() != Some(available) {
+                self.available_item
+                    .setAttributedTitle(Some(&stat_row_attributed(
+                        available,
+                        NSColor::labelColor(),
+                    )));
+                *self.last_available_row.borrow_mut() = Some(available.clone());
             }
             self.update_app_section(apps);
             if self.last_swap_row.borrow().as_ref() != swap.as_ref() {
@@ -402,6 +441,10 @@ impl TrayController {
                     )));
                 }
                 *self.last_swap_row.borrow_mut() = swap.clone();
+            }
+            if self.last_history.borrow().as_slice() != history {
+                self.sparkline_view.update(history.to_vec());
+                *self.last_history.borrow_mut() = history.to_vec();
             }
         }
 
@@ -449,9 +492,11 @@ impl TrayController {
             }
             MenuShape::Loaded { apps, show_swap } => {
                 self.menu.addItem(&self.memory_item);
+                self.menu.addItem(&self.available_item);
                 if show_swap {
                     self.menu.addItem(&self.swap_item);
                 }
+                self.menu.addItem(&self.sparkline_item);
                 match apps {
                     AppShape::Hidden => {}
                     AppShape::Loading => {
@@ -759,6 +804,7 @@ pub(crate) enum MenuEntry<'a> {
         tail: Option<&'a str>,
         is_high: bool,
     },
+    Sparkline,
     Loading,
     AppLoading,
     AppUnavailable,
@@ -798,10 +844,20 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
         DropdownModel::Loading => {
             entries.push(MenuEntry::Loading);
         }
-        DropdownModel::Loaded { memory, apps, swap } => {
+        DropdownModel::Loaded {
+            memory,
+            available,
+            apps,
+            swap,
+        } => {
             entries.push(MenuEntry::Stat {
                 primary: &memory.primary,
                 tail: memory.tail.as_deref(),
+                is_high: false,
+            });
+            entries.push(MenuEntry::Stat {
+                primary: &available.primary,
+                tail: available.tail.as_deref(),
                 is_high: false,
             });
             if let Some(swap) = swap {
@@ -811,6 +867,7 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
                     is_high: false,
                 });
             }
+            entries.push(MenuEntry::Sparkline);
             match apps {
                 AppSectionDisplay::Hidden => {}
                 AppSectionDisplay::Loading => {
@@ -871,6 +928,7 @@ mod tests {
             total_bytes: 16_000_000_000,
             used_percent: 47,
             swap_used_bytes: 1_200_000_000,
+            available_bytes: 10_300_000_000,
         }
     }
 
@@ -902,6 +960,7 @@ mod tests {
             total_bytes: 16_000_000_000,
             used_percent: 47,
             swap_used_bytes: 1_200_000_000,
+            available_bytes: 10_300_000_000,
         };
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Enabled, true);
@@ -914,10 +973,16 @@ mod tests {
                     is_high: false,
                 },
                 MenuEntry::Stat {
+                    primary: "Available",
+                    tail: Some("10.3 GB"),
+                    is_high: false,
+                },
+                MenuEntry::Stat {
                     primary: "Swap",
                     tail: Some("1.2 GB"),
                     is_high: false,
                 },
+                MenuEntry::Sparkline,
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
                 MenuEntry::Settings {
@@ -938,6 +1003,7 @@ mod tests {
             total_bytes: 16_000_000_000,
             used_percent: 47,
             swap_used_bytes: 0,
+            available_bytes: 10_300_000_000,
         };
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
@@ -964,16 +1030,16 @@ mod tests {
     fn loaded_with_apps_loading_renders_loading_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[2], MenuEntry::Separator);
-        assert_eq!(entries[3], MenuEntry::AppLoading);
+        assert_eq!(entries[4], MenuEntry::Separator);
+        assert_eq!(entries[5], MenuEntry::AppLoading);
     }
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[2], MenuEntry::Separator);
-        assert_eq!(entries[3], MenuEntry::AppUnavailable);
+        assert_eq!(entries[4], MenuEntry::Separator);
+        assert_eq!(entries[5], MenuEntry::AppUnavailable);
     }
 
     #[test]
@@ -1024,7 +1090,7 @@ mod tests {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage));
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
 
-        // Memory, Swap, separator, two app rows, separator.
+        // Memory, Available, Swap, Sparkline, separator, two app rows, separator.
         assert!(matches!(
             entries[0],
             MenuEntry::Stat {
@@ -1035,13 +1101,21 @@ mod tests {
         assert!(matches!(
             entries[1],
             MenuEntry::Stat {
+                primary: "Available",
+                ..
+            }
+        ));
+        assert!(matches!(
+            entries[2],
+            MenuEntry::Stat {
                 primary: "Swap",
                 ..
             }
         ));
-        assert_eq!(entries[2], MenuEntry::Separator);
+        assert_eq!(entries[3], MenuEntry::Sparkline);
+        assert_eq!(entries[4], MenuEntry::Separator);
         assert_eq!(
-            entries[3],
+            entries[5],
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
@@ -1049,13 +1123,13 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[4],
+            entries[6],
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
                 quit_key: Some("/Applications/Chrome.app"),
             }
         );
-        assert_eq!(entries[5], MenuEntry::Separator);
+        assert_eq!(entries[7], MenuEntry::Separator);
     }
 }

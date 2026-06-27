@@ -62,6 +62,10 @@ pub(crate) fn build_diagnostic_report(input: DiagnosticReportInput<'_>) -> Strin
                 gb_pair(snapshot.used_bytes, snapshot.total_bytes),
                 snapshot.used_percent
             ));
+            out.push_str(&format!(
+                "Available: {}\n",
+                mem_text(snapshot.available_bytes)
+            ));
             out.push_str(&format!("Swap: {}\n", mem_text(snapshot.swap_used_bytes)));
         }
         None => out.push_str("Memory: unavailable\nSwap: unavailable\n"),
@@ -131,6 +135,7 @@ mod tests {
                 total_bytes: 18_000_000_000,
                 used_percent: 51,
                 swap_used_bytes: 400_000_000,
+                available_bytes: 8_900_000_000,
             }),
             apps: &apps,
         });
@@ -143,6 +148,7 @@ mod tests {
         assert!(report.contains("Architecture: aarch64"));
         assert!(report.contains("Launch at login: Enabled via System Settings"));
         assert!(report.contains("Memory: 9.1 / 18.0 GB (51%)"));
+        assert!(report.contains("Available: 8.9 GB"));
         assert!(report.contains("Swap: 400 MB"));
         assert!(report.contains("- Cursor: 2.1 GB (+350 MB)"));
     }

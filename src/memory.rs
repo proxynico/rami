@@ -24,6 +24,10 @@ pub struct MemoryCounts {
     pub active_pages: u64,
     pub wired_pages: u64,
     pub compressed_pages: u64,
+    pub free_pages: u64,
+    pub inactive_pages: u64,
+    pub speculative_pages: u64,
+    pub purgeable_pages: u64,
 }
 
 pub fn snapshot_from_counts(counts: MemoryCounts, swap_used_bytes: u64) -> MemorySnapshot {
@@ -35,6 +39,16 @@ pub fn snapshot_from_counts(counts: MemoryCounts, swap_used_bytes: u64) -> Memor
         .saturating_add(counts.wired_pages)
         .saturating_add(counts.compressed_pages);
     let used_bytes = used_pages.saturating_mul(counts.page_size);
+
+    // "Available" = free + inactive + speculative + purgeable: pages the system can
+    // reclaim without swapping. A rough mirror of Activity Monitor's "Memory Available";
+    // same few-percent drift caveat as `used_bytes`.
+    let available_pages = counts
+        .free_pages
+        .saturating_add(counts.inactive_pages)
+        .saturating_add(counts.speculative_pages)
+        .saturating_add(counts.purgeable_pages);
+    let available_bytes = available_pages.saturating_mul(counts.page_size);
 
     let raw_percent = if counts.total_bytes == 0 {
         0.0
@@ -49,6 +63,7 @@ pub fn snapshot_from_counts(counts: MemoryCounts, swap_used_bytes: u64) -> Memor
         total_bytes: counts.total_bytes,
         used_percent,
         swap_used_bytes,
+        available_bytes,
     }
 }
 
@@ -132,6 +147,10 @@ impl MemorySampler {
                 active_pages: stats.active_count as u64,
                 wired_pages: stats.wire_count as u64,
                 compressed_pages: stats.compressor_page_count as u64,
+                free_pages: stats.free_count as u64,
+                inactive_pages: stats.inactive_count as u64,
+                speculative_pages: stats.speculative_count as u64,
+                purgeable_pages: stats.purgeable_count as u64,
             },
             swap_used_bytes,
         ))

@@ -35,6 +35,12 @@ impl MemoryTrendTracker {
         let delta = used_bytes as i64 - *oldest as i64;
         classify_memory_trend(delta)
     }
+
+    /// Snapshot of the rolling window, oldest first. Used to draw the
+    /// menu sparkline.
+    pub fn samples(&self) -> Vec<u64> {
+        self.samples.iter().copied().collect()
+    }
 }
 
 pub fn classify_memory_trend(delta_bytes: i64) -> MemoryTrend {
