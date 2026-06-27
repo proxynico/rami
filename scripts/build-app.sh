@@ -60,3 +60,20 @@ else
 fi
 
 printf '%s\n' "$APP_DIR"
+
+# Optionally install the freshly built bundle into /Applications and relaunch
+# it, so the running app and the launch-at-login target stay in sync with this
+# build. Enable with RAMI_INSTALL=1.
+if [ "${RAMI_INSTALL:-0}" = "1" ]; then
+  INSTALL_DIR="/Applications/$APP_NAME.app"
+  echo "==> Installing $APP_DIR -> $INSTALL_DIR"
+  if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+    echo "==> Quitting running $APP_NAME"
+    pkill -x "$APP_NAME" || true
+    sleep 1
+  fi
+  rm -rf "$INSTALL_DIR"
+  cp -R "$APP_DIR" "$INSTALL_DIR"
+  open "$INSTALL_DIR"
+  echo "==> Launched $INSTALL_DIR"
+fi
