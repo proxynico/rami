@@ -1,5 +1,6 @@
 use crate::model::MemorySnapshot;
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
+use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 
 const APP_NAME_MAX_CHARS: usize = 16;
 const APP_USAGE_ROW_LIMIT: usize = 5;
@@ -14,14 +15,18 @@ pub fn gauge_symbol_name(percent: u8) -> &'static str {
     }
 }
 
+/// Binary gibibytes (1024³), matching Activity Monitor and marketed RAM sizes.
+const ONE_GIB_BYTES: u64 = 1_073_741_824;
+const ONE_MIB_BYTES: u64 = 1_048_576;
+
 pub fn gb_text(bytes: u64) -> String {
-    let gb = bytes as f64 / 1_000_000_000_f64;
+    let gb = bytes as f64 / ONE_GIB_BYTES as f64;
     format!("{gb:.1} GB")
 }
 
 pub fn gb_pair(used_bytes: u64, total_bytes: u64) -> String {
-    let used = used_bytes as f64 / 1_000_000_000_f64;
-    let total = total_bytes as f64 / 1_000_000_000_f64;
+    let used = used_bytes as f64 / ONE_GIB_BYTES as f64;
+    let total = total_bytes as f64 / ONE_GIB_BYTES as f64;
     format!("{used:.1} / {total:.1} GB")
 }
 
@@ -32,18 +37,16 @@ pub fn gauge_tooltip(used_percent: u8, used_bytes: u64, total_bytes: u64) -> Str
 
 /// VoiceOver label for the menu-bar gauge, e.g. "Memory 47 percent, 7.2 of 16.0 GB used".
 pub fn gauge_accessibility_label(used_percent: u8, used_bytes: u64, total_bytes: u64) -> String {
-    let used = used_bytes as f64 / 1_000_000_000_f64;
-    let total = total_bytes as f64 / 1_000_000_000_f64;
+    let used = used_bytes as f64 / ONE_GIB_BYTES as f64;
+    let total = total_bytes as f64 / ONE_GIB_BYTES as f64;
     format!("Memory {used_percent} percent, {used:.1} of {total:.1} GB used")
 }
 
-const ONE_GB_BYTES: u64 = 1_000_000_000;
-
 pub fn mem_text(bytes: u64) -> String {
-    if bytes >= ONE_GB_BYTES {
+    if bytes >= ONE_GIB_BYTES {
         gb_text(bytes)
     } else {
-        let mb = (bytes as f64 / 1_000_000_f64).round() as u64;
+        let mb = (bytes as f64 / ONE_MIB_BYTES as f64).round() as u64;
         format!("{mb} MB")
     }
 }
@@ -132,7 +135,10 @@ fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
 }
 
 fn app_row(app: &AppMemoryUsage) -> StatRow {
-    let tail = if let Some(delta) = app.delta_bytes.filter(|delta| *delta >= 50_000_000) {
+    let tail = if let Some(delta) = app
+        .delta_bytes
+        .filter(|delta| *delta >= MEANINGFUL_APP_DELTA_BYTES)
+    {
         format!(
             "{}\t{}",
             mem_text(app.footprint_bytes),
@@ -176,6 +182,8 @@ mod tests {
         }
     }
 
+    const SIXTEEN_GIB: u64 = 17_179_869_184;
+
     #[test]
     fn gauge_symbol_name_buckets_by_percent() {
         assert_eq!(gauge_symbol_name(0), "gauge.with.dots.needle.0percent");
@@ -193,7 +201,7 @@ mod tests {
     #[test]
     fn gauge_tooltip_pairs_percent_with_used_over_total() {
         assert_eq!(
-            gauge_tooltip(47, 7_200_000_000, 16_000_000_000),
+            gauge_tooltip(47, 7_729_084_723, 17_179_869_184),
             "47% · 7.2 / 16.0 GB"
         );
     }
@@ -201,7 +209,7 @@ mod tests {
     #[test]
     fn gauge_accessibility_label_is_spoken_friendly() {
         assert_eq!(
-            gauge_accessibility_label(47, 7_200_000_000, 16_000_000_000),
+            gauge_accessibility_label(47, 7_729_084_723, 17_179_869_184),
             "Memory 47 percent, 7.2 of 16.0 GB used"
         );
     }
@@ -220,7 +228,7 @@ mod tests {
 
     #[test]
     fn dropdown_model_default_apps_hidden() {
-        let model = dropdown_model(snapshot(16_000_000_000));
+        let model = dropdown_model(snapshot(SIXTEEN_GIB));
         match model {
             DropdownModel::Loaded { apps, .. } => {
                 assert_eq!(apps, AppSectionDisplay::Hidden);
@@ -231,7 +239,7 @@ mod tests {
 
     #[test]
     fn dropdown_model_with_apps_loading() {
-        let model = dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loading);
+        let model = dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loading);
         match model {
             DropdownModel::Loaded { apps, .. } => {
                 assert_eq!(apps, AppSectionDisplay::Loading);
@@ -243,7 +251,7 @@ mod tests {
     #[test]
     fn dropdown_model_with_apps_unavailable() {
         let model =
-            dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Unavailable);
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Unavailable);
         match model {
             DropdownModel::Loaded { apps, .. } => {
                 assert_eq!(apps, AppSectionDisplay::Unavailable);
@@ -257,13 +265,13 @@ mod tests {
         let usage = vec![AppMemoryUsage {
             name: "Cursor".to_string(),
             group_key: "/Applications/Cursor.app".to_string(),
-            footprint_bytes: 2_000_000_000,
+            footprint_bytes: 2_147_483_648,
             pids: vec![42],
             can_quit: true,
             delta_bytes: None,
         }];
         let model =
-            dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
         match model {
             DropdownModel::Loaded { apps, .. } => match apps {
                 AppSectionDisplay::Rows { rows } => {
@@ -286,13 +294,13 @@ mod tests {
         let usage = vec![AppMemoryUsage {
             name: "Tiny".to_string(),
             group_key: "/Applications/Tiny.app".to_string(),
-            footprint_bytes: 245_000_000,
+            footprint_bytes: 256_901_120,
             pids: vec![1],
             can_quit: true,
             delta_bytes: None,
         }];
         let model =
-            dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
         match model {
             DropdownModel::Loaded { apps, .. } => match apps {
                 AppSectionDisplay::Rows { rows, .. } => {
@@ -309,13 +317,13 @@ mod tests {
         let usage = vec![AppMemoryUsage {
             name: "Codex Computer Use".to_string(),
             group_key: "/Applications/Codex Computer Use.app".to_string(),
-            footprint_bytes: 81_000_000,
+            footprint_bytes: 84_934_656,
             pids: vec![1],
             can_quit: true,
             delta_bytes: None,
         }];
         let model =
-            dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
         match model {
             DropdownModel::Loaded { apps, .. } => match apps {
                 AppSectionDisplay::Rows { rows, .. } => {
@@ -331,11 +339,11 @@ mod tests {
     #[test]
     fn dropdown_model_memory_row_shows_percent_tail() {
         let snapshot = MemorySnapshot {
-            used_bytes: 9_000_000_000,
-            total_bytes: 16_000_000_000,
+            used_bytes: 9_663_676_416,
+            total_bytes: SIXTEEN_GIB,
             used_percent: 56,
             swap_used_bytes: 0,
-            available_bytes: 7_000_000_000,
+            available_bytes: 7_516_192_768,
         };
         let DropdownModel::Loaded { memory, .. } = dropdown_model(snapshot) else {
             panic!("expected Loaded model");
@@ -372,12 +380,12 @@ mod tests {
     fn dropdown_model_with_apps_prefers_positive_deltas() {
         let mut usage = vec![
             usage("Chrome", 4_000_000_000, None),
-            usage("Zen", 700_000_000, Some(300_000_000)),
+            usage("Zen", 734_003_200, Some(314_572_800)),
             usage("Codex", 500_000_000, Some(80_000_000)),
         ];
         rank_app_rows(&mut usage);
         let model =
-            dropdown_model_with_apps(snapshot(16_000_000_000), &AppMemorySnapshot::Loaded(usage));
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
         match model {
             DropdownModel::Loaded {
                 apps: AppSectionDisplay::Rows { rows },

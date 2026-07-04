@@ -1,7 +1,11 @@
 use rami::format::{
-    dropdown_model, gauge_symbol_name, gb_pair, gb_text, placeholder_dropdown_model, DropdownModel,
+    dropdown_model, gauge_symbol_name, gb_pair, gb_text, mem_text, placeholder_dropdown_model,
+    DropdownModel,
 };
 use rami::model::MemorySnapshot;
+
+const ONE_GIB: u64 = 1_073_741_824;
+const SIXTEEN_GIB: u64 = 16 * ONE_GIB;
 
 #[test]
 fn gauge_symbol_name_returns_expected_variant_for_each_bucket() {
@@ -24,17 +28,18 @@ fn gauge_symbol_name_returns_expected_variant_for_each_bucket() {
 
 #[test]
 fn gb_text_rounds_to_one_decimal_place() {
-    assert_eq!(gb_text(9_019_437_056), "9.0 GB");
+    assert_eq!(gb_text(9 * ONE_GIB), "9.0 GB");
 }
 
 #[test]
-fn gb_text_rounds_decimal_boundary_to_one_gb() {
-    assert_eq!(gb_text(999_999_999), "1.0 GB");
+fn mem_text_at_gib_boundary_uses_mb_then_gb() {
+    assert_eq!(mem_text(ONE_GIB - 1), "1024 MB");
+    assert_eq!(mem_text(ONE_GIB), "1.0 GB");
 }
 
 #[test]
 fn gb_pair_renders_used_over_total() {
-    assert_eq!(gb_pair(5_700_000_000, 16_000_000_000), "5.7 / 16.0 GB");
+    assert_eq!(gb_pair(6_120_328_397, SIXTEEN_GIB), "5.7 / 16.0 GB");
 }
 
 #[test]
@@ -45,10 +50,10 @@ fn placeholder_model_is_loading() {
 #[test]
 fn dropdown_model_splits_memory_and_swap_rows() {
     let snapshot = MemorySnapshot {
-        used_bytes: 9_019_437_056,
-        total_bytes: 17_179_869_184,
+        used_bytes: 9 * ONE_GIB,
+        total_bytes: SIXTEEN_GIB,
         used_percent: 53,
-        swap_used_bytes: 4_414_120_000,
+        swap_used_bytes: 4_724_461_226,
         available_bytes: 8_160_449_024,
     };
 
@@ -56,7 +61,7 @@ fn dropdown_model_splits_memory_and_swap_rows() {
         panic!("expected Loaded model");
     };
 
-    assert_eq!(memory.primary, "9.0 / 17.2 GB");
+    assert_eq!(memory.primary, "9.0 / 16.0 GB");
     assert_eq!(memory.tail.as_deref(), Some("53%"));
     let swap = swap.expect("swap row present when nonzero");
     assert_eq!(swap.primary, "Swap");
@@ -66,11 +71,11 @@ fn dropdown_model_splits_memory_and_swap_rows() {
 #[test]
 fn dropdown_model_hides_swap_when_zero() {
     let snapshot = MemorySnapshot {
-        used_bytes: 5_000_000_000,
-        total_bytes: 16_000_000_000,
+        used_bytes: 5 * ONE_GIB,
+        total_bytes: SIXTEEN_GIB,
         used_percent: 31,
         swap_used_bytes: 0,
-        available_bytes: 11_000_000_000,
+        available_bytes: 11 * ONE_GIB,
     };
 
     let DropdownModel::Loaded { swap, .. } = dropdown_model(snapshot) else {

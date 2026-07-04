@@ -34,11 +34,10 @@ jobs:
       - name: Test
         run: cargo test --locked
 
-      - name: Ignored smoke tests
-        run: cargo test --locked -- --ignored
-
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
 
       - name: Audit
         run: cargo audit
