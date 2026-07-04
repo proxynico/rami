@@ -17,10 +17,10 @@ jobs:
     # objc2-app-kit bindings only build on macOS.
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # Toolchain (1.95.0 + clippy/rustfmt) is pinned by rust-toolchain.toml.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -35,7 +35,7 @@ jobs:
         run: cargo test --locked
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2
         with:
           tool: cargo-audit
 
