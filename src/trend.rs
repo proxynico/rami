@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 const RISING_BYTES: i64 = 300_000_000;
 const RISING_FAST_BYTES: i64 = 1_000_000_000;
 const MEMORY_WINDOW_SAMPLES: usize = 25;
-const MEANINGFUL_APP_DELTA_BYTES: i64 = 50_000_000;
+pub(crate) const MEANINGFUL_APP_DELTA_BYTES: i64 = 50_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryTrend {

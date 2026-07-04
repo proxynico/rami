@@ -96,6 +96,7 @@ fn validate_sysctl_size(actual: size_t, expected: usize, name: &str) -> io::Resu
 }
 
 pub struct MemorySampler {
+    host_port: libc::mach_port_t,
     total_bytes: u64,
     page_size: u64,
     cached_swap_used_bytes: Cell<u64>,
@@ -106,9 +107,12 @@ impl MemorySampler {
     const SWAP_REFRESH_INTERVAL_TICKS: u8 = 6;
 
     pub fn new() -> io::Result<Self> {
+        #[allow(deprecated)]
+        let host_port = unsafe { libc::mach_host_self() };
         let total_bytes = total_memory_bytes()?;
         let page_size = page_size_bytes()?;
         Ok(Self {
+            host_port,
             total_bytes,
             page_size,
             cached_swap_used_bytes: Cell::new(0),
@@ -120,10 +124,9 @@ impl MemorySampler {
         let mut stats = unsafe { std::mem::zeroed::<vm_statistics64>() };
         let mut count = HOST_VM_INFO64_COUNT;
 
-        #[allow(deprecated)]
         let result = unsafe {
             host_statistics64(
-                libc::mach_host_self(),
+                self.host_port,
                 HOST_VM_INFO64,
                 &mut stats as *mut _ as *mut i32,
                 &mut count as *mut mach_msg_type_number_t,

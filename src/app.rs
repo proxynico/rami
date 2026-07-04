@@ -166,7 +166,8 @@ impl AppState {
 
                 let apps = self.app_memory.borrow();
                 let history = self.trend_tracker.borrow().samples();
-                let launch_at_login_status = self.launch_at_login_status.get();
+                let launch_at_login_status = self.launch_at_login.status();
+                self.launch_at_login_status.set(launch_at_login_status);
                 self.tray.set_snapshot(
                     snapshot,
                     trend,
@@ -339,18 +340,18 @@ fn open_releases_page() {
     }
 }
 
-fn refresh_current_app() {
-    let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
-    if let Some(state) = state {
-        state.refresh(true);
+fn with_app_state(f: impl FnOnce(&AppState)) {
+    if let Some(state) = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade)) {
+        f(&state);
     }
 }
 
+fn refresh_current_app() {
+    with_app_state(|state| state.refresh(true));
+}
+
 fn timer_refresh_current_app() {
-    let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
-    if let Some(state) = state {
-        state.refresh(false);
-    }
+    with_app_state(|state| state.refresh(false));
 }
 
 define_class!(
@@ -371,34 +372,22 @@ define_class!(
 
         #[unsafe(method(toggleLaunchAtLogin:))]
         fn toggle_launch_at_login(&self, _sender: &AnyObject) {
-            let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
-            if let Some(state) = state {
-                state.toggle_launch_at_login();
-            }
+            with_app_state(|state| state.toggle_launch_at_login());
         }
 
         #[unsafe(method(toggleAutoRefresh:))]
         fn toggle_auto_refresh(&self, _sender: &AnyObject) {
-            let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
-            if let Some(state) = state {
-                state.toggle_auto_refresh();
-            }
+            with_app_state(|state| state.toggle_auto_refresh());
         }
 
         #[unsafe(method(toggleShowAppUsage:))]
         fn toggle_show_app_usage(&self, _sender: &AnyObject) {
-            let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
-            if let Some(state) = state {
-                state.toggle_show_app_usage();
-            }
+            with_app_state(|state| state.toggle_show_app_usage());
         }
 
         #[unsafe(method(copyDiagnostics:))]
         fn copy_diagnostics(&self, _sender: &AnyObject) {
-            let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
-            if let Some(state) = state {
-                state.copy_diagnostic_report();
-            }
+            with_app_state(|state| state.copy_diagnostic_report());
         }
 
         #[unsafe(method(checkForUpdates:))]
@@ -408,10 +397,7 @@ define_class!(
 
         #[unsafe(method(reopenMenu:))]
         fn reopen_menu(&self, _sender: &AnyObject) {
-            let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
-            if let Some(state) = state {
-                state.reopen_menu_if_app_usage_visible();
-            }
+            with_app_state(|state| state.reopen_menu_if_app_usage_visible());
         }
 
         #[unsafe(method(quitApp:))]
@@ -420,10 +406,7 @@ define_class!(
             let Some(key) = key else {
                 return;
             };
-            let state = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
-            if let Some(state) = state {
-                state.quit_app_with_key(&key.to_string());
-            }
+            with_app_state(|state| state.quit_app_with_key(&key.to_string()));
         }
     }
 
@@ -501,6 +484,7 @@ impl App {
                 true,
             )
         };
+        timer.setTolerance(0.5);
 
         Ok(Some(Self {
             app,

@@ -2,6 +2,7 @@ use crate::format::{delta_bytes_text, gb_pair, mem_text};
 use crate::login_item::{current_app_bundle_path, LaunchAtLoginStatus, BUNDLE_IDENTIFIER};
 use crate::model::MemorySnapshot;
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
+use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 
 pub(crate) struct DiagnosticReportInput<'a> {
     pub(crate) version: String,
@@ -100,7 +101,10 @@ fn launch_at_login_label(status: LaunchAtLoginStatus) -> &'static str {
 
 fn app_row_text(row: &AppMemoryUsage) -> String {
     let mut text = format!("{}: {}", row.name, mem_text(row.footprint_bytes));
-    if let Some(delta) = row.delta_bytes.filter(|delta| *delta >= 50_000_000) {
+    if let Some(delta) = row
+        .delta_bytes
+        .filter(|delta| *delta >= MEANINGFUL_APP_DELTA_BYTES)
+    {
         text.push_str(&format!(" ({})", delta_bytes_text(delta as u64)));
     }
     text
@@ -118,10 +122,10 @@ mod tests {
         let apps = AppMemorySnapshot::Loaded(vec![AppMemoryUsage {
             name: "Cursor".to_string(),
             group_key: "/Applications/Cursor.app".to_string(),
-            footprint_bytes: 2_100_000_000,
+            footprint_bytes: 2_254_579_918,
             pids: vec![42, 43],
             can_quit: true,
-            delta_bytes: Some(350_000_000),
+            delta_bytes: Some(367_001_600),
         }]);
         let report = build_diagnostic_report(DiagnosticReportInput {
             version: "0.1.0".to_string(),
@@ -131,11 +135,11 @@ mod tests {
             architecture: "aarch64".to_string(),
             launch_at_login: LaunchAtLoginStatus::EnabledExternal,
             memory: Some(MemorySnapshot {
-                used_bytes: 9_100_000_000,
-                total_bytes: 18_000_000_000,
+                used_bytes: 9_774_150_902,
+                total_bytes: 19_327_352_832,
                 used_percent: 51,
-                swap_used_bytes: 400_000_000,
-                available_bytes: 8_900_000_000,
+                swap_used_bytes: 419_430_400,
+                available_bytes: 9_556_301_414,
             }),
             apps: &apps,
         });

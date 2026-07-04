@@ -24,6 +24,7 @@ use objc2_foundation::{
     NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSSize, NSString,
 };
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppShape {
@@ -79,6 +80,7 @@ pub struct TrayController {
     last_launch_title: RefCell<String>,
     last_launch_checked: Cell<bool>,
     last_launch_enabled: Cell<bool>,
+    app_icon_cache: RefCell<HashMap<String, Retained<NSImage>>>,
 }
 
 const APP_ROW_POOL: usize = 5;
@@ -317,6 +319,7 @@ impl TrayController {
             last_launch_title: RefCell::new(String::new()),
             last_launch_checked: Cell::new(false),
             last_launch_enabled: Cell::new(false),
+            app_icon_cache: RefCell::new(HashMap::new()),
         };
         controller.set_gauge(0, MemoryTrend::Stable, MemoryPressure::Normal, mtm);
         controller.apply_model(
@@ -517,7 +520,7 @@ impl TrayController {
         if let AppSectionDisplay::Rows { rows } = apps {
             for (item, row) in self.app_items.iter().zip(rows.iter()) {
                 item.setAttributedTitle(Some(&app_row_attributed(row)));
-                item.setImage(app_row_icon(row).as_deref());
+                item.setImage(self.app_row_icon(row).as_deref());
             }
             for (idx, row) in rows.iter().enumerate() {
                 let item = &self.app_items[idx];
@@ -622,6 +625,20 @@ impl TrayController {
             self.last_launch_enabled.set(enabled);
         }
     }
+
+    fn app_row_icon(&self, row: &StatRow) -> Option<Retained<NSImage>> {
+        let bundle_path = row.bundle_path.as_ref()?;
+        if let Some(cached) = self.app_icon_cache.borrow().get(bundle_path) {
+            return Some(cached.clone());
+        }
+        let path = NSString::from_str(bundle_path);
+        let image = NSWorkspace::sharedWorkspace().iconForFile(&path);
+        image.setSize(NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE));
+        self.app_icon_cache
+            .borrow_mut()
+            .insert(bundle_path.clone(), image.clone());
+        Some(image)
+    }
 }
 
 fn menu_shape_for(model: &DropdownModel) -> MenuShape {
@@ -674,14 +691,6 @@ fn make_quit_app_item(
     }
     item.setEnabled(true);
     item
-}
-
-fn app_row_icon(row: &StatRow) -> Option<Retained<NSImage>> {
-    let bundle_path = row.bundle_path.as_ref()?;
-    let path = NSString::from_str(bundle_path);
-    let image = NSWorkspace::sharedWorkspace().iconForFile(&path);
-    image.setSize(NSSize::new(16.0, 16.0));
-    Some(image)
 }
 
 fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
@@ -981,11 +990,11 @@ mod tests {
 
     fn snapshot() -> MemorySnapshot {
         MemorySnapshot {
-            used_bytes: 5_700_000_000,
-            total_bytes: 16_000_000_000,
+            used_bytes: 6_120_328_397,
+            total_bytes: 17_179_869_184,
             used_percent: 47,
-            swap_used_bytes: 1_200_000_000,
-            available_bytes: 10_300_000_000,
+            swap_used_bytes: 1_288_490_189,
+            available_bytes: 11_055_540_777,
         }
     }
 
@@ -1013,11 +1022,11 @@ mod tests {
     #[test]
     fn loaded_layout_renders_memory_and_swap_rows() {
         let snapshot = MemorySnapshot {
-            used_bytes: 5_700_000_000,
-            total_bytes: 16_000_000_000,
+            used_bytes: 6_120_328_397,
+            total_bytes: 17_179_869_184,
             used_percent: 47,
-            swap_used_bytes: 1_200_000_000,
-            available_bytes: 10_300_000_000,
+            swap_used_bytes: 1_288_490_189,
+            available_bytes: 11_055_540_777,
         };
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Enabled, true);
@@ -1056,11 +1065,11 @@ mod tests {
     #[test]
     fn loaded_layout_hides_swap_row_when_zero() {
         let snapshot = MemorySnapshot {
-            used_bytes: 5_700_000_000,
-            total_bytes: 16_000_000_000,
+            used_bytes: 6_120_328_397,
+            total_bytes: 17_179_869_184,
             used_percent: 47,
             swap_used_bytes: 0,
-            available_bytes: 10_300_000_000,
+            available_bytes: 11_055_540_777,
         };
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
@@ -1130,7 +1139,7 @@ mod tests {
             AppMemoryUsage {
                 name: "Cursor".to_string(),
                 group_key: "/Applications/Cursor.app".to_string(),
-                footprint_bytes: 2_000_000_000,
+                footprint_bytes: 2_147_483_648,
                 pids: vec![1],
                 can_quit: true,
                 delta_bytes: None,
@@ -1138,7 +1147,7 @@ mod tests {
             AppMemoryUsage {
                 name: "Chrome".to_string(),
                 group_key: "/Applications/Chrome.app".to_string(),
-                footprint_bytes: 1_200_000_000,
+                footprint_bytes: 1_288_490_189,
                 pids: vec![2],
                 can_quit: true,
                 delta_bytes: None,

@@ -2,18 +2,19 @@ use objc2::ffi::NSInteger;
 use objc2::rc::Retained;
 use objc2::{extern_class, extern_methods};
 use objc2_foundation::{NSError, NSObject};
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 pub const BUNDLE_IDENTIFIER: &str = "com.nicomontero.rami";
 
 /// `sfltool dumpbtm` is slow and on Apple's deprecation path. We only need it
 /// to detect launch-at-login enabled via System Settings (the case SMAppService
-/// reports as Disabled), so cache that lookup for a short window rather than
-/// shelling out on every refresh.
-const EXTERNAL_CHECK_TTL: Duration = Duration::from_secs(30);
+/// reports as Disabled). Status is re-read on every refresh tick, so keep this
+/// TTL long: it bounds how often the background `sfltool` check re-runs.
+const EXTERNAL_CHECK_TTL: Duration = Duration::from_secs(300);
 
 #[link(name = "ServiceManagement", kind = "framework")]
 unsafe extern "C" {}
@@ -88,7 +89,8 @@ impl SMAppService {
 
 pub struct LaunchAtLoginController {
     service: Retained<SMAppService>,
-    external_cache: RefCell<Option<(bool, Instant)>>,
+    external_cache: Arc<Mutex<Option<(bool, Instant)>>>,
+    external_check_in_flight: Arc<Mutex<bool>>,
 }
 
 impl Default for LaunchAtLoginController {
@@ -101,7 +103,8 @@ impl LaunchAtLoginController {
     pub fn new() -> Self {
         Self {
             service: SMAppService::main_app_service(),
-            external_cache: RefCell::new(None),
+            external_cache: Arc::new(Mutex::new(None)),
+            external_check_in_flight: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -131,18 +134,41 @@ impl LaunchAtLoginController {
         }
         // The SMAppService state we just changed is cheap to re-read, but clear
         // the external cache so the post-toggle status reflects reality.
-        self.external_cache.borrow_mut().take();
+        *self.external_cache.lock().expect("external cache lock") = None;
         Ok(self.status())
     }
 
     fn external_login_item_is_enabled_cached(&self) -> bool {
         let now = Instant::now();
-        if let Some(value) = fresh_cached(*self.external_cache.borrow(), now, EXTERNAL_CHECK_TTL) {
+        let cache = self.external_cache.lock().expect("external cache lock");
+        if let Some(value) = fresh_cached(*cache, now, EXTERNAL_CHECK_TTL) {
             return value;
         }
-        let result = external_login_item_is_enabled();
-        *self.external_cache.borrow_mut() = Some((result, now));
-        result
+        let stale_value = cache.map(|(value, _)| value);
+        drop(cache);
+        self.maybe_start_background_external_check();
+        stale_value.unwrap_or(false)
+    }
+
+    fn maybe_start_background_external_check(&self) {
+        let mut in_flight = self
+            .external_check_in_flight
+            .lock()
+            .expect("external check in-flight lock");
+        if *in_flight {
+            return;
+        }
+        *in_flight = true;
+        let cache = Arc::clone(&self.external_cache);
+        let in_flight_flag = Arc::clone(&self.external_check_in_flight);
+        thread::spawn(move || {
+            let result = external_login_item_is_enabled();
+            let now = Instant::now();
+            *cache.lock().expect("external cache lock") = Some((result, now));
+            *in_flight_flag
+                .lock()
+                .expect("external check in-flight lock") = false;
+        });
     }
 }
 
@@ -180,9 +206,30 @@ fn external_login_item_is_enabled() -> bool {
     background_item_dump_has_enabled_app(&dump, BUNDLE_IDENTIFIER, &app_url)
 }
 
+fn percent_encode_path_component(component: &str) -> String {
+    let mut out = String::with_capacity(component.len());
+    for byte in component.bytes() {
+        let unreserved =
+            matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~');
+        if unreserved {
+            out.push(byte as char);
+        } else {
+            out.push('%');
+            out.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
+            out.push(char::from(b"0123456789ABCDEF"[(byte & 0x0f) as usize]));
+        }
+    }
+    out
+}
+
 fn file_url_for_app_path(path: &Path) -> Option<String> {
     let path = path.to_str()?;
-    Some(format!("file://{}/", path.trim_end_matches('/')))
+    let encoded = path
+        .split('/')
+        .map(percent_encode_path_component)
+        .collect::<Vec<_>>()
+        .join("/");
+    Some(format!("file://{}/", encoded.trim_end_matches('/')))
 }
 
 fn background_item_dump_has_enabled_app(dump: &str, bundle_id: &str, app_url: &str) -> bool {
@@ -248,6 +295,14 @@ mod tests {
     }
 
     #[test]
+    fn file_url_for_app_path_percent_encodes_spaces() {
+        assert_eq!(
+            file_url_for_app_path(std::path::Path::new("/Applications/My App.app")).as_deref(),
+            Some("file:///Applications/My%20App.app/")
+        );
+    }
+
+    #[test]
     fn background_item_dump_detects_enabled_matching_bundle() {
         let dump = r#"
  #58:
@@ -267,6 +322,24 @@ mod tests {
             dump,
             "com.nicomontero.rami",
             "file:///Applications/Other.app/"
+        ));
+    }
+
+    #[test]
+    fn background_item_dump_matches_percent_encoded_app_url() {
+        let dump = r#"
+ #59:
+                 Name: rami
+          Disposition: [enabled, allowed, notified] (0xb)
+           Identifier: 2.com.nicomontero.rami
+                  URL: file:///Applications/My%20App.app/
+    Bundle Identifier: com.nicomontero.rami
+"#;
+
+        assert!(background_item_dump_has_enabled_app(
+            dump,
+            "com.nicomontero.rami",
+            "file:///Applications/My%20App.app/"
         ));
     }
 }
