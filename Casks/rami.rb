@@ -7,7 +7,7 @@
 # manual fallback.
 
 cask "rami" do
-  version "0.1.0"
+  version "0.1.1"
   sha256 "REPLACE_WITH_SHA256_OF_DMG"
 
   url "https://github.com/proxynico/rami/releases/download/v#{version}/rami-#{version}.dmg"
