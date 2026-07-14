@@ -193,6 +193,8 @@ impl AppState {
         let sender = self.app_scan_sender.clone();
         let generation = self.app_scan_generation.get();
         thread::spawn(move || {
+            // Background scan should prefer efficiency cores.
+            unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0) };
             let rows = ProcessMemorySampler::new().sample(APP_BASELINE_ROW_LIMIT);
             let _ = sender.send(AppScanResult {
                 generation,
