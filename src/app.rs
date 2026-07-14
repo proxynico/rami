@@ -484,7 +484,7 @@ impl App {
                 true,
             )
         };
-        timer.setTolerance(0.5);
+        timer.setTolerance(2.0);
 
         Ok(Some(Self {
             app,
