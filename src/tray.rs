@@ -77,6 +77,7 @@ pub struct TrayController {
     last_history: RefCell<Vec<u64>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
     last_auto_refresh_enabled: Cell<bool>,
+    last_tooltip: RefCell<String>,
     last_launch_title: RefCell<String>,
     last_launch_checked: Cell<bool>,
     last_launch_enabled: Cell<bool>,
@@ -316,6 +317,7 @@ impl TrayController {
             last_history: RefCell::new(Vec::new()),
             last_app_section: RefCell::new(None),
             last_auto_refresh_enabled: Cell::new(true),
+            last_tooltip: RefCell::new(String::new()),
             last_launch_title: RefCell::new(String::new()),
             last_launch_checked: Cell::new(false),
             last_launch_enabled: Cell::new(false),
@@ -400,6 +402,9 @@ impl TrayController {
     /// Set the menu-bar button's hover tooltip and VoiceOver label so the current
     /// memory reading is available without opening the menu.
     fn set_button_help(&self, tooltip: &str, accessibility_label: &str, mtm: MainThreadMarker) {
+        if self.last_tooltip.borrow().as_str() == tooltip {
+            return;
+        }
         let Some(button) = self.status_item.button(mtm) else {
             return;
         };
@@ -409,6 +414,7 @@ impl TrayController {
             let _: () = msg_send![&*button, setToolTip: &*tooltip];
             let _: () = msg_send![&*button, setAccessibilityLabel: &*accessibility_label];
         }
+        *self.last_tooltip.borrow_mut() = tooltip.to_string();
     }
 
     fn set_gauge(
@@ -510,7 +516,6 @@ impl TrayController {
 
         self.update_auto_refresh(auto_refresh_enabled);
         self.update_launch_at_login(launch_at_login_status);
-        self.status_item.setMenu(Some(&self.menu));
     }
 
     fn update_app_section(&self, apps: &AppSectionDisplay) {
