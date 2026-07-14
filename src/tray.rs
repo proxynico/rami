@@ -11,14 +11,14 @@ use crate::status_icon::{badge_for_state, BadgeKind};
 use crate::status_icon::{make_status_image, StatusImage};
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn,
     NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
-    NSMenu, NSMenuItem, NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSStatusBar,
-    NSStatusItem, NSTextAlignment, NSTextTab, NSWorkspace,
+    NSMenu, NSMenuDelegate, NSMenuItem, NSMutableParagraphStyle, NSParagraphStyleAttributeName,
+    NSStatusBar, NSStatusItem, NSTextAlignment, NSTextTab, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSSize, NSString,
@@ -367,6 +367,12 @@ impl TrayController {
             auto_refresh_enabled,
             mtm,
         );
+    }
+
+    /// Attach the open/close delegate to the main tray menu only; the settings
+    /// submenu opening must not count as a menu open.
+    pub fn set_menu_delegate(&self, delegate: &ProtocolObject<dyn NSMenuDelegate>) {
+        self.menu.setDelegate(Some(delegate));
     }
 
     pub fn set_show_app_usage(&self, enabled: bool) {
