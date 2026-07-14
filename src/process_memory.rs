@@ -80,11 +80,13 @@ impl ProcessMemorySampler {
         }
 
         let mut records = Vec::with_capacity(pids.len());
+        let mut lookup = LiveProcLookup::new();
+        let mut bundle_memo = HashMap::new();
         for pid in pids {
             if should_skip_pid(pid, self.self_pid) {
                 continue;
             }
-            if let Some(record) = sample_pid(pid) {
+            if let Some(record) = sample_pid(pid, &mut lookup, &mut bundle_memo) {
                 records.push(record);
             }
         }
@@ -121,13 +123,17 @@ fn should_skip_pid(pid: pid_t, self_pid: pid_t) -> bool {
     pid <= 0 || pid == self_pid
 }
 
-fn sample_pid(pid: pid_t) -> Option<ProcessMemoryRecord> {
+fn sample_pid<L: ProcLookup>(
+    pid: pid_t,
+    lookup: &mut L,
+    bundle_memo: &mut HashMap<pid_t, Option<(String, String)>>,
+) -> Option<ProcessMemoryRecord> {
     let footprint = read_phys_footprint(pid)?;
     if footprint == 0 {
         return None;
     }
 
-    let (group_key, display_name) = owning_app_bundle(pid, &mut LiveProcLookup)?;
+    let (group_key, display_name) = owning_app_bundle(pid, lookup, bundle_memo)?;
     Some(ProcessMemoryRecord {
         pid,
         group_key,
@@ -141,11 +147,21 @@ trait ProcLookup {
     fn responsible_pid(&mut self, pid: pid_t) -> pid_t;
 }
 
-struct LiveProcLookup;
+struct LiveProcLookup {
+    pid_path_buf: Vec<u8>,
+}
+
+impl LiveProcLookup {
+    fn new() -> Self {
+        Self {
+            pid_path_buf: vec![0; PROC_PIDPATHINFO_MAXSIZE as usize],
+        }
+    }
+}
 
 impl ProcLookup for LiveProcLookup {
     fn exec_path(&mut self, pid: pid_t) -> Option<String> {
-        read_pid_path(pid)
+        read_pid_path(pid, &mut self.pid_path_buf)
     }
 
     fn responsible_pid(&mut self, pid: pid_t) -> pid_t {
@@ -157,13 +173,26 @@ impl ProcLookup for LiveProcLookup {
     }
 }
 
-fn owning_app_bundle<L: ProcLookup>(pid: pid_t, lookup: &mut L) -> Option<(String, String)> {
+fn owning_app_bundle<L: ProcLookup>(
+    pid: pid_t,
+    lookup: &mut L,
+    bundle_memo: &mut HashMap<pid_t, Option<(String, String)>>,
+) -> Option<(String, String)> {
     let mut current = pid;
     let mut last = 0;
+    // The walk is bounded, so the visited set lives on the stack: no per-pid
+    // heap allocation.
+    let mut visited = [0 as pid_t; RESPONSIBILITY_MAX_HOPS];
+    let mut visited_len = 0;
     for _ in 0..RESPONSIBILITY_MAX_HOPS {
         if current <= 0 {
-            return None;
+            return cache_bundle_resolution(bundle_memo, &visited[..visited_len], None);
         }
+        if let Some(resolution) = bundle_memo.get(&current).cloned() {
+            return cache_bundle_resolution(bundle_memo, &visited[..visited_len], resolution);
+        }
+        visited[visited_len] = current;
+        visited_len += 1;
         if let Some(path) = lookup.exec_path(current) {
             if let Some((bundle_path, app_segment)) = first_app_bundle(&path) {
                 if is_user_facing_app_bundle(&bundle_path) {
@@ -171,7 +200,11 @@ fn owning_app_bundle<L: ProcLookup>(pid: pid_t, lookup: &mut L) -> Option<(Strin
                         .strip_suffix(".app")
                         .unwrap_or(app_segment)
                         .to_string();
-                    return Some((bundle_path, display));
+                    return cache_bundle_resolution(
+                        bundle_memo,
+                        &visited[..visited_len],
+                        Some((bundle_path, display)),
+                    );
                 }
                 // System agent .app — keep walking the responsibility chain in case
                 // the agent was spawned on behalf of a real user-facing app.
@@ -179,12 +212,23 @@ fn owning_app_bundle<L: ProcLookup>(pid: pid_t, lookup: &mut L) -> Option<(Strin
         }
         let responsible = lookup.responsible_pid(current);
         if responsible <= 0 || responsible == current || responsible == last {
-            return None;
+            return cache_bundle_resolution(bundle_memo, &visited[..visited_len], None);
         }
         last = current;
         current = responsible;
     }
-    None
+    cache_bundle_resolution(bundle_memo, &visited[..visited_len], None)
+}
+
+fn cache_bundle_resolution(
+    bundle_memo: &mut HashMap<pid_t, Option<(String, String)>>,
+    visited: &[pid_t],
+    resolution: Option<(String, String)>,
+) -> Option<(String, String)> {
+    for &visited_pid in visited {
+        bundle_memo.insert(visited_pid, resolution.clone());
+    }
+    resolution
 }
 
 fn is_user_facing_app_bundle(bundle_path: &str) -> bool {
@@ -205,14 +249,12 @@ fn read_phys_footprint(pid: pid_t) -> Option<u64> {
     Some(info.ri_phys_footprint)
 }
 
-fn read_pid_path(pid: pid_t) -> Option<String> {
-    let mut buf = vec![0u8; PROC_PIDPATHINFO_MAXSIZE as usize];
+fn read_pid_path(pid: pid_t, buf: &mut [u8]) -> Option<String> {
     let len = unsafe { proc_pidpath(pid, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) };
     if len <= 0 {
         return None;
     }
-    buf.truncate(len as usize);
-    Some(String::from_utf8_lossy(&buf).into_owned())
+    Some(String::from_utf8_lossy(&buf[..len as usize]).into_owned())
 }
 
 fn first_app_bundle(exec_path: &str) -> Option<(String, &str)> {
@@ -272,7 +314,9 @@ fn is_absolute_app_bundle_path(group_key: &str) -> bool {
 }
 
 pub(crate) fn pid_still_matches_usage(pid: pid_t, usage: &AppMemoryUsage) -> bool {
-    let Some((group_key, _)) = owning_app_bundle(pid, &mut LiveProcLookup) else {
+    let mut lookup = LiveProcLookup::new();
+    let mut bundle_memo = HashMap::new();
+    let Some((group_key, _)) = owning_app_bundle(pid, &mut lookup, &mut bundle_memo) else {
         return false;
     };
     group_key == usage.group_key
@@ -295,6 +339,7 @@ mod tests {
     struct FakeProcLookup {
         paths: HashMap<pid_t, String>,
         responsible: HashMap<pid_t, pid_t>,
+        exec_path_calls: HashMap<pid_t, usize>,
     }
 
     impl FakeProcLookup {
@@ -302,6 +347,7 @@ mod tests {
             Self {
                 paths: HashMap::new(),
                 responsible: HashMap::new(),
+                exec_path_calls: HashMap::new(),
             }
         }
 
@@ -314,10 +360,15 @@ mod tests {
             self.responsible.insert(pid, parent);
             self
         }
+
+        fn exec_path_call_count(&self, pid: pid_t) -> usize {
+            *self.exec_path_calls.get(&pid).unwrap_or(&0)
+        }
     }
 
     impl ProcLookup for FakeProcLookup {
         fn exec_path(&mut self, pid: pid_t) -> Option<String> {
+            *self.exec_path_calls.entry(pid).or_default() += 1;
             self.paths.get(&pid).cloned()
         }
 
@@ -326,11 +377,18 @@ mod tests {
         }
     }
 
+    fn owning_bundle_with_fresh_memo<L: ProcLookup>(
+        pid: pid_t,
+        lookup: &mut L,
+    ) -> Option<(String, String)> {
+        owning_app_bundle(pid, lookup, &mut HashMap::new())
+    }
+
     #[test]
     fn owning_bundle_uses_pid_path_when_inside_app() {
         let mut lookup =
             FakeProcLookup::new().with_path(42, "/Applications/Cursor.app/Contents/MacOS/Cursor");
-        let (key, name) = owning_app_bundle(42, &mut lookup).expect("bundle");
+        let (key, name) = owning_bundle_with_fresh_memo(42, &mut lookup).expect("bundle");
         assert_eq!(key, "/Applications/Cursor.app");
         assert_eq!(name, "Cursor");
     }
@@ -344,7 +402,7 @@ mod tests {
             )
             .with_path(7, "/Applications/Safari.app/Contents/MacOS/Safari")
             .responsible(100, 7);
-        let (key, name) = owning_app_bundle(100, &mut lookup).expect("rolled up");
+        let (key, name) = owning_bundle_with_fresh_memo(100, &mut lookup).expect("rolled up");
         assert_eq!(key, "/Applications/Safari.app");
         assert_eq!(name, "Safari");
     }
@@ -353,7 +411,7 @@ mod tests {
     fn owning_bundle_drops_pid_with_no_responsible_app() {
         let mut lookup = FakeProcLookup::new().with_path(55, "/usr/sbin/cfprefsd");
         // cfprefsd is its own responsible pid (chain terminates without an .app)
-        assert!(owning_app_bundle(55, &mut lookup).is_none());
+        assert!(owning_bundle_with_fresh_memo(55, &mut lookup).is_none());
     }
 
     #[test]
@@ -365,7 +423,7 @@ mod tests {
             )
             .with_path(7, "/Applications/Messages.app/Contents/MacOS/Messages")
             .responsible(200, 7);
-        let (key, name) = owning_app_bundle(200, &mut lookup).expect("rolled up");
+        let (key, name) = owning_bundle_with_fresh_memo(200, &mut lookup).expect("rolled up");
         assert_eq!(key, "/Applications/Messages.app");
         assert_eq!(name, "Messages");
     }
@@ -376,7 +434,7 @@ mod tests {
             201,
             "/System/Library/PrivateFrameworks/Foo.framework/privatecloudcomputed.app/Contents/MacOS/privatecloudcomputed",
         );
-        assert!(owning_app_bundle(201, &mut lookup).is_none());
+        assert!(owning_bundle_with_fresh_memo(201, &mut lookup).is_none());
     }
 
     #[test]
@@ -384,7 +442,7 @@ mod tests {
         let mut lookup = FakeProcLookup::new()
             .with_path(9, "/usr/libexec/some-helper")
             .responsible(9, 9);
-        assert!(owning_app_bundle(9, &mut lookup).is_none());
+        assert!(owning_bundle_with_fresh_memo(9, &mut lookup).is_none());
     }
 
     #[test]
@@ -393,9 +451,25 @@ mod tests {
             33,
             "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/Current/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper",
         );
-        let (key, name) = owning_app_bundle(33, &mut lookup).expect("bundle");
+        let (key, name) = owning_bundle_with_fresh_memo(33, &mut lookup).expect("bundle");
         assert_eq!(key, "/Applications/Google Chrome.app");
         assert_eq!(name, "Google Chrome");
+    }
+
+    #[test]
+    fn owning_bundle_memoizes_shared_responsible_parent() {
+        let mut lookup = FakeProcLookup::new()
+            .with_path(100, "/usr/libexec/helper-one")
+            .with_path(101, "/usr/libexec/helper-two")
+            .with_path(7, "/Applications/Safari.app/Contents/MacOS/Safari")
+            .responsible(100, 7)
+            .responsible(101, 7);
+        let mut bundle_memo = HashMap::new();
+
+        assert!(owning_app_bundle(100, &mut lookup, &mut bundle_memo).is_some());
+        assert!(owning_app_bundle(101, &mut lookup, &mut bundle_memo).is_some());
+
+        assert_eq!(lookup.exec_path_call_count(7), 1);
     }
 
     #[test]
