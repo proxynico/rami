@@ -180,15 +180,19 @@ fn owning_app_bundle<L: ProcLookup>(
 ) -> Option<(String, String)> {
     let mut current = pid;
     let mut last = 0;
-    let mut visited = Vec::with_capacity(RESPONSIBILITY_MAX_HOPS);
+    // The walk is bounded, so the visited set lives on the stack: no per-pid
+    // heap allocation.
+    let mut visited = [0 as pid_t; RESPONSIBILITY_MAX_HOPS];
+    let mut visited_len = 0;
     for _ in 0..RESPONSIBILITY_MAX_HOPS {
         if current <= 0 {
-            return cache_bundle_resolution(bundle_memo, &visited, None);
+            return cache_bundle_resolution(bundle_memo, &visited[..visited_len], None);
         }
         if let Some(resolution) = bundle_memo.get(&current).cloned() {
-            return cache_bundle_resolution(bundle_memo, &visited, resolution);
+            return cache_bundle_resolution(bundle_memo, &visited[..visited_len], resolution);
         }
-        visited.push(current);
+        visited[visited_len] = current;
+        visited_len += 1;
         if let Some(path) = lookup.exec_path(current) {
             if let Some((bundle_path, app_segment)) = first_app_bundle(&path) {
                 if is_user_facing_app_bundle(&bundle_path) {
@@ -198,7 +202,7 @@ fn owning_app_bundle<L: ProcLookup>(
                         .to_string();
                     return cache_bundle_resolution(
                         bundle_memo,
-                        &visited,
+                        &visited[..visited_len],
                         Some((bundle_path, display)),
                     );
                 }
@@ -208,12 +212,12 @@ fn owning_app_bundle<L: ProcLookup>(
         }
         let responsible = lookup.responsible_pid(current);
         if responsible <= 0 || responsible == current || responsible == last {
-            return cache_bundle_resolution(bundle_memo, &visited, None);
+            return cache_bundle_resolution(bundle_memo, &visited[..visited_len], None);
         }
         last = current;
         current = responsible;
     }
-    cache_bundle_resolution(bundle_memo, &visited, None)
+    cache_bundle_resolution(bundle_memo, &visited[..visited_len], None)
 }
 
 fn cache_bundle_resolution(
