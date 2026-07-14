@@ -8,12 +8,15 @@ use crate::settings::SettingsStore;
 use crate::tray::TrayController;
 use crate::trend::{app_rows_with_deltas, MemoryTrendTracker};
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSPasteboard, NSPasteboardTypeString,
+    NSApplication, NSApplicationActivationPolicy, NSMenu, NSMenuDelegate, NSPasteboard,
+    NSPasteboardTypeString,
 };
-use objc2_foundation::{NSObject, NSObjectProtocol, NSString, NSTimer};
+use objc2_foundation::{
+    NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer,
+};
 use std::cell::{Cell, RefCell};
 use std::io;
 use std::rc::{Rc, Weak};
@@ -44,12 +47,14 @@ struct AppState {
     trend_tracker: RefCell<MemoryTrendTracker>,
     last_app_sample_at: Cell<Option<Instant>>,
     ticks_until_app_refresh: Cell<u8>,
+    menu_open: Cell<bool>,
 }
 
 const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
 const APP_DELTA_BASELINE_MAX_AGE: Duration = Duration::from_secs(90);
 const APP_BASELINE_ROW_LIMIT: usize = 25;
 const MENU_REOPEN_DELAY_SECONDS: f64 = 0.05;
+const MENU_OPEN_DRAIN_DELAY_SECONDS: f64 = 0.15;
 
 struct AppScanResult {
     generation: u64,
@@ -69,6 +74,20 @@ fn previous_app_rows_if_fresh(
         rows.to_vec()
     } else {
         Vec::new()
+    }
+}
+
+/// Decide whether this tick starts an app scan and what the countdown becomes.
+/// Scans only run while the menu is open; while it is closed the countdown is
+/// frozen so an idle app does no dropdown work at all.
+fn app_scan_decision(menu_open: bool, manual: bool, ticks_until_refresh: u8) -> (bool, u8) {
+    if !menu_open {
+        return (false, ticks_until_refresh);
+    }
+    if manual || ticks_until_refresh == 0 {
+        (true, APP_REFRESH_INTERVAL_TICKS.saturating_sub(1))
+    } else {
+        (false, ticks_until_refresh - 1)
     }
 }
 
@@ -119,6 +138,24 @@ mod tests {
     }
 
     #[test]
+    fn app_scans_are_gated_on_menu_visibility() {
+        // Menu closed: never scan, never advance the countdown — even manually.
+        assert_eq!(app_scan_decision(false, false, 3), (false, 3));
+        assert_eq!(app_scan_decision(false, true, 0), (false, 0));
+
+        // Menu open: manual or an expired countdown scans and resets the cadence.
+        assert_eq!(
+            app_scan_decision(true, true, 3),
+            (true, APP_REFRESH_INTERVAL_TICKS - 1)
+        );
+        assert_eq!(
+            app_scan_decision(true, false, 0),
+            (true, APP_REFRESH_INTERVAL_TICKS - 1)
+        );
+        assert_eq!(app_scan_decision(true, false, 2), (false, 1));
+    }
+
+    #[test]
     fn find_quittable_skips_unquittable_and_missing_keys() {
         let mut rows = vec![usage("rami")];
         rows[0].can_quit = false;
@@ -151,29 +188,27 @@ impl AppState {
                 let trend = self.trend_tracker.borrow_mut().record(snapshot.used_bytes);
                 let app_sampling_enabled = self.show_app_usage.get();
                 if app_sampling_enabled {
-                    let should_scan = manual || self.ticks_until_app_refresh.get() == 0;
+                    let (should_scan, next_ticks) = app_scan_decision(
+                        self.menu_open.get(),
+                        manual,
+                        self.ticks_until_app_refresh.get(),
+                    );
                     if should_scan {
                         self.start_app_scan();
-                        self.ticks_until_app_refresh
-                            .set(APP_REFRESH_INTERVAL_TICKS.saturating_sub(1));
-                    } else {
-                        self.ticks_until_app_refresh
-                            .set(self.ticks_until_app_refresh.get() - 1);
                     }
+                    self.ticks_until_app_refresh.set(next_ticks);
                 } else {
                     self.clear_app_usage();
                 }
 
                 let apps = self.app_memory.borrow();
                 let history = self.trend_tracker.borrow().samples();
-                let launch_at_login_status = self.launch_at_login.status();
-                self.launch_at_login_status.set(launch_at_login_status);
                 self.tray.set_snapshot(
                     snapshot,
                     trend,
                     &apps,
                     &history,
-                    launch_at_login_status,
+                    self.launch_at_login_status.get(),
                     self.auto_refresh_enabled.get(),
                     mtm,
                 );
@@ -287,6 +322,37 @@ impl AppState {
         if on {
             self.reopen_menu_soon();
         }
+    }
+
+    fn menu_will_open(&self) {
+        self.menu_open.set(true);
+        // The status read is an XPC round trip; menu open is the only moment
+        // the answer is visible, so it is (re)read here rather than per tick.
+        self.launch_at_login_status
+            .set(self.launch_at_login.status());
+        self.refresh(true);
+        self.schedule_menu_open_drain();
+    }
+
+    fn menu_did_close(&self) {
+        self.menu_open.set(false);
+        self.ticks_until_app_refresh.set(0);
+    }
+
+    /// One-shot timer that drains the scan started by `menuWillOpen:` while the
+    /// menu is still tracking. It must live in NSRunLoopCommonModes or it would
+    /// only fire after the menu closes.
+    fn schedule_menu_open_drain(&self) {
+        let timer = unsafe {
+            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
+                MENU_OPEN_DRAIN_DELAY_SECONDS,
+                &self.refresh_target,
+                sel!(refreshNow:),
+                None,
+                false,
+            )
+        };
+        unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
     }
 
     fn reopen_menu_soon(&self) {
@@ -411,6 +477,18 @@ define_class!(
     }
 
     unsafe impl NSObjectProtocol for RefreshTarget {}
+
+    unsafe impl NSMenuDelegate for RefreshTarget {
+        #[unsafe(method(menuWillOpen:))]
+        fn menu_will_open(&self, _menu: &NSMenu) {
+            with_app_state(|state| state.menu_will_open());
+        }
+
+        #[unsafe(method(menuDidClose:))]
+        fn menu_did_close(&self, _menu: &NSMenu) {
+            with_app_state(|state| state.menu_did_close());
+        }
+    }
 );
 
 impl RefreshTarget {
@@ -438,8 +516,11 @@ impl App {
         let app = NSApplication::sharedApplication(mtm);
         let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         let refresh_target = RefreshTarget::new(mtm);
+        let tray = TrayController::new(mtm, refresh_target.clone().into());
+        // NSMenu holds its delegate weakly; `App` retains the target for the
+        // app lifetime, so the delegate stays valid.
+        tray.set_menu_delegate(ProtocolObject::from_ref(&*refresh_target));
         let refresh_target: Retained<AnyObject> = refresh_target.into();
-        let tray = TrayController::new(mtm, refresh_target.clone());
         let launch_at_login = LaunchAtLoginController::new();
         let launch_at_login_status = launch_at_login.status();
         let settings_store = SettingsStore::new();
@@ -469,14 +550,17 @@ impl App {
             trend_tracker: RefCell::new(MemoryTrendTracker::new()),
             last_app_sample_at: Cell::new(None),
             ticks_until_app_refresh: Cell::new(0),
+            menu_open: Cell::new(false),
         });
         install_app_state(&state);
         // Reflect the persisted "show apps" choice in the menu checkbox before first paint.
         state.tray.set_show_app_usage(settings.show_app_usage);
         app.finishLaunching();
         state.refresh(true);
+        // NSRunLoopCommonModes so ticks keep firing while the menu is tracking;
+        // the default mode would freeze the dropdown whenever it is open.
         let timer = unsafe {
-            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
                 5.0,
                 &refresh_target,
                 sel!(refreshOnTimer:),
@@ -485,6 +569,7 @@ impl App {
             )
         };
         timer.setTolerance(2.0);
+        unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
 
         Ok(Some(Self {
             app,
