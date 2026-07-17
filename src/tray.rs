@@ -17,11 +17,11 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSEvent,
-    NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontWeightRegular,
-    NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
-    NSMenu, NSMenuDelegate, NSMenuItem, NSMutableParagraphStyle, NSParagraphStyleAttributeName,
-    NSStatusBar, NSStatusItem, NSTextAlignment, NSTextTab, NSWorkspace,
+    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSFont,
+    NSFontAttributeName, NSFontWeightRegular, NSForegroundColorAttributeName, NSImage,
+    NSImageSymbolConfiguration, NSImageSymbolScale, NSMenu, NSMenuDelegate, NSMenuItem,
+    NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSStatusBar, NSStatusItem,
+    NSTextAlignment, NSTextTab, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSSize, NSString,
@@ -173,13 +173,12 @@ impl TrayController {
                 NSMenuItem::alloc(mtm),
                 &NSString::from_str("Refresh"),
                 Some(sel!(refreshNow:)),
-                &NSString::from_str("r"),
+                &empty,
             )
         };
         unsafe {
             refresh_item.setTarget(Some(&refresh_target));
         }
-        refresh_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
         refresh_item.setEnabled(true);
         let refresh_icon = make_action_icon("arrow.clockwise");
         if let Some(img) = &refresh_icon {
@@ -340,10 +339,9 @@ impl TrayController {
                 NSMenuItem::alloc(mtm),
                 &NSString::from_str("Quit"),
                 Some(sel!(terminate:)),
-                &NSString::from_str("q"),
+                &empty,
             )
         };
-        quit_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
         quit_item.setEnabled(true);
 
         status_item.setMenu(Some(&menu));
@@ -1156,7 +1154,9 @@ pub(crate) enum MenuEntry<'a> {
         quit_key: Option<&'a str>,
     },
     Separator,
-    Refresh,
+    Refresh {
+        key_equivalent: Option<&'a str>,
+    },
     SettingsCommand,
     Settings {
         auto_refresh_enabled: bool,
@@ -1165,7 +1165,9 @@ pub(crate) enum MenuEntry<'a> {
         show_gpu: bool,
         launch_at_login: LaunchAtLoginStatus,
     },
-    Quit,
+    Quit {
+        key_equivalent: Option<&'a str>,
+    },
 }
 
 #[cfg(test)]
@@ -1289,10 +1291,14 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
         }
     }
     entries.push(MenuEntry::Separator);
-    entries.push(MenuEntry::Refresh);
+    entries.push(MenuEntry::Refresh {
+        key_equivalent: None,
+    });
     entries.push(MenuEntry::SettingsCommand);
     entries.push(MenuEntry::Separator);
-    entries.push(MenuEntry::Quit);
+    entries.push(MenuEntry::Quit {
+        key_equivalent: None,
+    });
     entries
 }
 
@@ -1383,10 +1389,14 @@ mod tests {
             vec![
                 MenuEntry::Loading,
                 MenuEntry::Separator,
-                MenuEntry::Refresh,
+                MenuEntry::Refresh {
+                    key_equivalent: None,
+                },
                 MenuEntry::SettingsCommand,
                 MenuEntry::Separator,
-                MenuEntry::Quit,
+                MenuEntry::Quit {
+                    key_equivalent: None,
+                },
             ]
         );
     }
@@ -1427,10 +1437,14 @@ mod tests {
                     tail: Some("1.2 GB"),
                 },
                 MenuEntry::Separator,
-                MenuEntry::Refresh,
+                MenuEntry::Refresh {
+                    key_equivalent: None,
+                },
                 MenuEntry::SettingsCommand,
                 MenuEntry::Separator,
-                MenuEntry::Quit,
+                MenuEntry::Quit {
+                    key_equivalent: None,
+                },
             ]
         );
     }

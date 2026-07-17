@@ -26,4 +26,5 @@ screen-height dashboard.
 Memory remains the visual anchor. CPU and GPU section labels use fixed-width
 centered views, while metric rows keep a consistent label/value grid. Settings
 is an arrowless command that opens the existing controls in a separate compact
-menu, keeping the monitor dropdown free of disclosure chevrons.
+menu. Refresh and Quit intentionally have no displayed key equivalents. This
+keeps the monitor dropdown free of disclosure and shortcut columns.
