@@ -78,7 +78,7 @@ _Avoid_: multi-hue palettes (Activity Monitor colors)
 A circular gauge menu-item view showing one percentage (Memory %, Pressure).
 
 **Breakdown legend**:
-The four-way colored list (App Memory / Wired / Compressed / Free) that
+The four-way monochrome list (App Memory / Wired / Compressed / Free) that
 accounts for where RAM is going.
 
 **Status gauge**:

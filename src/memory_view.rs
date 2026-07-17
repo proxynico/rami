@@ -65,7 +65,7 @@ impl MemoryRingsView {
         };
         let label = NSString::from_str("Memory");
         let value = NSString::from_str(&format!(
-            "Memory {} percent, {}, Pressure {} percent",
+            "{} percent, {}, pressure {} percent",
             rings[0].percent, rings[0].detail, rings[1].percent
         ));
         unsafe {

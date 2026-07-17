@@ -481,7 +481,8 @@ impl TrayController {
         mtm: MainThreadMarker,
     ) {
         let new_shape = menu_shape_for(model);
-        if self.shape.get() != new_shape {
+        let shape_changed = self.shape.get() != new_shape;
+        if shape_changed {
             self.rebuild_menu(new_shape, mtm);
             self.shape.set(new_shape);
             self.last_rings.borrow_mut().take();
@@ -505,7 +506,7 @@ impl TrayController {
                 for (item, row) in self.legend_items.iter().zip(memory.breakdown.iter()) {
                     let row_color = accent_color
                         .colorWithAlphaComponent(f64::from(row.opacity_percent) / 100.0);
-                    item.setAttributedTitle(Some(&legend_row_attributed(row, row_color.clone())));
+                    item.setAttributedTitle(Some(&legend_row_attributed(row)));
                     item.setImage(make_legend_icon(&row_color).as_deref());
                 }
                 *self.last_breakdown.borrow_mut() = Some(memory.breakdown.clone());
@@ -520,7 +521,10 @@ impl TrayController {
                 }
                 *self.last_swap_row.borrow_mut() = memory.swap.clone();
             }
-            if accent_changed || self.last_history.borrow().as_slice() != memory.history {
+            if shape_changed
+                || accent_changed
+                || self.last_history.borrow().as_slice() != memory.history
+            {
                 self.sparkline_view
                     .update(memory.history.clone(), accent_color);
                 *self.last_history.borrow_mut() = memory.history.clone();
@@ -735,10 +739,7 @@ fn app_row_attributed(row: &StatRow, accent: &NSColor) -> Retained<NSAttributedS
     )
 }
 
-fn legend_row_attributed(
-    row: &LegendRow,
-    color: Retained<NSColor>,
-) -> Retained<NSAttributedString> {
+fn legend_row_attributed(row: &LegendRow) -> Retained<NSAttributedString> {
     stat_row_attributed_colored(
         &StatRow {
             primary: row.label.clone(),
@@ -746,9 +747,9 @@ fn legend_row_attributed(
             quit_key: None,
             bundle_path: None,
         },
-        color.clone(),
-        color.clone(),
-        color,
+        NSColor::labelColor(),
+        NSColor::secondaryLabelColor(),
+        NSColor::labelColor(),
     )
 }
 

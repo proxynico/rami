@@ -10,7 +10,7 @@ NSPopover panel (reimplements dismissal, positioning, and native menu feel
 for a look-alike payoff). CPU and GPU sections are individually hideable in
 Settings, so the original memory-only rami remains two toggles away.
 
-Deliberate scope no-s that will look like omissions later: no CPU frequency
+Deliberate scope non-goals that will look like omissions later: no CPU frequency
 and no temperatures (both need private APIs or privileged helpers — against
 the app's simplicity premise), no per-core rings (E/P cluster aggregates
 only), no per-process GPU (no public API), and no quit action on the
