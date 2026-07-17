@@ -1,10 +1,11 @@
 use crate::app_control::quit_app_group;
 use crate::cpu::CpuSampler;
 use crate::diagnostics::{build_diagnostic_report, current_report_input};
+use crate::gpu::GpuSampler;
 use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
-use crate::model::CpuModuleState;
+use crate::model::{CpuModuleState, GpuModuleState};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage, ProcessMemorySampler};
 use crate::settings::SettingsStore;
 use crate::tray::TrayController;
@@ -34,6 +35,7 @@ struct AppState {
     tray: TrayController,
     sampler: MemorySampler,
     cpu_sampler: RefCell<CpuSampler>,
+    gpu_sampler: GpuSampler,
     app_scan_sender: Sender<AppScanResult>,
     app_scan_receiver: Receiver<AppScanResult>,
     app_scan_in_flight: Cell<bool>,
@@ -44,6 +46,7 @@ struct AppState {
     auto_refresh_enabled: Cell<bool>,
     show_app_usage: Cell<bool>,
     show_cpu: Cell<bool>,
+    show_gpu: Cell<bool>,
     settings: SettingsStore,
     app_memory: RefCell<AppMemorySnapshot>,
     last_snapshot: RefCell<Option<crate::model::MemorySnapshot>>,
@@ -97,6 +100,10 @@ fn app_scan_decision(menu_open: bool, manual: bool, ticks_until_refresh: u8) -> 
 
 fn should_sample_cpu(menu_open: bool, show_cpu: bool) -> bool {
     menu_open && show_cpu
+}
+
+fn should_sample_gpu(menu_open: bool, show_gpu: bool) -> bool {
+    menu_open && show_gpu
 }
 
 /// Resolve the app to quit by its stable `group_key` rather than a menu position.
@@ -171,6 +178,13 @@ mod tests {
     }
 
     #[test]
+    fn gpu_sampling_is_gated_by_visibility_and_its_own_setting() {
+        assert!(!should_sample_gpu(false, true));
+        assert!(!should_sample_gpu(true, false));
+        assert!(should_sample_gpu(true, true));
+    }
+
+    #[test]
     fn find_quittable_skips_unquittable_and_missing_keys() {
         let mut rows = vec![usage("rami")];
         rows[0].can_quit = false;
@@ -219,11 +233,13 @@ impl AppState {
                 self.tray.set_gauge_snapshot(snapshot, trend, mtm);
                 if self.menu_open.get() {
                     let cpu = self.sample_cpu_if_visible();
+                    let gpu = self.sample_gpu_if_visible();
                     let apps = self.app_memory.borrow();
                     let history = self.trend_tracker.borrow().samples();
                     self.tray.set_menu_snapshot(
                         snapshot,
                         cpu,
+                        gpu,
                         &apps,
                         &history,
                         self.launch_at_login_status.get(),
@@ -258,6 +274,25 @@ impl AppState {
             }
         };
         next
+    }
+
+    fn sample_gpu_if_visible(&self) -> GpuModuleState {
+        if !should_sample_gpu(self.menu_open.get(), self.show_gpu.get()) {
+            return if self.show_gpu.get() {
+                GpuModuleState::Unavailable
+            } else {
+                GpuModuleState::Disabled
+            };
+        }
+
+        match self.gpu_sampler.sample() {
+            Ok(Some(snapshot)) => GpuModuleState::Available(snapshot),
+            Ok(None) => GpuModuleState::Unavailable,
+            Err(error) => {
+                eprintln!("GPU sample failed: {error}");
+                GpuModuleState::Unavailable
+            }
+        }
     }
 
     fn start_app_scan(&self) {
@@ -373,6 +408,14 @@ impl AppState {
         self.settings.set_show_cpu(enabled);
         self.cpu_sampler.borrow_mut().reset();
         self.tray.set_show_cpu(enabled);
+        self.refresh(true);
+    }
+
+    fn toggle_show_gpu(&self) {
+        let enabled = !self.show_gpu.get();
+        self.show_gpu.set(enabled);
+        self.settings.set_show_gpu(enabled);
+        self.tray.set_show_gpu(enabled);
         self.refresh(true);
     }
 
@@ -509,6 +552,11 @@ define_class!(
             with_app_state(|state| state.toggle_show_cpu());
         }
 
+        #[unsafe(method(toggleShowGpu:))]
+        fn toggle_show_gpu(&self, _sender: &AnyObject) {
+            with_app_state(|state| state.toggle_show_gpu());
+        }
+
         #[unsafe(method(copyDiagnostics:))]
         fn copy_diagnostics(&self, _sender: &AnyObject) {
             with_app_state(|state| state.copy_diagnostic_report());
@@ -593,6 +641,7 @@ impl App {
             tray,
             sampler: MemorySampler::new()?,
             cpu_sampler: RefCell::new(CpuSampler::new()),
+            gpu_sampler: GpuSampler::new(),
             app_scan_sender,
             app_scan_receiver,
             app_scan_in_flight: Cell::new(false),
@@ -603,6 +652,7 @@ impl App {
             auto_refresh_enabled: Cell::new(settings.auto_refresh_enabled),
             show_app_usage: Cell::new(settings.show_app_usage),
             show_cpu: Cell::new(settings.show_cpu),
+            show_gpu: Cell::new(settings.show_gpu),
             settings: settings_store,
             app_memory: RefCell::new(initial_app_memory),
             last_snapshot: RefCell::new(None),
@@ -616,6 +666,7 @@ impl App {
         // Reflect the persisted "show apps" choice in the menu checkbox before first paint.
         state.tray.set_show_app_usage(settings.show_app_usage);
         state.tray.set_show_cpu(settings.show_cpu);
+        state.tray.set_show_gpu(settings.show_gpu);
         app.finishLaunching();
         state.refresh(true);
         // NSRunLoopCommonModes so ticks keep firing while the menu is tracking;

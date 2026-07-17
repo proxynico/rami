@@ -1,4 +1,6 @@
-use crate::model::{classify_pressure, CpuModuleState, MemoryPressure, SystemSnapshot};
+use crate::model::{
+    classify_pressure, CpuModuleState, GpuModuleState, MemoryPressure, SystemSnapshot,
+};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 
@@ -120,6 +122,11 @@ pub struct CpuModuleDisplay {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuModuleDisplay {
+    pub utilization: StatRow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CpuDisplayState {
     Loading,
     Available {
@@ -133,6 +140,7 @@ pub enum CpuDisplayState {
 pub enum ModuleDisplay {
     Memory(Box<MemoryModuleDisplay>),
     Cpu(CpuModuleDisplay),
+    Gpu(GpuModuleDisplay),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -210,6 +218,16 @@ pub fn dropdown_model_with_apps(
         CpuModuleState::Unavailable => modules.push(ModuleDisplay::Cpu(CpuModuleDisplay {
             state: CpuDisplayState::Unavailable,
         })),
+    }
+    if let GpuModuleState::Available(gpu) = snapshot.gpu {
+        modules.push(ModuleDisplay::Gpu(GpuModuleDisplay {
+            utilization: StatRow {
+                primary: "Utilization".to_string(),
+                tail: Some(format!("{}%", gpu.utilization_percent.min(100))),
+                quit_key: None,
+                bundle_path: None,
+            },
+        }));
     }
     DropdownModel::Loaded { accent, modules }
 }
@@ -292,7 +310,9 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CpuModuleState, CpuSnapshot, MemorySnapshot, PressureSource};
+    use crate::model::{
+        CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot, PressureSource,
+    };
     use crate::trend::rank_app_rows;
 
     fn snapshot(total_bytes: u64) -> SystemSnapshot {
@@ -311,6 +331,7 @@ mod tests {
                 available_bytes: total_bytes / 2,
             },
             cpu: CpuModuleState::Disabled,
+            gpu: GpuModuleState::Disabled,
         }
     }
 
@@ -535,6 +556,30 @@ mod tests {
                 state: CpuDisplayState::Unavailable
             }))
         ));
+    }
+
+    #[test]
+    fn available_gpu_module_follows_existing_modules_and_unavailable_gpu_stays_hidden() {
+        let mut available = snapshot(SIXTEEN_GIB);
+        available.gpu = GpuModuleState::Available(GpuSnapshot {
+            utilization_percent: 76,
+        });
+
+        let DropdownModel::Loaded { modules, .. } = dropdown_model(available) else {
+            panic!("expected loaded model");
+        };
+        let Some(ModuleDisplay::Gpu(gpu)) = modules.get(1) else {
+            panic!("expected GPU module after Memory");
+        };
+        assert_eq!(gpu.utilization.primary, "Utilization");
+        assert_eq!(gpu.utilization.tail.as_deref(), Some("76%"));
+
+        let mut unavailable = snapshot(SIXTEEN_GIB);
+        unavailable.gpu = GpuModuleState::Unavailable;
+        let DropdownModel::Loaded { modules, .. } = dropdown_model(unavailable) else {
+            panic!("expected loaded model");
+        };
+        assert_eq!(modules.len(), 1);
     }
 
     #[test]
