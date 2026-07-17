@@ -317,15 +317,6 @@ fn is_absolute_app_bundle_path(group_key: &str) -> bool {
     group_key.starts_with('/') && group_key.ends_with(".app")
 }
 
-pub(crate) fn pid_still_matches_usage(pid: pid_t, usage: &AppMemoryUsage) -> bool {
-    let mut lookup = LiveProcLookup::new();
-    let mut bundle_memo = HashMap::new();
-    let Some((group_key, _)) = owning_app_bundle(pid, &mut lookup, &mut bundle_memo) else {
-        return false;
-    };
-    group_key == usage.group_key
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

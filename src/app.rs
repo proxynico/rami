@@ -1,4 +1,3 @@
-use crate::app_control::quit_app_group;
 use crate::cpu::CpuSampler;
 use crate::diagnostics::{build_diagnostic_report, current_report_input};
 use crate::gpu::GpuSampler;
@@ -148,14 +147,6 @@ fn merge_cpu_process_rows(
     }
 }
 
-/// Resolve the app to quit by its stable `group_key` rather than a menu position.
-/// A background scan may reorder or drop rows between the menu being shown and the
-/// click landing; matching on identity guarantees we quit the app the user picked,
-/// or nothing if it is gone.
-fn find_quittable<'a>(rows: &'a [AppMemoryUsage], key: &str) -> Option<&'a AppMemoryUsage> {
-    rows.iter().find(|row| row.can_quit && row.group_key == key)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,22 +167,6 @@ mod tests {
         )
         .is_empty());
         assert!(previous_app_rows_if_fresh(None, now, &rows).is_empty());
-    }
-
-    #[test]
-    fn find_quittable_matches_identity_regardless_of_position() {
-        let rows = vec![usage("Chrome"), usage("Zen"), usage("Cursor")];
-        // The same key resolves to the same app no matter where it sits in the list,
-        // so a reorder between menu render and click cannot quit the wrong app.
-        assert_eq!(
-            find_quittable(&rows, "/Applications/Zen.app").map(|u| u.name.as_str()),
-            Some("Zen")
-        );
-        let reordered = vec![usage("Zen"), usage("Cursor"), usage("Chrome")];
-        assert_eq!(
-            find_quittable(&reordered, "/Applications/Zen.app").map(|u| u.name.as_str()),
-            Some("Zen")
-        );
     }
 
     #[test]
@@ -252,14 +227,6 @@ mod tests {
 
         assert_eq!(next, current);
         assert!(!updated);
-    }
-
-    #[test]
-    fn find_quittable_skips_unquittable_and_missing_keys() {
-        let mut rows = vec![usage("rami")];
-        rows[0].can_quit = false;
-        assert!(find_quittable(&rows, "/Applications/rami.app").is_none());
-        assert!(find_quittable(&rows, "/Applications/Ghost.app").is_none());
     }
 
     fn usage(name: &str) -> AppMemoryUsage {
@@ -489,19 +456,6 @@ impl AppState {
             .set(self.cpu_process_scan_generation.get().wrapping_add(1));
     }
 
-    fn quit_app_with_key(&self, key: &str) {
-        let usage = match &*self.app_memory.borrow() {
-            AppMemorySnapshot::Loaded(rows) => find_quittable(rows, key).cloned(),
-            _ => None,
-        };
-        if let Some(usage) = usage {
-            if let Err(err) = quit_app_group(&usage) {
-                eprintln!("failed to quit {}: {err}", usage.name);
-            }
-            self.refresh(true);
-        }
-    }
-
     fn toggle_launch_at_login(&self) {
         match self.launch_at_login.toggle() {
             Ok(status) => self.launch_at_login_status.set(status),
@@ -717,14 +671,6 @@ define_class!(
             with_app_state(|state| state.reopen_menu_if_app_usage_visible());
         }
 
-        #[unsafe(method(quitApp:))]
-        fn quit_app(&self, sender: &AnyObject) {
-            let key: Option<Retained<NSString>> = unsafe { msg_send![sender, representedObject] };
-            let Some(key) = key else {
-                return;
-            };
-            with_app_state(|state| state.quit_app_with_key(&key.to_string()));
-        }
     }
 
     unsafe impl NSObjectProtocol for RefreshTarget {}

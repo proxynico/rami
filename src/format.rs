@@ -321,7 +321,7 @@ fn app_row(app: &AppMemoryUsage) -> StatRow {
     StatRow {
         primary: truncate_name(&app.name, APP_NAME_MAX_CHARS),
         tail: Some(tail),
-        quit_key: app.can_quit.then(|| app.group_key.clone()),
+        quit_key: None,
         bundle_path: app
             .group_key
             .ends_with(".app")
@@ -462,10 +462,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].primary, "Cursor");
         assert_eq!(rows[0].tail.as_deref(), Some("2.0 GB"));
-        assert_eq!(
-            rows[0].quit_key.as_deref(),
-            Some("/Applications/Cursor.app")
-        );
+        assert_eq!(rows[0].quit_key, None);
     }
 
     #[test]
@@ -702,7 +699,7 @@ mod tests {
         };
         assert_eq!(rows[0].primary, "Zen");
         assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB"));
-        assert_eq!(rows[0].quit_key.as_deref(), Some("/Applications/Zen.app"));
+        assert_eq!(rows[0].quit_key, None);
     }
 
     fn usage(name: &str, footprint_bytes: u64, delta_bytes: Option<i64>) -> AppMemoryUsage {

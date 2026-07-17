@@ -14,10 +14,15 @@ Deliberate scope non-goals that will look like omissions later: no CPU frequency
 and no temperatures (both need private APIs or privileged helpers — against
 the app's simplicity premise), no per-core rings (E/P cluster aggregates
 only), no per-process GPU (no public API), and no quit action on the
-CPU process list (only the memory list keeps it; killing a momentarily-hot
-process invites data loss).
+ranked app-memory or CPU-process rows. rami is a monitor, not a task manager;
+those rows stay informational instead of growing destructive submenus and
+chevrons.
 
 The dropdown is intentionally bounded: app-memory and CPU-process rankings
 show three rows each, and the decorative history sparkline is omitted. The
 full module set should remain usable without turning the native menu into a
 screen-height dashboard.
+
+Memory remains the visual anchor. CPU and GPU section labels use fixed-width
+centered views, while metric rows keep a consistent label/value grid. Settings
+retains the only disclosure chevron because it is the only real submenu.

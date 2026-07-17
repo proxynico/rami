@@ -6,6 +6,7 @@ use crate::format::{
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_view::MemoryRingsView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
+use crate::module_title_view::ModuleTitleView;
 use crate::process_cpu::{ProcessCpuSnapshot, PROCESS_CPU_ROW_LIMIT};
 use crate::process_memory::AppMemorySnapshot;
 #[cfg(test)]
@@ -73,8 +74,6 @@ pub struct TrayController {
     app_loading_item: Retained<NSMenuItem>,
     app_unavailable_item: Retained<NSMenuItem>,
     app_items: Vec<Retained<NSMenuItem>>,
-    app_quit_items: Vec<Retained<NSMenuItem>>,
-    app_submenus: Vec<Retained<NSMenu>>,
     cpu_title_item: Retained<NSMenuItem>,
     cpu_loading_item: Retained<NSMenuItem>,
     cpu_unavailable_item: Retained<NSMenuItem>,
@@ -146,19 +145,11 @@ impl TrayController {
         app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
         let app_items: Vec<Retained<NSMenuItem>> =
             (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
-        let app_quit_items: Vec<Retained<NSMenuItem>> = (0..APP_ROW_POOL)
-            .map(|_| make_quit_app_item(mtm, &refresh_target))
-            .collect();
-        let app_submenus: Vec<Retained<NSMenu>> = (0..APP_ROW_POOL)
-            .map(|idx| {
-                let submenu = NSMenu::new(mtm);
-                submenu.setAutoenablesItems(false);
-                submenu.addItem(&app_quit_items[idx]);
-                submenu
-            })
-            .collect();
         let cpu_title_item = make_stat_item(mtm);
-        cpu_title_item.setImage(Some(&placeholder_icon));
+        let cpu_title_view = ModuleTitleView::new(mtm, "CPU");
+        unsafe {
+            let _: () = msg_send![&cpu_title_item, setView: &*cpu_title_view];
+        }
         let cpu_loading_item = make_stat_item(mtm);
         cpu_loading_item.setImage(Some(&placeholder_icon));
         cpu_loading_item.setAttributedTitle(Some(&loading_attributed_title()));
@@ -171,7 +162,10 @@ impl TrayController {
             .map(|_| make_stat_item(mtm))
             .collect();
         let gpu_title_item = make_stat_item(mtm);
-        gpu_title_item.setImage(Some(&placeholder_icon));
+        let gpu_title_view = ModuleTitleView::new(mtm, "GPU");
+        unsafe {
+            let _: () = msg_send![&gpu_title_item, setView: &*gpu_title_view];
+        }
         let gpu_utilization_item = make_stat_item(mtm);
 
         let refresh_item = unsafe {
@@ -367,8 +361,6 @@ impl TrayController {
             app_loading_item,
             app_unavailable_item,
             app_items,
-            app_quit_items,
-            app_submenus,
             cpu_title_item,
             cpu_loading_item,
             cpu_unavailable_item,
@@ -649,23 +641,7 @@ impl TrayController {
             for (item, row) in self.app_items.iter().zip(rows.iter()) {
                 item.setAttributedTitle(Some(&app_row_attributed(row, accent)));
                 item.setImage(self.app_row_icon(row).as_deref());
-            }
-            for (idx, row) in rows.iter().enumerate() {
-                let item = &self.app_items[idx];
-                if let Some(key) = &row.quit_key {
-                    let quit_item = &self.app_quit_items[idx];
-                    quit_item.setTitle(&NSString::from_str(&format!("Quit {}", row.primary)));
-                    // Carry the app's stable identity on the menu item so the quit handler
-                    // targets the app the user saw, never a positional slot that may have shifted.
-                    let key_obj = NSString::from_str(key);
-                    unsafe {
-                        let _: () = msg_send![&**quit_item, setRepresentedObject: &*key_obj];
-                    }
-                    quit_item.setEnabled(true);
-                    item.setSubmenu(Some(&self.app_submenus[idx]));
-                } else {
-                    item.setSubmenu(None);
-                }
+                item.setSubmenu(None);
             }
         }
         *self.last_app_section.borrow_mut() = Some(apps.clone());
@@ -676,16 +652,6 @@ impl TrayController {
             return;
         }
 
-        self.cpu_title_item
-            .setAttributedTitle(Some(&stat_row_attributed(
-                &StatRow {
-                    primary: "CPU".to_string(),
-                    tail: None,
-                    quit_key: None,
-                    bundle_path: None,
-                },
-                accent.colorWithAlphaComponent(1.0),
-            )));
         if let CpuDisplayState::Available {
             utilization,
             cores,
@@ -716,16 +682,6 @@ impl TrayController {
             return;
         }
 
-        self.gpu_title_item
-            .setAttributedTitle(Some(&stat_row_attributed(
-                &StatRow {
-                    primary: "GPU".to_string(),
-                    tail: None,
-                    quit_key: None,
-                    bundle_path: None,
-                },
-                accent.colorWithAlphaComponent(1.0),
-            )));
         self.gpu_utilization_item
             .setAttributedTitle(Some(&stat_row_attributed(
                 &gpu.utilization,
@@ -951,25 +907,6 @@ fn make_stat_item(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
             &NSString::from_str(""),
         )
     };
-    item.setEnabled(true);
-    item
-}
-
-fn make_quit_app_item(
-    mtm: MainThreadMarker,
-    refresh_target: &Retained<AnyObject>,
-) -> Retained<NSMenuItem> {
-    let item = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm),
-            &NSString::from_str("Quit App"),
-            Some(sel!(quitApp:)),
-            &NSString::from_str(""),
-        )
-    };
-    unsafe {
-        item.setTarget(Some(refresh_target));
-    }
     item.setEnabled(true);
     item
 }
@@ -1648,7 +1585,7 @@ mod tests {
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
-                quit_key: Some("/Applications/Cursor.app"),
+                quit_key: None,
             }
         );
         assert_eq!(
@@ -1656,7 +1593,7 @@ mod tests {
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
-                quit_key: Some("/Applications/Chrome.app"),
+                quit_key: None,
             }
         );
         assert_eq!(entries[9], MenuEntry::Separator);
