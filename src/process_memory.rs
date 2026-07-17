@@ -100,12 +100,17 @@ impl ProcessMemorySampler {
 }
 
 fn list_all_pids() -> io::Result<Vec<pid_t>> {
-    let needed_bytes = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-    if needed_bytes <= 0 {
+    // `proc_listallpids` returns a *count of pids* (it divides the underlying
+    // byte count by sizeof(pid_t) itself); only the buffer size argument is in
+    // bytes. Treating the return value as bytes silently truncates the scan
+    // to a quarter of the process list.
+    let pid_count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+    if pid_count <= 0 {
         return Err(io::Error::last_os_error());
     }
 
-    let cap = (needed_bytes as usize / std::mem::size_of::<pid_t>()) + 32;
+    // Headroom for processes spawned between the two calls.
+    let cap = pid_count as usize + 32;
     let mut buf: Vec<pid_t> = vec![0; cap];
     let buf_bytes = (cap * std::mem::size_of::<pid_t>()) as c_int;
 
@@ -114,8 +119,7 @@ fn list_all_pids() -> io::Result<Vec<pid_t>> {
         return Err(io::Error::last_os_error());
     }
 
-    let count = written as usize / std::mem::size_of::<pid_t>();
-    buf.truncate(count);
+    buf.truncate(written as usize);
     Ok(buf)
 }
 
