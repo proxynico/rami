@@ -19,6 +19,23 @@ pub struct MemorySnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SystemSnapshot {
     pub memory: MemorySnapshot,
+    pub cpu: CpuModuleState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuSnapshot {
+    pub user_percent: u8,
+    pub system_percent: u8,
+    pub efficiency_percent: Option<u8>,
+    pub performance_percent: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpuModuleState {
+    Disabled,
+    Loading,
+    Available(CpuSnapshot),
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

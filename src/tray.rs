@@ -1,7 +1,7 @@
 use crate::format::{
     dropdown_model_with_apps, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
-    placeholder_dropdown_model, Accent, AppSectionDisplay, DropdownModel, LegendRow, ModuleDisplay,
-    RingDisplay, StatRow,
+    placeholder_dropdown_model, Accent, AppSectionDisplay, CpuDisplayState, DropdownModel,
+    LegendRow, ModuleDisplay, RingDisplay, StatRow,
 };
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_view::MemoryRingsView;
@@ -37,10 +37,22 @@ enum AppShape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CpuShape {
+    Hidden,
+    Loading,
+    Unavailable,
+    Available { cores: usize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuShape {
     Uninitialized,
     Loading,
-    Loaded { apps: AppShape, show_swap: bool },
+    Loaded {
+        apps: AppShape,
+        show_swap: bool,
+        cpu: CpuShape,
+    },
 }
 
 pub struct TrayController {
@@ -58,9 +70,15 @@ pub struct TrayController {
     app_items: Vec<Retained<NSMenuItem>>,
     app_quit_items: Vec<Retained<NSMenuItem>>,
     app_submenus: Vec<Retained<NSMenu>>,
+    cpu_title_item: Retained<NSMenuItem>,
+    cpu_loading_item: Retained<NSMenuItem>,
+    cpu_unavailable_item: Retained<NSMenuItem>,
+    cpu_legend_items: Vec<Retained<NSMenuItem>>,
+    cpu_core_items: Vec<Retained<NSMenuItem>>,
     refresh_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
     show_app_usage_item: Retained<NSMenuItem>,
+    show_cpu_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
     _diagnostics_item: Retained<NSMenuItem>,
     _about_item: Retained<NSMenuItem>,
@@ -80,6 +98,7 @@ pub struct TrayController {
     last_swap_row: RefCell<Option<StatRow>>,
     last_history: RefCell<Vec<u64>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
+    last_cpu_state: RefCell<Option<CpuDisplayState>>,
     last_auto_refresh_enabled: Cell<bool>,
     last_tooltip: RefCell<String>,
     last_launch_title: RefCell<String>,
@@ -134,6 +153,16 @@ impl TrayController {
                 submenu
             })
             .collect();
+        let cpu_title_item = make_stat_item(mtm);
+        cpu_title_item.setImage(Some(&placeholder_icon));
+        let cpu_loading_item = make_stat_item(mtm);
+        cpu_loading_item.setImage(Some(&placeholder_icon));
+        cpu_loading_item.setAttributedTitle(Some(&loading_attributed_title()));
+        let cpu_unavailable_item = make_stat_item(mtm);
+        cpu_unavailable_item.setImage(Some(&placeholder_icon));
+        cpu_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
+        let cpu_legend_items = (0..2).map(|_| make_stat_item(mtm)).collect();
+        let cpu_core_items = (0..2).map(|_| make_stat_item(mtm)).collect();
 
         let refresh_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -185,6 +214,20 @@ impl TrayController {
         }
         show_app_usage_item.setEnabled(true);
         show_app_usage_item.setState(NSControlStateValueOn);
+
+        let show_cpu_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Show CPU"),
+                Some(sel!(toggleShowCpu:)),
+                &empty,
+            )
+        };
+        unsafe {
+            show_cpu_item.setTarget(Some(&refresh_target));
+        }
+        show_cpu_item.setEnabled(true);
+        show_cpu_item.setState(NSControlStateValueOn);
 
         let launch_at_login_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -250,6 +293,7 @@ impl TrayController {
         settings_submenu.setAutoenablesItems(false);
         settings_submenu.addItem(&auto_refresh_item);
         settings_submenu.addItem(&show_app_usage_item);
+        settings_submenu.addItem(&show_cpu_item);
         settings_submenu.addItem(&launch_at_login_item);
         settings_submenu.addItem(&diagnostics_item);
         settings_submenu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -302,9 +346,15 @@ impl TrayController {
             app_items,
             app_quit_items,
             app_submenus,
+            cpu_title_item,
+            cpu_loading_item,
+            cpu_unavailable_item,
+            cpu_legend_items,
+            cpu_core_items,
             refresh_item,
             auto_refresh_item,
             show_app_usage_item,
+            show_cpu_item,
             launch_at_login_item,
             _diagnostics_item: diagnostics_item,
             _about_item: about_item,
@@ -324,6 +374,7 @@ impl TrayController {
             last_swap_row: RefCell::new(None),
             last_history: RefCell::new(Vec::new()),
             last_app_section: RefCell::new(None),
+            last_cpu_state: RefCell::new(None),
             last_auto_refresh_enabled: Cell::new(true),
             last_tooltip: RefCell::new(String::new()),
             last_launch_title: RefCell::new(String::new()),
@@ -368,6 +419,7 @@ impl TrayController {
     pub fn set_menu_snapshot(
         &self,
         snapshot: MemorySnapshot,
+        cpu: crate::model::CpuModuleState,
         apps: &AppMemorySnapshot,
         history: &[u64],
         launch_at_login_status: LaunchAtLoginStatus,
@@ -375,7 +427,14 @@ impl TrayController {
         mtm: MainThreadMarker,
     ) {
         self.apply_model(
-            &dropdown_model_with_apps(SystemSnapshot { memory: snapshot }, apps, history),
+            &dropdown_model_with_apps(
+                SystemSnapshot {
+                    memory: snapshot,
+                    cpu,
+                },
+                apps,
+                history,
+            ),
             launch_at_login_status,
             auto_refresh_enabled,
             mtm,
@@ -391,6 +450,14 @@ impl TrayController {
     pub fn set_show_app_usage(&self, enabled: bool) {
         // "Show Apps" follows the macOS convention: checked when the app list is visible.
         self.show_app_usage_item.setState(if enabled {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+    }
+
+    pub fn set_show_cpu(&self, enabled: bool) {
+        self.show_cpu_item.setState(if enabled {
             NSControlStateValueOn
         } else {
             NSControlStateValueOff
@@ -490,6 +557,7 @@ impl TrayController {
             self.last_swap_row.borrow_mut().take();
             self.last_history.borrow_mut().clear();
             self.last_app_section.borrow_mut().take();
+            self.last_cpu_state.borrow_mut().take();
         }
 
         if let DropdownModel::Loaded { accent, modules } = model {
@@ -503,12 +571,7 @@ impl TrayController {
                 *self.last_rings.borrow_mut() = Some(memory.rings.clone());
             }
             if accent_changed || self.last_breakdown.borrow().as_ref() != Some(&memory.breakdown) {
-                for (item, row) in self.legend_items.iter().zip(memory.breakdown.iter()) {
-                    let row_color = accent_color
-                        .colorWithAlphaComponent(f64::from(row.opacity_percent) / 100.0);
-                    item.setAttributedTitle(Some(&legend_row_attributed(row)));
-                    item.setImage(make_legend_icon(&row_color).as_deref());
-                }
+                update_legend_items(&self.legend_items, &memory.breakdown, &accent_color);
                 *self.last_breakdown.borrow_mut() = Some(memory.breakdown.clone());
             }
             self.update_app_section(&memory.apps, &accent_color, accent_changed);
@@ -526,8 +589,14 @@ impl TrayController {
                 || self.last_history.borrow().as_slice() != memory.history
             {
                 self.sparkline_view
-                    .update(memory.history.clone(), accent_color);
+                    .update(memory.history.clone(), accent_color.clone());
                 *self.last_history.borrow_mut() = memory.history.clone();
+            }
+            if let Some(cpu) = modules.iter().find_map(|module| match module {
+                ModuleDisplay::Cpu(cpu) => Some(cpu),
+                ModuleDisplay::Memory(_) => None,
+            }) {
+                self.update_cpu_module(&cpu.state, &accent_color, accent_changed);
             }
             self.last_accent.set(*accent);
         }
@@ -566,6 +635,34 @@ impl TrayController {
         *self.last_app_section.borrow_mut() = Some(apps.clone());
     }
 
+    fn update_cpu_module(&self, cpu: &CpuDisplayState, accent: &NSColor, accent_changed: bool) {
+        if !accent_changed && self.last_cpu_state.borrow().as_ref() == Some(cpu) {
+            return;
+        }
+
+        self.cpu_title_item
+            .setAttributedTitle(Some(&stat_row_attributed(
+                &StatRow {
+                    primary: "CPU".to_string(),
+                    tail: None,
+                    quit_key: None,
+                    bundle_path: None,
+                },
+                accent.colorWithAlphaComponent(1.0),
+            )));
+        if let CpuDisplayState::Available { utilization, cores } = cpu {
+            update_legend_items(&self.cpu_legend_items, utilization, accent);
+            for (item, row) in self.cpu_core_items.iter().zip(cores) {
+                item.setAttributedTitle(Some(&stat_row_attributed(
+                    row,
+                    accent.colorWithAlphaComponent(1.0),
+                )));
+                item.setImage(make_legend_icon(&accent.colorWithAlphaComponent(0.65)).as_deref());
+            }
+        }
+        *self.last_cpu_state.borrow_mut() = Some(cpu.clone());
+    }
+
     fn rebuild_menu(&self, shape: MenuShape, mtm: MainThreadMarker) {
         self.menu.removeAllItems();
         match shape {
@@ -573,7 +670,11 @@ impl TrayController {
             MenuShape::Loading => {
                 self.menu.addItem(&self.loading_item);
             }
-            MenuShape::Loaded { apps, show_swap } => {
+            MenuShape::Loaded {
+                apps,
+                show_swap,
+                cpu,
+            } => {
                 self.menu.addItem(&self.rings_item);
                 for item in &self.legend_items {
                     self.menu.addItem(item);
@@ -595,6 +696,29 @@ impl TrayController {
                     AppShape::Rows { rows } => {
                         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                         for item in self.app_items.iter().take(rows) {
+                            self.menu.addItem(item);
+                        }
+                    }
+                }
+                match cpu {
+                    CpuShape::Hidden => {}
+                    CpuShape::Loading => {
+                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
+                        self.menu.addItem(&self.cpu_title_item);
+                        self.menu.addItem(&self.cpu_loading_item);
+                    }
+                    CpuShape::Unavailable => {
+                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
+                        self.menu.addItem(&self.cpu_title_item);
+                        self.menu.addItem(&self.cpu_unavailable_item);
+                    }
+                    CpuShape::Available { cores } => {
+                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
+                        self.menu.addItem(&self.cpu_title_item);
+                        for item in &self.cpu_legend_items {
+                            self.menu.addItem(item);
+                        }
+                        for item in self.cpu_core_items.iter().take(cores) {
                             self.menu.addItem(item);
                         }
                     }
@@ -666,6 +790,14 @@ impl TrayController {
     }
 }
 
+fn update_legend_items(items: &[Retained<NSMenuItem>], rows: &[LegendRow], accent: &NSColor) {
+    for (item, row) in items.iter().zip(rows) {
+        let row_color = accent.colorWithAlphaComponent(f64::from(row.opacity_percent) / 100.0);
+        item.setAttributedTitle(Some(&legend_row_attributed(row)));
+        item.setImage(make_legend_icon(&row_color).as_deref());
+    }
+}
+
 fn menu_shape_for(model: &DropdownModel) -> MenuShape {
     match model {
         DropdownModel::Loading => MenuShape::Loading,
@@ -684,6 +816,19 @@ fn menu_shape_for(model: &DropdownModel) -> MenuShape {
             MenuShape::Loaded {
                 apps: app_shape,
                 show_swap: memory.swap.is_some(),
+                cpu: modules
+                    .iter()
+                    .find_map(|module| match module {
+                        ModuleDisplay::Cpu(cpu) => Some(match &cpu.state {
+                            CpuDisplayState::Loading => CpuShape::Loading,
+                            CpuDisplayState::Unavailable => CpuShape::Unavailable,
+                            CpuDisplayState::Available { cores, .. } => CpuShape::Available {
+                                cores: cores.len().min(2),
+                            },
+                        }),
+                        ModuleDisplay::Memory(_) => None,
+                    })
+                    .unwrap_or(CpuShape::Hidden),
             }
         }
     }
@@ -940,6 +1085,7 @@ fn unavailable_attributed_title() -> Retained<NSAttributedString> {
 #[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MenuEntry<'a> {
+    ModuleTitle(&'a str),
     Rings {
         memory_percent: u8,
         pressure_percent: u8,
@@ -957,6 +1103,8 @@ pub(crate) enum MenuEntry<'a> {
     Loading,
     AppLoading,
     AppUnavailable,
+    CpuLoading,
+    CpuUnavailable,
     AppRow {
         primary: &'a str,
         tail: Option<&'a str>,
@@ -967,6 +1115,7 @@ pub(crate) enum MenuEntry<'a> {
     Settings {
         auto_refresh_enabled: bool,
         show_app_usage: bool,
+        show_cpu: bool,
         launch_at_login: LaunchAtLoginStatus,
     },
     Quit,
@@ -978,7 +1127,13 @@ pub(crate) fn loaded_menu_entries<'a>(
     launch_at_login_status: LaunchAtLoginStatus,
     auto_refresh_enabled: bool,
 ) -> Vec<MenuEntry<'a>> {
-    loaded_menu_entries_with_app_usage(model, launch_at_login_status, auto_refresh_enabled, false)
+    loaded_menu_entries_with_settings(
+        model,
+        launch_at_login_status,
+        auto_refresh_enabled,
+        false,
+        false,
+    )
 }
 
 #[cfg(test)]
@@ -987,6 +1142,23 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
     launch_at_login_status: LaunchAtLoginStatus,
     auto_refresh_enabled: bool,
     show_app_usage: bool,
+) -> Vec<MenuEntry<'a>> {
+    loaded_menu_entries_with_settings(
+        model,
+        launch_at_login_status,
+        auto_refresh_enabled,
+        show_app_usage,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn loaded_menu_entries_with_settings<'a>(
+    model: &'a DropdownModel,
+    launch_at_login_status: LaunchAtLoginStatus,
+    auto_refresh_enabled: bool,
+    show_app_usage: bool,
+    show_cpu: bool,
 ) -> Vec<MenuEntry<'a>> {
     let mut entries = Vec::new();
     match model {
@@ -1036,6 +1208,32 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
                     }
                 }
             }
+            for module in modules.iter().skip(1) {
+                let ModuleDisplay::Cpu(cpu) = module else {
+                    continue;
+                };
+                entries.push(MenuEntry::Separator);
+                entries.push(MenuEntry::ModuleTitle("CPU"));
+                match &cpu.state {
+                    CpuDisplayState::Loading => entries.push(MenuEntry::CpuLoading),
+                    CpuDisplayState::Unavailable => entries.push(MenuEntry::CpuUnavailable),
+                    CpuDisplayState::Available { utilization, cores } => {
+                        for row in utilization {
+                            entries.push(MenuEntry::Legend {
+                                label: &row.label,
+                                value: &row.value,
+                                opacity_percent: row.opacity_percent,
+                            });
+                        }
+                        for row in cores {
+                            entries.push(MenuEntry::Stat {
+                                primary: &row.primary,
+                                tail: row.tail.as_deref(),
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
     entries.push(MenuEntry::Separator);
@@ -1043,6 +1241,7 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
     entries.push(MenuEntry::Settings {
         auto_refresh_enabled,
         show_app_usage,
+        show_cpu,
         launch_at_login: launch_at_login_status,
     });
     entries.push(MenuEntry::Separator);
@@ -1055,7 +1254,9 @@ mod tests {
     use super::{badge_for_state, loaded_menu_entries, BadgeKind, MenuEntry};
     use crate::format::{dropdown_model, dropdown_model_with_apps, placeholder_dropdown_model};
     use crate::login_item::LaunchAtLoginStatus;
-    use crate::model::{MemorySnapshot, PressureSource, SystemSnapshot};
+    use crate::model::{
+        CpuModuleState, CpuSnapshot, MemorySnapshot, PressureSource, SystemSnapshot,
+    };
     use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
     use crate::trend::MemoryTrend;
 
@@ -1084,6 +1285,7 @@ mod tests {
                 swap_used_bytes: 1_288_490_189,
                 available_bytes: 11_055_540_777,
             },
+            cpu: CpuModuleState::Disabled,
         }
     }
 
@@ -1100,6 +1302,7 @@ mod tests {
                 MenuEntry::Settings {
                     auto_refresh_enabled: true,
                     show_app_usage: false,
+                    show_cpu: false,
                     launch_at_login: LaunchAtLoginStatus::Disabled,
                 },
                 MenuEntry::Separator,
@@ -1149,6 +1352,7 @@ mod tests {
                 MenuEntry::Settings {
                     auto_refresh_enabled: true,
                     show_app_usage: false,
+                    show_cpu: false,
                     launch_at_login: LaunchAtLoginStatus::Enabled,
                 },
                 MenuEntry::Separator,
@@ -1224,6 +1428,28 @@ mod tests {
     }
 
     #[test]
+    fn show_cpu_state_is_independent_in_settings() {
+        use super::loaded_menu_entries_with_settings;
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
+        let entries = loaded_menu_entries_with_settings(
+            &model,
+            LaunchAtLoginStatus::Disabled,
+            false,
+            true,
+            true,
+        );
+        assert!(entries.iter().any(|entry| matches!(
+            entry,
+            MenuEntry::Settings {
+                auto_refresh_enabled: false,
+                show_app_usage: true,
+                show_cpu: true,
+                ..
+            }
+        )));
+    }
+
+    #[test]
     fn loaded_with_apps_rows_follow_memory_section() {
         let usage = vec![
             AppMemoryUsage {
@@ -1280,5 +1506,51 @@ mod tests {
             }
         );
         assert_eq!(entries[10], MenuEntry::Separator);
+    }
+
+    #[test]
+    fn loaded_cpu_module_follows_memory_with_shared_legend_and_core_rows() {
+        let mut snapshot = snapshot();
+        snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
+            user_percent: 42,
+            system_percent: 9,
+            efficiency_percent: Some(18),
+            performance_percent: Some(74),
+        });
+        let model = dropdown_model(snapshot);
+        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+
+        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[8], MenuEntry::ModuleTitle("CPU"));
+        assert_eq!(
+            entries[9],
+            MenuEntry::Legend {
+                label: "User",
+                value: "42%",
+                opacity_percent: 100,
+            }
+        );
+        assert_eq!(
+            entries[10],
+            MenuEntry::Legend {
+                label: "System",
+                value: "9%",
+                opacity_percent: 50,
+            }
+        );
+        assert_eq!(
+            entries[11],
+            MenuEntry::Stat {
+                primary: "E-cores",
+                tail: Some("18%"),
+            }
+        );
+        assert_eq!(
+            entries[12],
+            MenuEntry::Stat {
+                primary: "P-cores",
+                tail: Some("74%"),
+            }
+        );
     }
 }
