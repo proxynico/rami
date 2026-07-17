@@ -11,6 +11,7 @@ mod diagnostics;
 mod gpu;
 mod login_item;
 mod memory_view;
+mod process_cpu;
 mod process_memory;
 mod settings;
 mod status_icon;

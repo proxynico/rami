@@ -1,11 +1,12 @@
 use crate::format::{
-    dropdown_model_with_apps, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
+    dropdown_model_with_sections, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
     placeholder_dropdown_model, Accent, AppSectionDisplay, CpuDisplayState, DropdownModel,
     GpuModuleDisplay, LegendRow, ModuleDisplay, RingDisplay, StatRow,
 };
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_view::MemoryRingsView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
+use crate::process_cpu::{ProcessCpuSnapshot, PROCESS_CPU_ROW_LIMIT};
 use crate::process_memory::AppMemorySnapshot;
 use crate::sparkline;
 #[cfg(test)]
@@ -41,7 +42,7 @@ enum CpuShape {
     Hidden,
     Loading,
     Unavailable,
-    Available { cores: usize },
+    Available { cores: usize, processes: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +83,7 @@ pub struct TrayController {
     cpu_unavailable_item: Retained<NSMenuItem>,
     cpu_legend_items: Vec<Retained<NSMenuItem>>,
     cpu_core_items: Vec<Retained<NSMenuItem>>,
+    cpu_process_items: Vec<Retained<NSMenuItem>>,
     gpu_title_item: Retained<NSMenuItem>,
     gpu_utilization_item: Retained<NSMenuItem>,
     refresh_item: Retained<NSMenuItem>,
@@ -174,6 +176,9 @@ impl TrayController {
         cpu_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
         let cpu_legend_items = (0..2).map(|_| make_stat_item(mtm)).collect();
         let cpu_core_items = (0..2).map(|_| make_stat_item(mtm)).collect();
+        let cpu_process_items = (0..PROCESS_CPU_ROW_LIMIT)
+            .map(|_| make_stat_item(mtm))
+            .collect();
         let gpu_title_item = make_stat_item(mtm);
         gpu_title_item.setImage(Some(&placeholder_icon));
         let gpu_utilization_item = make_stat_item(mtm);
@@ -380,6 +385,7 @@ impl TrayController {
             cpu_unavailable_item,
             cpu_legend_items,
             cpu_core_items,
+            cpu_process_items,
             gpu_title_item,
             gpu_utilization_item,
             refresh_item,
@@ -455,19 +461,21 @@ impl TrayController {
         cpu: crate::model::CpuModuleState,
         gpu: crate::model::GpuModuleState,
         apps: &AppMemorySnapshot,
+        cpu_processes: &ProcessCpuSnapshot,
         history: &[u64],
         launch_at_login_status: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
     ) {
         self.apply_model(
-            &dropdown_model_with_apps(
+            &dropdown_model_with_sections(
                 SystemSnapshot {
                     memory: snapshot,
                     cpu,
                     gpu,
                 },
                 apps,
+                cpu_processes,
                 history,
             ),
             launch_at_login_status,
@@ -700,7 +708,12 @@ impl TrayController {
                 },
                 accent.colorWithAlphaComponent(1.0),
             )));
-        if let CpuDisplayState::Available { utilization, cores } = cpu {
+        if let CpuDisplayState::Available {
+            utilization,
+            cores,
+            processes,
+        } = cpu
+        {
             update_legend_items(&self.cpu_legend_items, utilization, accent);
             for (item, row) in self.cpu_core_items.iter().zip(cores) {
                 item.setAttributedTitle(Some(&stat_row_attributed(
@@ -708,6 +721,13 @@ impl TrayController {
                     accent.colorWithAlphaComponent(1.0),
                 )));
                 item.setImage(make_legend_icon(&accent.colorWithAlphaComponent(0.65)).as_deref());
+            }
+            for (item, row) in self.cpu_process_items.iter().zip(processes) {
+                item.setAttributedTitle(Some(&stat_row_attributed(
+                    row,
+                    accent.colorWithAlphaComponent(1.0),
+                )));
+                item.setImage(make_legend_icon(&accent.colorWithAlphaComponent(0.35)).as_deref());
             }
         }
         *self.last_cpu_state.borrow_mut() = Some(cpu.clone());
@@ -788,13 +808,16 @@ impl TrayController {
                         self.menu.addItem(&self.cpu_title_item);
                         self.menu.addItem(&self.cpu_unavailable_item);
                     }
-                    CpuShape::Available { cores } => {
+                    CpuShape::Available { cores, processes } => {
                         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                         self.menu.addItem(&self.cpu_title_item);
                         for item in &self.cpu_legend_items {
                             self.menu.addItem(item);
                         }
                         for item in self.cpu_core_items.iter().take(cores) {
+                            self.menu.addItem(item);
+                        }
+                        for item in self.cpu_process_items.iter().take(processes) {
                             self.menu.addItem(item);
                         }
                     }
@@ -903,8 +926,11 @@ fn menu_shape_for(model: &DropdownModel) -> MenuShape {
                         ModuleDisplay::Cpu(cpu) => Some(match &cpu.state {
                             CpuDisplayState::Loading => CpuShape::Loading,
                             CpuDisplayState::Unavailable => CpuShape::Unavailable,
-                            CpuDisplayState::Available { cores, .. } => CpuShape::Available {
+                            CpuDisplayState::Available {
+                                cores, processes, ..
+                            } => CpuShape::Available {
                                 cores: cores.len().min(2),
+                                processes: processes.len().min(PROCESS_CPU_ROW_LIMIT),
                             },
                         }),
                         ModuleDisplay::Memory(_) | ModuleDisplay::Gpu(_) => None,
@@ -1310,7 +1336,11 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
                         match &cpu.state {
                             CpuDisplayState::Loading => entries.push(MenuEntry::CpuLoading),
                             CpuDisplayState::Unavailable => entries.push(MenuEntry::CpuUnavailable),
-                            CpuDisplayState::Available { utilization, cores } => {
+                            CpuDisplayState::Available {
+                                utilization,
+                                cores,
+                                processes,
+                            } => {
                                 for row in utilization {
                                     entries.push(MenuEntry::Legend {
                                         label: &row.label,
@@ -1319,6 +1349,12 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
                                     });
                                 }
                                 for row in cores {
+                                    entries.push(MenuEntry::Stat {
+                                        primary: &row.primary,
+                                        tail: row.tail.as_deref(),
+                                    });
+                                }
+                                for row in processes {
                                     entries.push(MenuEntry::Stat {
                                         primary: &row.primary,
                                         tail: row.tail.as_deref(),
@@ -1356,12 +1392,16 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
 #[cfg(test)]
 mod tests {
     use super::{badge_for_state, loaded_menu_entries, BadgeKind, MenuEntry};
-    use crate::format::{dropdown_model, dropdown_model_with_apps, placeholder_dropdown_model};
+    use crate::format::{
+        dropdown_model, dropdown_model_with_apps, dropdown_model_with_sections,
+        placeholder_dropdown_model,
+    };
     use crate::login_item::LaunchAtLoginStatus;
     use crate::model::{
         CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot, PressureSource,
         SystemSnapshot,
     };
+    use crate::process_cpu::{ProcessCpuSnapshot, ProcessCpuUsage};
     use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
     use crate::trend::MemoryTrend;
 
@@ -1662,6 +1702,39 @@ mod tests {
                 tail: Some("74%"),
             }
         );
+    }
+
+    #[test]
+    fn loaded_cpu_process_rows_follow_the_cpu_overview_without_app_actions() {
+        let mut snapshot = snapshot();
+        snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
+            user_percent: 42,
+            system_percent: 9,
+            efficiency_percent: None,
+            performance_percent: None,
+        });
+        let processes = ProcessCpuSnapshot::Loaded(vec![ProcessCpuUsage {
+            name: "Video Encoder".to_string(),
+            utilization_percent: 240,
+        }]);
+        let model =
+            dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes, &[]);
+        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+
+        assert_eq!(
+            entries[11],
+            MenuEntry::Stat {
+                primary: "Video Encoder",
+                tail: Some("240%"),
+            }
+        );
+        assert!(!entries.iter().any(|entry| matches!(
+            entry,
+            MenuEntry::AppRow {
+                primary: "Video Encoder",
+                ..
+            }
+        )));
     }
 
     #[test]
