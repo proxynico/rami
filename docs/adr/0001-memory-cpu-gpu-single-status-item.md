@@ -25,4 +25,5 @@ screen-height dashboard.
 
 Memory remains the visual anchor. CPU and GPU section labels use fixed-width
 centered views, while metric rows keep a consistent label/value grid. Settings
-retains the only disclosure chevron because it is the only real submenu.
+is an arrowless command that opens the existing controls in a separate compact
+menu, keeping the monitor dropdown free of disclosure chevrons.

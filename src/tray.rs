@@ -17,7 +17,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn,
+    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSEvent,
     NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
     NSMenu, NSMenuDelegate, NSMenuItem, NSMutableParagraphStyle, NSParagraphStyleAttributeName,
@@ -92,7 +92,7 @@ pub struct TrayController {
     _about_item: Retained<NSMenuItem>,
     _check_updates_item: Retained<NSMenuItem>,
     settings_item: Retained<NSMenuItem>,
-    _settings_submenu: Retained<NSMenu>,
+    settings_menu: Retained<NSMenu>,
     quit_item: Retained<NSMenuItem>,
     pause_icon: Option<Retained<NSImage>>,
     play_icon: Option<Retained<NSImage>>,
@@ -307,27 +307,29 @@ impl TrayController {
             check_updates_item.setImage(Some(&img));
         }
 
-        let settings_submenu = NSMenu::new(mtm);
-        settings_submenu.setAutoenablesItems(false);
-        settings_submenu.addItem(&auto_refresh_item);
-        settings_submenu.addItem(&show_app_usage_item);
-        settings_submenu.addItem(&show_cpu_item);
-        settings_submenu.addItem(&show_gpu_item);
-        settings_submenu.addItem(&launch_at_login_item);
-        settings_submenu.addItem(&diagnostics_item);
-        settings_submenu.addItem(&NSMenuItem::separatorItem(mtm));
-        settings_submenu.addItem(&check_updates_item);
-        settings_submenu.addItem(&about_item);
+        let settings_menu = NSMenu::new(mtm);
+        settings_menu.setAutoenablesItems(false);
+        settings_menu.addItem(&auto_refresh_item);
+        settings_menu.addItem(&show_app_usage_item);
+        settings_menu.addItem(&show_cpu_item);
+        settings_menu.addItem(&show_gpu_item);
+        settings_menu.addItem(&launch_at_login_item);
+        settings_menu.addItem(&diagnostics_item);
+        settings_menu.addItem(&NSMenuItem::separatorItem(mtm));
+        settings_menu.addItem(&check_updates_item);
+        settings_menu.addItem(&about_item);
 
         let settings_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
                 &NSString::from_str("Settings"),
-                None,
+                Some(sel!(openSettings:)),
                 &empty,
             )
         };
-        settings_item.setSubmenu(Some(&settings_submenu));
+        unsafe {
+            settings_item.setTarget(Some(&refresh_target));
+        }
         settings_item.setEnabled(true);
         if let Some(img) = make_action_icon("gearshape") {
             settings_item.setImage(Some(&img));
@@ -379,7 +381,7 @@ impl TrayController {
             _about_item: about_item,
             _check_updates_item: check_updates_item,
             settings_item,
-            _settings_submenu: settings_submenu,
+            settings_menu,
             quit_item,
             pause_icon,
             play_icon,
@@ -464,8 +466,8 @@ impl TrayController {
         );
     }
 
-    /// Attach the open/close delegate to the main tray menu only; the settings
-    /// submenu opening must not count as a menu open.
+    /// Attach the open/close delegate to the main tray menu only; the separate
+    /// settings menu must not count as the live monitor menu being open.
     pub fn set_menu_delegate(&self, delegate: &ProtocolObject<dyn NSMenuDelegate>) {
         self.menu.setDelegate(Some(delegate));
     }
@@ -498,6 +500,12 @@ impl TrayController {
     #[allow(deprecated)]
     pub fn pop_up_menu(&self) {
         self.status_item.popUpStatusItemMenu(&self.menu);
+    }
+
+    pub fn pop_up_settings_menu(&self) {
+        let location = NSEvent::mouseLocation();
+        self.settings_menu
+            .popUpMenuPositioningItem_atLocation_inView(None, location, None);
     }
 
     pub fn set_placeholder(
@@ -1149,6 +1157,7 @@ pub(crate) enum MenuEntry<'a> {
     },
     Separator,
     Refresh,
+    SettingsCommand,
     Settings {
         auto_refresh_enabled: bool,
         show_app_usage: bool,
@@ -1176,30 +1185,13 @@ pub(crate) fn loaded_menu_entries<'a>(
 }
 
 #[cfg(test)]
-pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
-    model: &'a DropdownModel,
-    launch_at_login_status: LaunchAtLoginStatus,
-    auto_refresh_enabled: bool,
-    show_app_usage: bool,
-) -> Vec<MenuEntry<'a>> {
-    loaded_menu_entries_with_settings(
-        model,
-        launch_at_login_status,
-        auto_refresh_enabled,
-        show_app_usage,
-        false,
-        false,
-    )
-}
-
-#[cfg(test)]
 pub(crate) fn loaded_menu_entries_with_settings<'a>(
     model: &'a DropdownModel,
-    launch_at_login_status: LaunchAtLoginStatus,
-    auto_refresh_enabled: bool,
-    show_app_usage: bool,
-    show_cpu: bool,
-    show_gpu: bool,
+    _launch_at_login_status: LaunchAtLoginStatus,
+    _auto_refresh_enabled: bool,
+    _show_app_usage: bool,
+    _show_cpu: bool,
+    _show_gpu: bool,
 ) -> Vec<MenuEntry<'a>> {
     let mut entries = Vec::new();
     match model {
@@ -1298,16 +1290,27 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
     }
     entries.push(MenuEntry::Separator);
     entries.push(MenuEntry::Refresh);
-    entries.push(MenuEntry::Settings {
+    entries.push(MenuEntry::SettingsCommand);
+    entries.push(MenuEntry::Separator);
+    entries.push(MenuEntry::Quit);
+    entries
+}
+
+#[cfg(test)]
+fn settings_menu_entry(
+    launch_at_login: LaunchAtLoginStatus,
+    auto_refresh_enabled: bool,
+    show_app_usage: bool,
+    show_cpu: bool,
+    show_gpu: bool,
+) -> MenuEntry<'static> {
+    MenuEntry::Settings {
         auto_refresh_enabled,
         show_app_usage,
         show_cpu,
         show_gpu,
-        launch_at_login: launch_at_login_status,
-    });
-    entries.push(MenuEntry::Separator);
-    entries.push(MenuEntry::Quit);
-    entries
+        launch_at_login,
+    }
 }
 
 #[cfg(test)]
@@ -1381,13 +1384,7 @@ mod tests {
                 MenuEntry::Loading,
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
-                MenuEntry::Settings {
-                    auto_refresh_enabled: true,
-                    show_app_usage: false,
-                    show_cpu: false,
-                    show_gpu: false,
-                    launch_at_login: LaunchAtLoginStatus::Disabled,
-                },
+                MenuEntry::SettingsCommand,
                 MenuEntry::Separator,
                 MenuEntry::Quit,
             ]
@@ -1431,13 +1428,7 @@ mod tests {
                 },
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
-                MenuEntry::Settings {
-                    auto_refresh_enabled: true,
-                    show_app_usage: false,
-                    show_cpu: false,
-                    show_gpu: false,
-                    launch_at_login: LaunchAtLoginStatus::Enabled,
-                },
+                MenuEntry::SettingsCommand,
                 MenuEntry::Separator,
                 MenuEntry::Quit,
             ]
@@ -1494,43 +1485,32 @@ mod tests {
 
     #[test]
     fn show_app_usage_state_reflects_toggle() {
-        use super::loaded_menu_entries_with_app_usage;
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
-        let on =
-            loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, true);
-        assert!(on.iter().any(|e| matches!(
-            e,
+        use super::settings_menu_entry;
+        let on = settings_menu_entry(LaunchAtLoginStatus::Disabled, true, true, false, false);
+        assert!(matches!(
+            on,
             MenuEntry::Settings {
                 show_app_usage: true,
                 ..
             }
-        )));
+        ));
 
-        let off =
-            loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, false);
-        assert!(off.iter().any(|e| matches!(
-            e,
+        let off = settings_menu_entry(LaunchAtLoginStatus::Disabled, true, false, false, false);
+        assert!(matches!(
+            off,
             MenuEntry::Settings {
                 show_app_usage: false,
                 ..
             }
-        )));
+        ));
     }
 
     #[test]
     fn module_visibility_states_are_independent_in_settings() {
-        use super::loaded_menu_entries_with_settings;
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
-        let entries = loaded_menu_entries_with_settings(
-            &model,
-            LaunchAtLoginStatus::Disabled,
-            false,
-            true,
-            true,
-            false,
-        );
-        assert!(entries.iter().any(|entry| matches!(
-            entry,
+        use super::settings_menu_entry;
+        let settings = settings_menu_entry(LaunchAtLoginStatus::Disabled, false, true, true, false);
+        assert!(matches!(
+            settings,
             MenuEntry::Settings {
                 auto_refresh_enabled: false,
                 show_app_usage: true,
@@ -1538,7 +1518,7 @@ mod tests {
                 show_gpu: false,
                 ..
             }
-        )));
+        ));
     }
 
     #[test]

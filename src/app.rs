@@ -562,6 +562,18 @@ impl AppState {
         };
     }
 
+    fn open_settings_menu_soon(&self) {
+        let _timer = unsafe {
+            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+                MENU_REOPEN_DELAY_SECONDS,
+                &self.refresh_target,
+                sel!(openSettingsMenu:),
+                None,
+                false,
+            )
+        };
+    }
+
     fn reopen_menu_if_app_usage_visible(&self) {
         if self.show_app_usage.get() {
             self.refresh(true);
@@ -664,6 +676,16 @@ define_class!(
         #[unsafe(method(checkForUpdates:))]
         fn check_for_updates(&self, _sender: &AnyObject) {
             open_releases_page();
+        }
+
+        #[unsafe(method(openSettings:))]
+        fn open_settings(&self, _sender: &AnyObject) {
+            with_app_state(|state| state.open_settings_menu_soon());
+        }
+
+        #[unsafe(method(openSettingsMenu:))]
+        fn open_settings_menu(&self, _sender: &AnyObject) {
+            with_app_state(|state| state.tray.pop_up_settings_menu());
         }
 
         #[unsafe(method(reopenMenu:))]
