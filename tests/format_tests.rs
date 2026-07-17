@@ -1,8 +1,8 @@
 use rami::format::{
     dropdown_model, gauge_symbol_name, gb_pair, gb_text, mem_text, placeholder_dropdown_model,
-    DropdownModel,
+    Accent, DropdownModel, ModuleDisplay,
 };
-use rami::model::MemorySnapshot;
+use rami::model::{MemorySnapshot, PressureSource, SystemSnapshot};
 
 const ONE_GIB: u64 = 1_073_741_824;
 const SIXTEEN_GIB: u64 = 16 * ONE_GIB;
@@ -53,17 +53,38 @@ fn dropdown_model_splits_memory_and_swap_rows() {
         used_bytes: 9 * ONE_GIB,
         total_bytes: SIXTEEN_GIB,
         used_percent: 53,
+        pressure_percent: 96,
+        pressure_source: PressureSource::Kernel,
+        app_memory_bytes: 6 * ONE_GIB,
+        wired_bytes: 2 * ONE_GIB,
+        compressed_bytes: ONE_GIB,
+        free_bytes: 3 * ONE_GIB,
         swap_used_bytes: 4_724_461_226,
         available_bytes: 8_160_449_024,
     };
 
-    let DropdownModel::Loaded { memory, swap, .. } = dropdown_model(snapshot) else {
+    let DropdownModel::Loaded { accent, modules } =
+        dropdown_model(SystemSnapshot { memory: snapshot })
+    else {
         panic!("expected Loaded model");
     };
+    let ModuleDisplay::Memory(memory) = &modules[0];
 
-    assert_eq!(memory.primary, "9.0 / 16.0 GB");
-    assert_eq!(memory.tail.as_deref(), Some("53%"));
-    let swap = swap.expect("swap row present when nonzero");
+    assert_eq!(accent, Accent::Critical);
+    assert_eq!(memory.rings[0].label, "Memory %");
+    assert_eq!(memory.rings[0].percent, 53);
+    assert_eq!(memory.rings[1].label, "Pressure");
+    assert_eq!(memory.rings[1].percent, 96);
+    assert_eq!(memory.breakdown[0].label, "App Memory");
+    assert_eq!(memory.breakdown[0].value, "6.0 GB");
+    assert_eq!(memory.breakdown[0].opacity_percent, 100);
+    assert_eq!(memory.breakdown[1].label, "Wired");
+    assert_eq!(memory.breakdown[1].opacity_percent, 65);
+    assert_eq!(memory.breakdown[2].label, "Compressed");
+    assert_eq!(memory.breakdown[2].opacity_percent, 35);
+    assert_eq!(memory.breakdown[3].label, "Free");
+    assert_eq!(memory.breakdown[3].opacity_percent, 12);
+    let swap = memory.swap.as_ref().expect("swap row present when nonzero");
     assert_eq!(swap.primary, "Swap");
     assert_eq!(swap.tail.as_deref(), Some("4.4 GB"));
 }
@@ -74,13 +95,21 @@ fn dropdown_model_hides_swap_when_zero() {
         used_bytes: 5 * ONE_GIB,
         total_bytes: SIXTEEN_GIB,
         used_percent: 31,
+        pressure_percent: 20,
+        pressure_source: PressureSource::Kernel,
+        app_memory_bytes: 3 * ONE_GIB,
+        wired_bytes: ONE_GIB,
+        compressed_bytes: ONE_GIB,
+        free_bytes: 4 * ONE_GIB,
         swap_used_bytes: 0,
         available_bytes: 11 * ONE_GIB,
     };
 
-    let DropdownModel::Loaded { swap, .. } = dropdown_model(snapshot) else {
+    let DropdownModel::Loaded { modules, .. } = dropdown_model(SystemSnapshot { memory: snapshot })
+    else {
         panic!("expected Loaded model");
     };
+    let ModuleDisplay::Memory(memory) = &modules[0];
 
-    assert!(swap.is_none());
+    assert!(memory.swap.is_none());
 }

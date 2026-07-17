@@ -28,6 +28,7 @@ pub(crate) struct StatusImage {
 pub(crate) fn make_status_image(
     gauge_name: &'static str,
     trend: MemoryTrend,
+    accent: &NSColor,
 ) -> Option<StatusImage> {
     let badge = badge_for_state(trend);
     let base_template = render_template_symbol(gauge_name, NSImageSymbolScale::Large)?;
@@ -37,12 +38,10 @@ pub(crate) fn make_status_image(
             template: true,
         }),
         BadgeKind::RisingFast => {
-            let label = NSColor::labelColor();
-            // Yellow badge: distinct from the orange gauge tint used for memory
-            // pressure warnings in the menu bar.
-            let climb = NSColor::systemYellowColor();
+            // Preserve the trend badge shape without introducing a second hue.
+            let climb = accent.colorWithAlphaComponent(0.65);
             let base_colored =
-                render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &label)?;
+                render_colored_symbol(gauge_name, NSImageSymbolScale::Large, accent)?;
             let badge_image = render_colored_symbol(
                 "arrow.up.right.circle.fill",
                 NSImageSymbolScale::Small,

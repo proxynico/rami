@@ -1,6 +1,6 @@
 use crate::format::{delta_bytes_text, gb_pair, mem_text};
 use crate::login_item::{current_app_bundle_path, LaunchAtLoginStatus, BUNDLE_IDENTIFIER};
-use crate::model::MemorySnapshot;
+use crate::model::{MemorySnapshot, PressureSource};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 
@@ -64,6 +64,21 @@ pub(crate) fn build_diagnostic_report(input: DiagnosticReportInput<'_>) -> Strin
                 snapshot.used_percent
             ));
             out.push_str(&format!(
+                "Pressure: {}% ({})\n",
+                snapshot.pressure_percent,
+                pressure_source_label(snapshot.pressure_source)
+            ));
+            out.push_str(&format!(
+                "App Memory: {}\n",
+                mem_text(snapshot.app_memory_bytes)
+            ));
+            out.push_str(&format!("Wired: {}\n", mem_text(snapshot.wired_bytes)));
+            out.push_str(&format!(
+                "Compressed: {}\n",
+                mem_text(snapshot.compressed_bytes)
+            ));
+            out.push_str(&format!("Free: {}\n", mem_text(snapshot.free_bytes)));
+            out.push_str(&format!(
                 "Available: {}\n",
                 mem_text(snapshot.available_bytes)
             ));
@@ -87,6 +102,13 @@ pub(crate) fn build_diagnostic_report(input: DiagnosticReportInput<'_>) -> Strin
     }
 
     out
+}
+
+fn pressure_source_label(source: PressureSource) -> &'static str {
+    match source {
+        PressureSource::Kernel => "kernel",
+        PressureSource::AvailableFallback => "Available fallback",
+    }
 }
 
 fn launch_at_login_label(status: LaunchAtLoginStatus) -> &'static str {
@@ -138,6 +160,12 @@ mod tests {
                 used_bytes: 9_774_150_902,
                 total_bytes: 19_327_352_832,
                 used_percent: 51,
+                pressure_percent: 27,
+                pressure_source: PressureSource::Kernel,
+                app_memory_bytes: 6_442_450_944,
+                wired_bytes: 2_147_483_648,
+                compressed_bytes: 1_073_741_824,
+                free_bytes: 3_221_225_472,
                 swap_used_bytes: 419_430_400,
                 available_bytes: 9_556_301_414,
             }),
@@ -152,6 +180,8 @@ mod tests {
         assert!(report.contains("Architecture: aarch64"));
         assert!(report.contains("Launch at login: Enabled via System Settings"));
         assert!(report.contains("Memory: 9.1 / 18.0 GB (51%)"));
+        assert!(report.contains("Pressure: 27% (kernel)"));
+        assert!(report.contains("App Memory: 6.0 GB"));
         assert!(report.contains("Available: 8.9 GB"));
         assert!(report.contains("Swap: 400 MB"));
         assert!(report.contains("- Cursor: 2.1 GB (+350 MB)"));

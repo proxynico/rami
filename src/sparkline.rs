@@ -14,6 +14,7 @@ const FILL_ALPHA: f64 = 0.22;
 
 pub struct SparklineIvars {
     samples: RefCell<Vec<u64>>,
+    accent: RefCell<Retained<NSColor>>,
 }
 
 define_class!(
@@ -37,13 +38,15 @@ impl SparklineView {
         let frame = NSRect::new(NSPoint::ZERO, NSSize::new(VIEW_WIDTH, VIEW_HEIGHT));
         let this = Self::alloc(mtm).set_ivars(SparklineIvars {
             samples: RefCell::new(samples),
+            accent: RefCell::new(NSColor::controlAccentColor()),
         });
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
 
     /// Replace the history window and trigger a redraw.
-    pub fn update(&self, samples: Vec<u64>) {
+    pub fn update(&self, samples: Vec<u64>, accent: Retained<NSColor>) {
         *self.ivars().samples.borrow_mut() = samples;
+        *self.ivars().accent.borrow_mut() = accent;
         self.setNeedsDisplay(true);
     }
 
@@ -52,6 +55,7 @@ impl SparklineView {
         let width = bounds.size.width;
         let height = bounds.size.height;
         let samples = self.ivars().samples.borrow();
+        let accent = self.ivars().accent.borrow();
 
         let pts = normalized_points(&samples, width, height, PADDING);
 
@@ -78,9 +82,7 @@ impl SparklineView {
         }
         area.lineToPoint(NSPoint::new(pts[pts.len() - 1].0, 0.0));
         area.closePath();
-        NSColor::systemBlueColor()
-            .colorWithAlphaComponent(FILL_ALPHA)
-            .setFill();
+        accent.colorWithAlphaComponent(FILL_ALPHA).setFill();
         area.fill();
 
         // Stroke the top line on top of the fill.
@@ -90,7 +92,7 @@ impl SparklineView {
             line.lineToPoint(NSPoint::new(x, y));
         }
         line.setLineWidth(LINE_WIDTH);
-        NSColor::systemBlueColor().setStroke();
+        accent.setStroke();
         line.stroke();
     }
 }

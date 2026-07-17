@@ -1,4 +1,5 @@
 use rami::memory::{snapshot_from_counts, validate_stats_count, MemoryCounts};
+use rami::model::PressureSource;
 
 #[test]
 fn snapshot_uses_active_wired_and_compressed_bytes() {
@@ -6,6 +7,7 @@ fn snapshot_uses_active_wired_and_compressed_bytes() {
         total_bytes: 1000,
         page_size: 10,
         active_pages: 30,
+        internal_pages: 25,
         wired_pages: 20,
         compressed_pages: 10,
         free_pages: 0,
@@ -14,7 +16,7 @@ fn snapshot_uses_active_wired_and_compressed_bytes() {
         purgeable_pages: 0,
     };
 
-    let snapshot = snapshot_from_counts(counts, 0);
+    let snapshot = snapshot_from_counts(counts, 0, None);
 
     assert_eq!(snapshot.used_bytes, 600);
     assert_eq!(snapshot.total_bytes, 1000);
@@ -28,6 +30,7 @@ fn snapshot_sums_available_from_reclaimable_pools() {
         total_bytes: 1000,
         page_size: 10,
         active_pages: 30,
+        internal_pages: 25,
         wired_pages: 20,
         compressed_pages: 10,
         free_pages: 5,
@@ -36,7 +39,7 @@ fn snapshot_sums_available_from_reclaimable_pools() {
         purgeable_pages: 2,
     };
 
-    let snapshot = snapshot_from_counts(counts, 0);
+    let snapshot = snapshot_from_counts(counts, 0, None);
 
     // (5 + 4 + 1 + 2) pages * 10 byte pages = 120 bytes reclaimable.
     assert_eq!(snapshot.available_bytes, 120);
@@ -48,6 +51,7 @@ fn snapshot_rounds_to_nearest_whole_percent() {
         total_bytes: 1000,
         page_size: 1,
         active_pages: 524,
+        internal_pages: 524,
         wired_pages: 0,
         compressed_pages: 0,
         free_pages: 0,
@@ -56,7 +60,7 @@ fn snapshot_rounds_to_nearest_whole_percent() {
         purgeable_pages: 0,
     };
 
-    let snapshot = snapshot_from_counts(counts, 0);
+    let snapshot = snapshot_from_counts(counts, 0, None);
 
     assert_eq!(snapshot.used_percent, 52);
 }
@@ -67,6 +71,7 @@ fn snapshot_clamps_when_used_exceeds_total() {
         total_bytes: 100,
         page_size: 10,
         active_pages: 8,
+        internal_pages: 8,
         wired_pages: 3,
         compressed_pages: 2,
         free_pages: 0,
@@ -75,7 +80,7 @@ fn snapshot_clamps_when_used_exceeds_total() {
         purgeable_pages: 0,
     };
 
-    let snapshot = snapshot_from_counts(counts, 0);
+    let snapshot = snapshot_from_counts(counts, 0, None);
 
     assert_eq!(snapshot.used_bytes, 130);
     assert_eq!(snapshot.used_percent, 100);
@@ -88,6 +93,7 @@ fn snapshot_returns_zero_percent_when_total_bytes_is_zero() {
         total_bytes: 0,
         page_size: 10,
         active_pages: 8,
+        internal_pages: 8,
         wired_pages: 3,
         compressed_pages: 2,
         free_pages: 0,
@@ -96,7 +102,7 @@ fn snapshot_returns_zero_percent_when_total_bytes_is_zero() {
         purgeable_pages: 0,
     };
 
-    let snapshot = snapshot_from_counts(counts, 0);
+    let snapshot = snapshot_from_counts(counts, 0, None);
 
     assert_eq!(snapshot.used_bytes, 130);
     assert_eq!(snapshot.total_bytes, 0);
@@ -120,6 +126,7 @@ fn snapshot_carries_swap_usage() {
         total_bytes: 1000,
         page_size: 10,
         active_pages: 30,
+        internal_pages: 25,
         wired_pages: 20,
         compressed_pages: 10,
         free_pages: 0,
@@ -128,9 +135,56 @@ fn snapshot_carries_swap_usage() {
         purgeable_pages: 0,
     };
 
-    let snapshot = snapshot_from_counts(counts, 2_000);
+    let snapshot = snapshot_from_counts(counts, 2_000, None);
 
     assert_eq!(snapshot.used_bytes, 600);
     assert_eq!(snapshot.used_percent, 60);
     assert_eq!(snapshot.swap_used_bytes, 2_000);
+}
+
+#[test]
+fn snapshot_exposes_breakdown_and_kernel_pressure() {
+    let counts = MemoryCounts {
+        total_bytes: 1_000,
+        page_size: 10,
+        active_pages: 30,
+        internal_pages: 25,
+        wired_pages: 20,
+        compressed_pages: 10,
+        free_pages: 5,
+        inactive_pages: 4,
+        speculative_pages: 1,
+        purgeable_pages: 2,
+    };
+
+    let snapshot = snapshot_from_counts(counts, 0, Some(42));
+
+    assert_eq!(snapshot.app_memory_bytes, 230);
+    assert_eq!(snapshot.wired_bytes, 200);
+    assert_eq!(snapshot.compressed_bytes, 100);
+    assert_eq!(snapshot.free_bytes, 50);
+    assert_eq!(snapshot.pressure_percent, 58);
+    assert_eq!(snapshot.pressure_source, PressureSource::Kernel);
+}
+
+#[test]
+fn snapshot_falls_back_to_available_share_when_kernel_pressure_is_unavailable() {
+    let counts = MemoryCounts {
+        total_bytes: 1_000,
+        page_size: 10,
+        active_pages: 30,
+        internal_pages: 25,
+        wired_pages: 20,
+        compressed_pages: 10,
+        free_pages: 5,
+        inactive_pages: 4,
+        speculative_pages: 1,
+        purgeable_pages: 2,
+    };
+
+    let snapshot = snapshot_from_counts(counts, 0, None);
+
+    assert_eq!(snapshot.available_bytes, 120);
+    assert_eq!(snapshot.pressure_percent, 88);
+    assert_eq!(snapshot.pressure_source, PressureSource::AvailableFallback);
 }

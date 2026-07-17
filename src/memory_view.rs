@@ -1,0 +1,175 @@
+use crate::format::RingDisplay;
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, NSObjectProtocol};
+use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSFontWeightMedium, NSFontWeightRegular,
+    NSForegroundColorAttributeName, NSLineCapStyle, NSStringDrawing, NSView,
+};
+use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
+use std::cell::RefCell;
+
+const VIEW_WIDTH: f64 = 240.0;
+const VIEW_HEIGHT: f64 = 118.0;
+const RADIUS: f64 = 30.0;
+const RING_WIDTH: f64 = 7.0;
+
+#[derive(Clone)]
+struct RingsState {
+    rings: Option<[RingDisplay; 2]>,
+    accent: Retained<NSColor>,
+}
+
+pub struct MemoryRingsIvars {
+    state: RefCell<RingsState>,
+}
+
+define_class!(
+    #[unsafe(super = NSView)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = MemoryRingsIvars]
+    pub struct MemoryRingsView;
+
+    impl MemoryRingsView {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty_rect: NSRect) {
+            self.render();
+        }
+    }
+
+    unsafe impl NSObjectProtocol for MemoryRingsView {}
+);
+
+impl MemoryRingsView {
+    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let frame = NSRect::new(NSPoint::ZERO, NSSize::new(VIEW_WIDTH, VIEW_HEIGHT));
+        let this = Self::alloc(mtm).set_ivars(MemoryRingsIvars {
+            state: RefCell::new(RingsState {
+                rings: None,
+                accent: NSColor::controlAccentColor(),
+            }),
+        });
+        let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        let role = NSString::from_str("AXGroup");
+        unsafe {
+            let _: () = msg_send![&*view, setAccessibilityElement: true];
+            let _: () = msg_send![&*view, setAccessibilityRole: &*role];
+        }
+        view
+    }
+
+    pub fn update(&self, rings: &[RingDisplay; 2], accent: Retained<NSColor>) {
+        *self.ivars().state.borrow_mut() = RingsState {
+            rings: Some(rings.clone()),
+            accent,
+        };
+        let label = NSString::from_str("Memory");
+        let value = NSString::from_str(&format!(
+            "{} percent, {}, pressure {} percent",
+            rings[0].percent, rings[0].detail, rings[1].percent
+        ));
+        unsafe {
+            let _: () = msg_send![self, setAccessibilityLabel: &*label];
+            let _: () = msg_send![self, setAccessibilityValue: &*value];
+        }
+        self.setNeedsDisplay(true);
+    }
+
+    fn render(&self) {
+        let state = self.ivars().state.borrow();
+        let Some(rings) = &state.rings else {
+            return;
+        };
+        for (index, ring) in rings.iter().enumerate() {
+            let center = NSPoint::new(if index == 0 { 70.0 } else { 170.0 }, 72.0);
+            draw_ring(center, ring.percent, &state.accent);
+            draw_centered(
+                &format!("{}%", ring.percent),
+                center.x,
+                center.y - 7.0,
+                15.0,
+                true,
+                NSColor::labelColor(),
+            );
+            draw_centered(
+                &ring.label,
+                center.x,
+                25.0,
+                12.0,
+                false,
+                NSColor::labelColor(),
+            );
+            if !ring.detail.is_empty() {
+                draw_centered(
+                    &ring.detail,
+                    center.x,
+                    8.0,
+                    10.0,
+                    false,
+                    NSColor::secondaryLabelColor(),
+                );
+            }
+        }
+    }
+}
+
+fn draw_ring(center: NSPoint, percent: u8, accent: &NSColor) {
+    let bounds = NSRect::new(
+        NSPoint::new(center.x - RADIUS, center.y - RADIUS),
+        NSSize::new(RADIUS * 2.0, RADIUS * 2.0),
+    );
+    let track = NSBezierPath::bezierPathWithOvalInRect(bounds);
+    track.setLineWidth(RING_WIDTH);
+    NSColor::quaternaryLabelColor().setStroke();
+    track.stroke();
+
+    if percent == 0 {
+        return;
+    }
+    let progress = NSBezierPath::bezierPath();
+    progress.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise(
+        center,
+        RADIUS,
+        90.0,
+        90.0 - f64::from(percent.min(100)) * 3.6,
+        true,
+    );
+    progress.setLineWidth(RING_WIDTH);
+    progress.setLineCapStyle(NSLineCapStyle::Round);
+    accent.setStroke();
+    progress.stroke();
+}
+
+fn draw_centered(
+    text: &str,
+    center_x: f64,
+    y: f64,
+    size: f64,
+    emphasized: bool,
+    color: Retained<NSColor>,
+) {
+    let weight = unsafe {
+        if emphasized {
+            NSFontWeightMedium
+        } else {
+            NSFontWeightRegular
+        }
+    };
+    let font = NSFont::systemFontOfSize_weight(size, weight);
+    let attrs = unsafe {
+        let color_obj = Retained::cast_unchecked::<AnyObject>(color);
+        let font_obj = Retained::cast_unchecked::<AnyObject>(font);
+        NSDictionary::from_retained_objects(
+            &[NSForegroundColorAttributeName, NSFontAttributeName],
+            &[color_obj, font_obj],
+        )
+    };
+    let text = NSString::from_str(text);
+    let measured = unsafe { text.sizeWithAttributes(Some(&attrs)) };
+    unsafe {
+        text.drawAtPoint_withAttributes(
+            NSPoint::new(center_x - measured.width / 2.0, y),
+            Some(&attrs),
+        );
+    }
+}

@@ -3,6 +3,12 @@ pub struct MemorySnapshot {
     pub used_bytes: u64,
     pub total_bytes: u64,
     pub used_percent: u8,
+    pub pressure_percent: u8,
+    pub pressure_source: PressureSource,
+    pub app_memory_bytes: u64,
+    pub wired_bytes: u64,
+    pub compressed_bytes: u64,
+    pub free_bytes: u64,
     pub swap_used_bytes: u64,
     /// Reclaimable pool: free + inactive + speculative + purgeable pages.
     /// Like `used_bytes`, this is a simple approximation that can drift from
@@ -10,10 +16,18 @@ pub struct MemorySnapshot {
     pub available_bytes: u64,
 }
 
-/// Coarse memory-pressure level derived from the reclaimable pool. This is a
-/// proxy (available bytes vs. total) rather than the kernel's
-/// `dispatch_source` memory-pressure events, so it tracks "am I nearly out of
-/// RAM" without new bindings; the gauge tints red/orange accordingly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemSnapshot {
+    pub memory: MemorySnapshot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PressureSource {
+    Kernel,
+    AvailableFallback,
+}
+
+/// Coarse pressure state used by both the status gauge and dropdown Accent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryPressure {
     Normal,
@@ -21,17 +35,13 @@ pub enum MemoryPressure {
     Critical,
 }
 
-const CRITICAL_AVAILABLE_PCT: f64 = 0.05;
-const WARNING_AVAILABLE_PCT: f64 = 0.12;
+const CRITICAL_PRESSURE_PCT: u8 = 95;
+const WARNING_PRESSURE_PCT: u8 = 88;
 
-pub fn classify_pressure(available_bytes: u64, total_bytes: u64) -> MemoryPressure {
-    if total_bytes == 0 {
-        return MemoryPressure::Normal;
-    }
-    let avail_pct = available_bytes as f64 / total_bytes as f64;
-    if avail_pct <= CRITICAL_AVAILABLE_PCT {
+pub fn classify_pressure(pressure_percent: u8) -> MemoryPressure {
+    if pressure_percent >= CRITICAL_PRESSURE_PCT {
         MemoryPressure::Critical
-    } else if avail_pct <= WARNING_AVAILABLE_PCT {
+    } else if pressure_percent >= WARNING_PRESSURE_PCT {
         MemoryPressure::Warning
     } else {
         MemoryPressure::Normal
@@ -44,49 +54,29 @@ mod tests {
 
     #[test]
     fn normal_when_plenty_available() {
-        assert_eq!(
-            classify_pressure(8_000_000_000, 16_000_000_000),
-            MemoryPressure::Normal
-        );
+        assert_eq!(classify_pressure(50), MemoryPressure::Normal);
     }
 
     #[test]
     fn warning_when_available_drops_below_threshold() {
         // 10% available -> warning band
-        assert_eq!(
-            classify_pressure(1_600_000_000, 16_000_000_000),
-            MemoryPressure::Warning
-        );
+        assert_eq!(classify_pressure(90), MemoryPressure::Warning);
     }
 
     #[test]
     fn critical_when_available_nearly_exhausted() {
-        assert_eq!(
-            classify_pressure(500_000_000, 16_000_000_000),
-            MemoryPressure::Critical
-        );
+        assert_eq!(classify_pressure(97), MemoryPressure::Critical);
     }
 
     #[test]
-    fn normal_when_total_unknown() {
-        assert_eq!(classify_pressure(0, 0), MemoryPressure::Normal);
+    fn normal_when_pressure_is_zero() {
+        assert_eq!(classify_pressure(0), MemoryPressure::Normal);
     }
 
     #[test]
-    fn bands_classify_by_available_share() {
-        // 4% -> critical, 10% -> warning, 13% -> normal (avoid exact floating
-        // point thresholds so the boundaries stay stable).
-        assert_eq!(
-            classify_pressure(640_000_000, 16_000_000_000),
-            MemoryPressure::Critical
-        );
-        assert_eq!(
-            classify_pressure(1_600_000_000, 16_000_000_000),
-            MemoryPressure::Warning
-        );
-        assert_eq!(
-            classify_pressure(2_080_000_000, 16_000_000_000),
-            MemoryPressure::Normal
-        );
+    fn bands_classify_by_pressure_percent() {
+        assert_eq!(classify_pressure(95), MemoryPressure::Critical);
+        assert_eq!(classify_pressure(88), MemoryPressure::Warning);
+        assert_eq!(classify_pressure(87), MemoryPressure::Normal);
     }
 }
