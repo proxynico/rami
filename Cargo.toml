@@ -20,7 +20,9 @@ path = "src/main.rs"
 
 [dependencies]
 objc2 = "0.6"
+block2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
+  "block2",
   "NSApplication",
   "NSAttributedString",
   "NSBezierPath",

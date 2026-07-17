@@ -201,17 +201,21 @@ impl AppState {
                     self.clear_app_usage();
                 }
 
-                let apps = self.app_memory.borrow();
-                let history = self.trend_tracker.borrow().samples();
-                self.tray.set_snapshot(
-                    snapshot,
-                    trend,
-                    &apps,
-                    &history,
-                    self.launch_at_login_status.get(),
-                    self.auto_refresh_enabled.get(),
-                    mtm,
-                );
+                if self.menu_open.get() {
+                    let apps = self.app_memory.borrow();
+                    let history = self.trend_tracker.borrow().samples();
+                    self.tray.set_snapshot(
+                        snapshot,
+                        trend,
+                        &apps,
+                        &history,
+                        self.launch_at_login_status.get(),
+                        self.auto_refresh_enabled.get(),
+                        mtm,
+                    );
+                } else {
+                    self.tray.set_gauge_snapshot(snapshot, trend, mtm);
+                }
             }
             Err(err) => {
                 eprintln!("memory sample failed: {err}");
@@ -334,8 +338,28 @@ impl AppState {
         // the answer is visible, so it is (re)read here rather than per tick.
         self.launch_at_login_status
             .set(self.launch_at_login.status());
+        // Paint the dropdown from the last snapshot immediately so reopening
+        // feels instant; refresh below updates memory and kicks off a scan.
+        self.paint_menu_from_cache();
         self.refresh(true);
         self.schedule_menu_open_drain();
+    }
+
+    fn paint_menu_from_cache(&self) {
+        let Some(snapshot) = *self.last_snapshot.borrow() else {
+            return;
+        };
+        let mtm = MainThreadMarker::new().expect("menu paint must stay on the main thread");
+        let apps = self.app_memory.borrow();
+        let history = self.trend_tracker.borrow().samples();
+        self.tray.set_menu_snapshot(
+            snapshot,
+            &apps,
+            &history,
+            self.launch_at_login_status.get(),
+            self.auto_refresh_enabled.get(),
+            mtm,
+        );
     }
 
     fn menu_did_close(&self) {

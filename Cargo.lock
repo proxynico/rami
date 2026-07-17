@@ -198,6 +198,7 @@ dependencies = [
 name = "rami"
 version = "0.1.2"
 dependencies = [
+ "block2",
  "libc",
  "mach2",
  "objc2",
