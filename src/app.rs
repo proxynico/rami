@@ -201,17 +201,19 @@ impl AppState {
                     self.clear_app_usage();
                 }
 
-                let apps = self.app_memory.borrow();
-                let history = self.trend_tracker.borrow().samples();
-                self.tray.set_snapshot(
-                    snapshot,
-                    trend,
-                    &apps,
-                    &history,
-                    self.launch_at_login_status.get(),
-                    self.auto_refresh_enabled.get(),
-                    mtm,
-                );
+                self.tray.set_gauge_snapshot(snapshot, trend, mtm);
+                if self.menu_open.get() {
+                    let apps = self.app_memory.borrow();
+                    let history = self.trend_tracker.borrow().samples();
+                    self.tray.set_menu_snapshot(
+                        snapshot,
+                        &apps,
+                        &history,
+                        self.launch_at_login_status.get(),
+                        self.auto_refresh_enabled.get(),
+                        mtm,
+                    );
+                }
             }
             Err(err) => {
                 eprintln!("memory sample failed: {err}");

@@ -334,15 +334,10 @@ impl TrayController {
         controller
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_snapshot(
+    pub fn set_gauge_snapshot(
         &self,
         snapshot: MemorySnapshot,
         trend: MemoryTrend,
-        apps: &AppMemorySnapshot,
-        history: &[u64],
-        launch_at_login_status: LaunchAtLoginStatus,
-        auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
     ) {
         let pressure = classify_pressure(snapshot.available_bytes, snapshot.total_bytes);
@@ -360,6 +355,18 @@ impl TrayController {
             ),
             mtm,
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_menu_snapshot(
+        &self,
+        snapshot: MemorySnapshot,
+        apps: &AppMemorySnapshot,
+        history: &[u64],
+        launch_at_login_status: LaunchAtLoginStatus,
+        auto_refresh_enabled: bool,
+        mtm: MainThreadMarker,
+    ) {
         self.apply_model(
             &dropdown_model_with_apps(snapshot, apps),
             history,
@@ -452,8 +459,8 @@ impl TrayController {
             }
             // Tint the template gauge to flag memory pressure: red when
             // nearly exhausted, orange when tight, otherwise the default
-            // appearance. The non-template rising-fast composite ignores the
-            // tint, so the orange badge still reads as a distinct signal.
+            // appearance. The non-template rising-fast composite uses a yellow
+            // climb badge instead, so pressure tint and climb signal stay distinct.
             let tint = match pressure {
                 MemoryPressure::Critical => Some(NSColor::systemRedColor()),
                 MemoryPressure::Warning => Some(NSColor::systemOrangeColor()),
@@ -708,7 +715,7 @@ fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
     stat_row_attributed_colored(row, NSColor::labelColor(), NSColor::secondaryLabelColor())
 }
 
-const ROW_TAIL_TAB: f64 = 150.0;
+const ROW_TAIL_TAB: f64 = 180.0;
 
 fn row_paragraph_style() -> Retained<NSMutableParagraphStyle> {
     let style = NSMutableParagraphStyle::new();
