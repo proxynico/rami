@@ -1,6 +1,7 @@
 use crate::model::{
     classify_pressure, CpuModuleState, GpuModuleState, MemoryPressure, SystemSnapshot,
 };
+use crate::process_cpu::{ProcessCpuSnapshot, ProcessCpuUsage, PROCESS_CPU_ROW_LIMIT};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 
@@ -132,6 +133,7 @@ pub enum CpuDisplayState {
     Available {
         utilization: [LegendRow; 2],
         cores: Vec<StatRow>,
+        processes: Vec<StatRow>,
     },
     Unavailable,
 }
@@ -160,6 +162,15 @@ pub fn dropdown_model(snapshot: SystemSnapshot) -> DropdownModel {
 pub fn dropdown_model_with_apps(
     snapshot: SystemSnapshot,
     apps: &AppMemorySnapshot,
+    history: &[u64],
+) -> DropdownModel {
+    dropdown_model_with_sections(snapshot, apps, &ProcessCpuSnapshot::Hidden, history)
+}
+
+pub(crate) fn dropdown_model_with_sections(
+    snapshot: SystemSnapshot,
+    apps: &AppMemorySnapshot,
+    cpu_processes: &ProcessCpuSnapshot,
     history: &[u64],
 ) -> DropdownModel {
     let memory = snapshot.memory;
@@ -212,6 +223,7 @@ pub fn dropdown_model_with_apps(
                         cpu_legend_row("System", cpu.system_percent, 50),
                     ],
                     cores,
+                    processes: cpu_process_rows(cpu_processes),
                 },
             }));
         }
@@ -230,6 +242,25 @@ pub fn dropdown_model_with_apps(
         }));
     }
     DropdownModel::Loaded { accent, modules }
+}
+
+fn cpu_process_rows(snapshot: &ProcessCpuSnapshot) -> Vec<StatRow> {
+    let ProcessCpuSnapshot::Loaded(rows) = snapshot else {
+        return Vec::new();
+    };
+    rows.iter()
+        .take(PROCESS_CPU_ROW_LIMIT)
+        .map(cpu_process_row)
+        .collect()
+}
+
+fn cpu_process_row(process: &ProcessCpuUsage) -> StatRow {
+    StatRow {
+        primary: truncate_name(&process.name, APP_NAME_MAX_CHARS),
+        tail: Some(format!("{}%", process.utilization_percent)),
+        quit_key: None,
+        bundle_path: None,
+    }
 }
 
 fn cpu_legend_row(label: &str, percent: u8, opacity_percent: u8) -> LegendRow {
@@ -313,6 +344,7 @@ mod tests {
     use crate::model::{
         CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot, PressureSource,
     };
+    use crate::process_cpu::{ProcessCpuSnapshot, ProcessCpuUsage};
     use crate::trend::rank_app_rows;
 
     fn snapshot(total_bytes: u64) -> SystemSnapshot {
@@ -504,7 +536,10 @@ mod tests {
         let Some(ModuleDisplay::Cpu(cpu)) = modules.get(1) else {
             panic!("expected CPU module after Memory");
         };
-        let CpuDisplayState::Available { utilization, cores } = &cpu.state else {
+        let CpuDisplayState::Available {
+            utilization, cores, ..
+        } = &cpu.state
+        else {
             panic!("expected available CPU state");
         };
         assert_eq!(
@@ -521,6 +556,44 @@ mod tests {
         assert_eq!(cores[0].tail.as_deref(), Some("22%"));
         assert_eq!(cores[1].primary, "P-cores");
         assert_eq!(cores[1].tail.as_deref(), Some("71%"));
+    }
+
+    #[test]
+    fn cpu_process_rows_are_ranked_in_the_cpu_module_without_quit_actions() {
+        let mut snapshot = snapshot(SIXTEEN_GIB);
+        snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
+            user_percent: 52,
+            system_percent: 13,
+            efficiency_percent: None,
+            performance_percent: None,
+        });
+        let processes = ProcessCpuSnapshot::Loaded(vec![
+            ProcessCpuUsage {
+                name: "Video Encoder".to_string(),
+                utilization_percent: 240,
+            },
+            ProcessCpuUsage {
+                name: "Browser".to_string(),
+                utilization_percent: 38,
+            },
+        ]);
+
+        let DropdownModel::Loaded { modules, .. } =
+            dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes, &[])
+        else {
+            panic!("expected loaded model");
+        };
+        let Some(ModuleDisplay::Cpu(CpuModuleDisplay {
+            state: CpuDisplayState::Available { processes, .. },
+        })) = modules.get(1)
+        else {
+            panic!("expected available CPU module");
+        };
+        assert_eq!(processes.len(), 2);
+        assert_eq!(processes[0].primary, "Video Encoder");
+        assert_eq!(processes[0].tail.as_deref(), Some("240%"));
+        assert!(processes.iter().all(|row| row.quit_key.is_none()));
+        assert!(processes.iter().all(|row| row.bundle_path.is_none()));
     }
 
     #[test]

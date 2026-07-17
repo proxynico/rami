@@ -6,6 +6,9 @@ use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
 use crate::model::{CpuModuleState, GpuModuleState};
+use crate::process_cpu::{
+    ProcessCpuSampler, ProcessCpuSnapshot, ProcessCpuUsage, PROCESS_CPU_ROW_LIMIT,
+};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage, ProcessMemorySampler};
 use crate::settings::SettingsStore;
 use crate::tray::TrayController;
@@ -40,6 +43,10 @@ struct AppState {
     app_scan_receiver: Receiver<AppScanResult>,
     app_scan_in_flight: Cell<bool>,
     app_scan_generation: Cell<u64>,
+    cpu_process_scan_sender: Sender<CpuProcessScanResult>,
+    cpu_process_scan_receiver: Receiver<CpuProcessScanResult>,
+    cpu_process_scan_in_flight: Cell<bool>,
+    cpu_process_scan_generation: Cell<u64>,
     refresh_target: Retained<AnyObject>,
     launch_at_login: LaunchAtLoginController,
     launch_at_login_status: Cell<LaunchAtLoginStatus>,
@@ -49,6 +56,7 @@ struct AppState {
     show_gpu: Cell<bool>,
     settings: SettingsStore,
     app_memory: RefCell<AppMemorySnapshot>,
+    cpu_processes: RefCell<ProcessCpuSnapshot>,
     last_snapshot: RefCell<Option<crate::model::MemorySnapshot>>,
     last_app_rows: RefCell<Vec<AppMemoryUsage>>,
     trend_tracker: RefCell<MemoryTrendTracker>,
@@ -62,11 +70,17 @@ const APP_DELTA_BASELINE_MAX_AGE: Duration = Duration::from_secs(90);
 const APP_BASELINE_ROW_LIMIT: usize = 25;
 const MENU_REOPEN_DELAY_SECONDS: f64 = 0.05;
 const MENU_OPEN_DRAIN_DELAY_SECONDS: f64 = 0.15;
+const CPU_PROCESS_DRAIN_DELAY_SECONDS: f64 = 0.3;
 
 struct AppScanResult {
     generation: u64,
     completed_at: Instant,
     rows: io::Result<Vec<AppMemoryUsage>>,
+}
+
+struct CpuProcessScanResult {
+    generation: u64,
+    rows: io::Result<Vec<ProcessCpuUsage>>,
 }
 
 fn previous_app_rows_if_fresh(
@@ -104,6 +118,23 @@ fn should_sample_cpu(menu_open: bool, show_cpu: bool) -> bool {
 
 fn should_sample_gpu(menu_open: bool, show_gpu: bool) -> bool {
     menu_open && show_gpu
+}
+
+fn should_accept_cpu_process_result(
+    result_generation: u64,
+    current_generation: u64,
+    menu_open: bool,
+    show_cpu: bool,
+) -> bool {
+    result_generation == current_generation && menu_open && show_cpu
+}
+
+fn should_schedule_cpu_process_drain(
+    show_cpu: bool,
+    result_updated: bool,
+    scan_in_flight: bool,
+) -> bool {
+    show_cpu && !result_updated && scan_in_flight
 }
 
 /// Resolve the app to quit by its stable `group_key` rather than a menu position.
@@ -185,6 +216,21 @@ mod tests {
     }
 
     #[test]
+    fn cpu_process_results_require_the_current_visible_generation() {
+        assert!(should_accept_cpu_process_result(7, 7, true, true));
+        assert!(!should_accept_cpu_process_result(6, 7, true, true));
+        assert!(!should_accept_cpu_process_result(7, 7, false, true));
+        assert!(!should_accept_cpu_process_result(7, 7, true, false));
+    }
+
+    #[test]
+    fn slow_cpu_process_scans_keep_polling_until_the_result_is_drained() {
+        assert!(should_schedule_cpu_process_drain(true, false, true));
+        assert!(!should_schedule_cpu_process_drain(true, true, false));
+        assert!(!should_schedule_cpu_process_drain(false, false, true));
+    }
+
+    #[test]
     fn find_quittable_skips_unquittable_and_missing_keys() {
         let mut rows = vec![usage("rami")];
         rows[0].can_quit = false;
@@ -211,6 +257,7 @@ impl AppState {
         }
         let mtm = MainThreadMarker::new().expect("refreshes must stay on the main thread");
         self.drain_app_scan_results();
+        let cpu_processes_updated = self.drain_cpu_process_scan_results();
         match self.sampler.sample() {
             Ok(snapshot) => {
                 *self.last_snapshot.borrow_mut() = Some(snapshot);
@@ -233,14 +280,26 @@ impl AppState {
                 self.tray.set_gauge_snapshot(snapshot, trend, mtm);
                 if self.menu_open.get() {
                     let cpu = self.sample_cpu_if_visible();
+                    if self.show_cpu.get() && !cpu_processes_updated {
+                        self.start_cpu_process_scan();
+                    }
+                    if should_schedule_cpu_process_drain(
+                        self.show_cpu.get(),
+                        cpu_processes_updated,
+                        self.cpu_process_scan_in_flight.get(),
+                    ) {
+                        self.schedule_menu_open_drain(CPU_PROCESS_DRAIN_DELAY_SECONDS);
+                    }
                     let gpu = self.sample_gpu_if_visible();
                     let apps = self.app_memory.borrow();
+                    let cpu_processes = self.cpu_processes.borrow();
                     let history = self.trend_tracker.borrow().samples();
                     self.tray.set_menu_snapshot(
                         snapshot,
                         cpu,
                         gpu,
                         &apps,
+                        &cpu_processes,
                         &history,
                         self.launch_at_login_status.get(),
                         self.auto_refresh_enabled.get(),
@@ -315,6 +374,20 @@ impl AppState {
         });
     }
 
+    fn start_cpu_process_scan(&self) {
+        if self.cpu_process_scan_in_flight.replace(true) {
+            return;
+        }
+        let sender = self.cpu_process_scan_sender.clone();
+        let generation = self.cpu_process_scan_generation.get();
+        thread::spawn(move || {
+            // SAFETY: this only changes the current worker thread's QoS preference.
+            unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0) };
+            let rows = ProcessCpuSampler::new().sample(PROCESS_CPU_ROW_LIMIT);
+            let _ = sender.send(CpuProcessScanResult { generation, rows });
+        });
+    }
+
     fn drain_app_scan_results(&self) {
         while let Ok(result) = self.app_scan_receiver.try_recv() {
             if result.generation != self.app_scan_generation.get() {
@@ -351,6 +424,41 @@ impl AppState {
         self.app_scan_in_flight.set(false);
         self.app_scan_generation
             .set(self.app_scan_generation.get().wrapping_add(1));
+    }
+
+    fn drain_cpu_process_scan_results(&self) -> bool {
+        let mut accepted = false;
+        while let Ok(result) = self.cpu_process_scan_receiver.try_recv() {
+            if !should_accept_cpu_process_result(
+                result.generation,
+                self.cpu_process_scan_generation.get(),
+                self.menu_open.get(),
+                self.show_cpu.get(),
+            ) {
+                continue;
+            }
+            accepted = true;
+            self.cpu_process_scan_in_flight.set(false);
+            *self.cpu_processes.borrow_mut() = match result.rows {
+                Ok(rows) => ProcessCpuSnapshot::Loaded(rows),
+                Err(error) => {
+                    eprintln!("process CPU scan failed: {error}");
+                    ProcessCpuSnapshot::Unavailable
+                }
+            };
+        }
+        accepted
+    }
+
+    fn prepare_cpu_processes(&self) {
+        *self.cpu_processes.borrow_mut() = ProcessCpuSnapshot::Loading;
+    }
+
+    fn clear_cpu_processes(&self) {
+        *self.cpu_processes.borrow_mut() = ProcessCpuSnapshot::Hidden;
+        self.cpu_process_scan_in_flight.set(false);
+        self.cpu_process_scan_generation
+            .set(self.cpu_process_scan_generation.get().wrapping_add(1));
     }
 
     fn quit_app_with_key(&self, key: &str) {
@@ -407,6 +515,11 @@ impl AppState {
         self.show_cpu.set(enabled);
         self.settings.set_show_cpu(enabled);
         self.cpu_sampler.borrow_mut().reset();
+        if enabled && self.menu_open.get() {
+            self.prepare_cpu_processes();
+        } else {
+            self.clear_cpu_processes();
+        }
         self.tray.set_show_cpu(enabled);
         self.refresh(true);
     }
@@ -421,27 +534,31 @@ impl AppState {
 
     fn menu_will_open(&self) {
         self.menu_open.set(true);
+        if self.show_cpu.get() {
+            self.prepare_cpu_processes();
+        }
         // The status read is an XPC round trip; menu open is the only moment
         // the answer is visible, so it is (re)read here rather than per tick.
         self.launch_at_login_status
             .set(self.launch_at_login.status());
         self.refresh(true);
-        self.schedule_menu_open_drain();
+        self.schedule_menu_open_drain(MENU_OPEN_DRAIN_DELAY_SECONDS);
     }
 
     fn menu_did_close(&self) {
         self.menu_open.set(false);
         self.ticks_until_app_refresh.set(0);
         self.cpu_sampler.borrow_mut().reset();
+        self.clear_cpu_processes();
     }
 
     /// One-shot timer that drains the scan started by `menuWillOpen:` while the
     /// menu is still tracking. It must live in NSRunLoopCommonModes or it would
     /// only fire after the menu closes.
-    fn schedule_menu_open_drain(&self) {
+    fn schedule_menu_open_drain(&self, delay_seconds: f64) {
         let timer = unsafe {
             NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
-                MENU_OPEN_DRAIN_DELAY_SECONDS,
+                delay_seconds,
                 &self.refresh_target,
                 sel!(refreshNow:),
                 None,
@@ -632,6 +749,7 @@ impl App {
         let settings_store = SettingsStore::new();
         let settings = settings_store.load();
         let (app_scan_sender, app_scan_receiver) = mpsc::channel();
+        let (cpu_process_scan_sender, cpu_process_scan_receiver) = mpsc::channel();
         let initial_app_memory = if settings.show_app_usage {
             AppMemorySnapshot::Loading
         } else {
@@ -646,6 +764,10 @@ impl App {
             app_scan_receiver,
             app_scan_in_flight: Cell::new(false),
             app_scan_generation: Cell::new(0),
+            cpu_process_scan_sender,
+            cpu_process_scan_receiver,
+            cpu_process_scan_in_flight: Cell::new(false),
+            cpu_process_scan_generation: Cell::new(0),
             refresh_target: refresh_target.clone(),
             launch_at_login,
             launch_at_login_status: Cell::new(launch_at_login_status),
@@ -655,6 +777,7 @@ impl App {
             show_gpu: Cell::new(settings.show_gpu),
             settings: settings_store,
             app_memory: RefCell::new(initial_app_memory),
+            cpu_processes: RefCell::new(ProcessCpuSnapshot::Hidden),
             last_snapshot: RefCell::new(None),
             last_app_rows: RefCell::new(Vec::new()),
             trend_tracker: RefCell::new(MemoryTrendTracker::new()),
