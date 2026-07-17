@@ -137,6 +137,17 @@ fn should_schedule_cpu_process_drain(
     show_cpu && !result_updated && scan_in_flight
 }
 
+fn merge_cpu_process_rows(
+    current: &ProcessCpuSnapshot,
+    rows: Vec<ProcessCpuUsage>,
+) -> (ProcessCpuSnapshot, bool) {
+    if rows.is_empty() {
+        (current.clone(), false)
+    } else {
+        (ProcessCpuSnapshot::Loaded(rows), true)
+    }
+}
+
 /// Resolve the app to quit by its stable `group_key` rather than a menu position.
 /// A background scan may reorder or drop rows between the menu being shown and the
 /// click landing; matching on identity guarantees we quit the app the user picked,
@@ -228,6 +239,19 @@ mod tests {
         assert!(should_schedule_cpu_process_drain(true, false, true));
         assert!(!should_schedule_cpu_process_drain(true, true, false));
         assert!(!should_schedule_cpu_process_drain(false, false, true));
+    }
+
+    #[test]
+    fn empty_cpu_process_sample_keeps_last_rows_and_retries() {
+        let current = ProcessCpuSnapshot::Loaded(vec![ProcessCpuUsage {
+            name: "Editor".to_string(),
+            utilization_percent: 12,
+        }]);
+
+        let (next, updated) = merge_cpu_process_rows(&current, Vec::new());
+
+        assert_eq!(next, current);
+        assert!(!updated);
     }
 
     #[test]
@@ -437,15 +461,19 @@ impl AppState {
             ) {
                 continue;
             }
-            accepted = true;
             self.cpu_process_scan_in_flight.set(false);
-            *self.cpu_processes.borrow_mut() = match result.rows {
-                Ok(rows) => ProcessCpuSnapshot::Loaded(rows),
+            let (next, updated) = match result.rows {
+                Ok(rows) => {
+                    let current = self.cpu_processes.borrow();
+                    merge_cpu_process_rows(&current, rows)
+                }
                 Err(error) => {
                     eprintln!("process CPU scan failed: {error}");
-                    ProcessCpuSnapshot::Unavailable
+                    (ProcessCpuSnapshot::Unavailable, true)
                 }
             };
+            accepted = updated;
+            *self.cpu_processes.borrow_mut() = next;
         }
         accepted
     }
