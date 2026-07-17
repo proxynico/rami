@@ -2,7 +2,7 @@ use rami::format::{
     dropdown_model, gauge_symbol_name, gb_pair, gb_text, mem_text, placeholder_dropdown_model,
     Accent, DropdownModel, ModuleDisplay,
 };
-use rami::model::{MemorySnapshot, PressureSource, SystemSnapshot};
+use rami::model::{CpuModuleState, MemorySnapshot, PressureSource, SystemSnapshot};
 
 const ONE_GIB: u64 = 1_073_741_824;
 const SIXTEEN_GIB: u64 = 16 * ONE_GIB;
@@ -63,12 +63,15 @@ fn dropdown_model_splits_memory_and_swap_rows() {
         available_bytes: 8_160_449_024,
     };
 
-    let DropdownModel::Loaded { accent, modules } =
-        dropdown_model(SystemSnapshot { memory: snapshot })
-    else {
+    let DropdownModel::Loaded { accent, modules } = dropdown_model(SystemSnapshot {
+        memory: snapshot,
+        cpu: CpuModuleState::Disabled,
+    }) else {
         panic!("expected Loaded model");
     };
-    let ModuleDisplay::Memory(memory) = &modules[0];
+    let ModuleDisplay::Memory(memory) = &modules[0] else {
+        panic!("expected memory module first");
+    };
 
     assert_eq!(accent, Accent::Critical);
     assert_eq!(memory.rings[0].label, "Memory %");
@@ -105,11 +108,15 @@ fn dropdown_model_hides_swap_when_zero() {
         available_bytes: 11 * ONE_GIB,
     };
 
-    let DropdownModel::Loaded { modules, .. } = dropdown_model(SystemSnapshot { memory: snapshot })
-    else {
+    let DropdownModel::Loaded { modules, .. } = dropdown_model(SystemSnapshot {
+        memory: snapshot,
+        cpu: CpuModuleState::Disabled,
+    }) else {
         panic!("expected Loaded model");
     };
-    let ModuleDisplay::Memory(memory) = &modules[0];
+    let ModuleDisplay::Memory(memory) = &modules[0] else {
+        panic!("expected memory module first");
+    };
 
     assert!(memory.swap.is_none());
 }

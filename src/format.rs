@@ -1,4 +1,4 @@
-use crate::model::{classify_pressure, MemoryPressure, SystemSnapshot};
+use crate::model::{classify_pressure, CpuModuleState, MemoryPressure, SystemSnapshot};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 
@@ -115,8 +115,24 @@ pub struct MemoryModuleDisplay {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CpuModuleDisplay {
+    pub state: CpuDisplayState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CpuDisplayState {
+    Loading,
+    Available {
+        utilization: [LegendRow; 2],
+        cores: Vec<StatRow>,
+    },
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModuleDisplay {
-    Memory(MemoryModuleDisplay),
+    Memory(Box<MemoryModuleDisplay>),
+    Cpu(CpuModuleDisplay),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -140,36 +156,78 @@ pub fn dropdown_model_with_apps(
 ) -> DropdownModel {
     let memory = snapshot.memory;
     let accent = Accent::from(classify_pressure(memory.pressure_percent));
-    DropdownModel::Loaded {
-        accent,
-        modules: vec![ModuleDisplay::Memory(MemoryModuleDisplay {
-            rings: [
-                RingDisplay {
-                    label: "Memory %".to_string(),
-                    percent: memory.used_percent,
-                    detail: gb_pair(memory.used_bytes, memory.total_bytes),
+    let mut modules = vec![ModuleDisplay::Memory(Box::new(MemoryModuleDisplay {
+        rings: [
+            RingDisplay {
+                label: "Memory %".to_string(),
+                percent: memory.used_percent,
+                detail: gb_pair(memory.used_bytes, memory.total_bytes),
+            },
+            RingDisplay {
+                label: "Pressure".to_string(),
+                percent: memory.pressure_percent,
+                detail: String::new(),
+            },
+        ],
+        breakdown: [
+            legend_row("App Memory", memory.app_memory_bytes, 100),
+            legend_row("Wired", memory.wired_bytes, 65),
+            legend_row("Compressed", memory.compressed_bytes, 35),
+            legend_row("Free", memory.free_bytes, 12),
+        ],
+        swap: (memory.swap_used_bytes > 0).then(|| StatRow {
+            primary: "Swap".to_string(),
+            tail: Some(mem_text(memory.swap_used_bytes)),
+            quit_key: None,
+            bundle_path: None,
+        }),
+        history: history.to_vec(),
+        apps: app_section_display(apps),
+    }))];
+    match snapshot.cpu {
+        CpuModuleState::Disabled => {}
+        CpuModuleState::Loading => modules.push(ModuleDisplay::Cpu(CpuModuleDisplay {
+            state: CpuDisplayState::Loading,
+        })),
+        CpuModuleState::Available(cpu) => {
+            let mut cores = Vec::with_capacity(2);
+            if let Some(percent) = cpu.efficiency_percent {
+                cores.push(cpu_core_row("E-cores", percent));
+            }
+            if let Some(percent) = cpu.performance_percent {
+                cores.push(cpu_core_row("P-cores", percent));
+            }
+            modules.push(ModuleDisplay::Cpu(CpuModuleDisplay {
+                state: CpuDisplayState::Available {
+                    utilization: [
+                        cpu_legend_row("User", cpu.user_percent, 100),
+                        cpu_legend_row("System", cpu.system_percent, 50),
+                    ],
+                    cores,
                 },
-                RingDisplay {
-                    label: "Pressure".to_string(),
-                    percent: memory.pressure_percent,
-                    detail: String::new(),
-                },
-            ],
-            breakdown: [
-                legend_row("App Memory", memory.app_memory_bytes, 100),
-                legend_row("Wired", memory.wired_bytes, 65),
-                legend_row("Compressed", memory.compressed_bytes, 35),
-                legend_row("Free", memory.free_bytes, 12),
-            ],
-            swap: (memory.swap_used_bytes > 0).then(|| StatRow {
-                primary: "Swap".to_string(),
-                tail: Some(mem_text(memory.swap_used_bytes)),
-                quit_key: None,
-                bundle_path: None,
-            }),
-            history: history.to_vec(),
-            apps: app_section_display(apps),
-        })],
+            }));
+        }
+        CpuModuleState::Unavailable => modules.push(ModuleDisplay::Cpu(CpuModuleDisplay {
+            state: CpuDisplayState::Unavailable,
+        })),
+    }
+    DropdownModel::Loaded { accent, modules }
+}
+
+fn cpu_legend_row(label: &str, percent: u8, opacity_percent: u8) -> LegendRow {
+    LegendRow {
+        label: label.to_string(),
+        value: format!("{}%", percent.min(100)),
+        opacity_percent,
+    }
+}
+
+fn cpu_core_row(label: &str, percent: u8) -> StatRow {
+    StatRow {
+        primary: label.to_string(),
+        tail: Some(format!("{}%", percent.min(100))),
+        quit_key: None,
+        bundle_path: None,
     }
 }
 
@@ -234,7 +292,7 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{MemorySnapshot, PressureSource};
+    use crate::model::{CpuModuleState, CpuSnapshot, MemorySnapshot, PressureSource};
     use crate::trend::rank_app_rows;
 
     fn snapshot(total_bytes: u64) -> SystemSnapshot {
@@ -252,6 +310,7 @@ mod tests {
                 swap_used_bytes: 0,
                 available_bytes: total_bytes / 2,
             },
+            cpu: CpuModuleState::Disabled,
         }
     }
 
@@ -405,6 +464,77 @@ mod tests {
         snapshot.memory.used_percent = 56;
         let model = dropdown_model(snapshot);
         assert_eq!(memory_module(&model).rings[0].percent, 56);
+    }
+
+    #[test]
+    fn available_cpu_module_follows_memory_with_user_system_and_core_rows() {
+        let mut snapshot = snapshot(SIXTEEN_GIB);
+        snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
+            user_percent: 41,
+            system_percent: 13,
+            efficiency_percent: Some(22),
+            performance_percent: Some(71),
+        });
+
+        let DropdownModel::Loaded { modules, .. } = dropdown_model(snapshot) else {
+            panic!("expected loaded model");
+        };
+        assert!(matches!(modules.first(), Some(ModuleDisplay::Memory(_))));
+        let Some(ModuleDisplay::Cpu(cpu)) = modules.get(1) else {
+            panic!("expected CPU module after Memory");
+        };
+        let CpuDisplayState::Available { utilization, cores } = &cpu.state else {
+            panic!("expected available CPU state");
+        };
+        assert_eq!(
+            utilization[0],
+            LegendRow {
+                label: "User".to_string(),
+                value: "41%".to_string(),
+                opacity_percent: 100,
+            }
+        );
+        assert_eq!(utilization[1].label, "System");
+        assert_eq!(utilization[1].value, "13%");
+        assert_eq!(cores[0].primary, "E-cores");
+        assert_eq!(cores[0].tail.as_deref(), Some("22%"));
+        assert_eq!(cores[1].primary, "P-cores");
+        assert_eq!(cores[1].tail.as_deref(), Some("71%"));
+    }
+
+    #[test]
+    fn cpu_projection_covers_disabled_loading_and_unavailable_without_hiding_memory() {
+        let disabled = dropdown_model(snapshot(SIXTEEN_GIB));
+        let DropdownModel::Loaded { modules, .. } = disabled else {
+            panic!("expected loaded model");
+        };
+        assert_eq!(modules.len(), 1);
+
+        let mut loading_snapshot = snapshot(SIXTEEN_GIB);
+        loading_snapshot.cpu = CpuModuleState::Loading;
+        let DropdownModel::Loaded { modules, .. } = dropdown_model(loading_snapshot) else {
+            panic!("expected loaded model");
+        };
+        assert!(matches!(modules.first(), Some(ModuleDisplay::Memory(_))));
+        assert!(matches!(
+            modules.get(1),
+            Some(ModuleDisplay::Cpu(CpuModuleDisplay {
+                state: CpuDisplayState::Loading
+            }))
+        ));
+
+        let mut unavailable_snapshot = snapshot(SIXTEEN_GIB);
+        unavailable_snapshot.cpu = CpuModuleState::Unavailable;
+        let DropdownModel::Loaded { modules, .. } = dropdown_model(unavailable_snapshot) else {
+            panic!("expected loaded model");
+        };
+        assert!(matches!(modules.first(), Some(ModuleDisplay::Memory(_))));
+        assert!(matches!(
+            modules.get(1),
+            Some(ModuleDisplay::Cpu(CpuModuleDisplay {
+                state: CpuDisplayState::Unavailable
+            }))
+        ));
     }
 
     #[test]

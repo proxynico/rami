@@ -1,8 +1,10 @@
 use crate::app_control::quit_app_group;
+use crate::cpu::CpuSampler;
 use crate::diagnostics::{build_diagnostic_report, current_report_input};
 use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
+use crate::model::CpuModuleState;
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage, ProcessMemorySampler};
 use crate::settings::SettingsStore;
 use crate::tray::TrayController;
@@ -31,6 +33,7 @@ thread_local! {
 struct AppState {
     tray: TrayController,
     sampler: MemorySampler,
+    cpu_sampler: RefCell<CpuSampler>,
     app_scan_sender: Sender<AppScanResult>,
     app_scan_receiver: Receiver<AppScanResult>,
     app_scan_in_flight: Cell<bool>,
@@ -40,6 +43,7 @@ struct AppState {
     launch_at_login_status: Cell<LaunchAtLoginStatus>,
     auto_refresh_enabled: Cell<bool>,
     show_app_usage: Cell<bool>,
+    show_cpu: Cell<bool>,
     settings: SettingsStore,
     app_memory: RefCell<AppMemorySnapshot>,
     last_snapshot: RefCell<Option<crate::model::MemorySnapshot>>,
@@ -89,6 +93,10 @@ fn app_scan_decision(menu_open: bool, manual: bool, ticks_until_refresh: u8) -> 
     } else {
         (false, ticks_until_refresh - 1)
     }
+}
+
+fn should_sample_cpu(menu_open: bool, show_cpu: bool) -> bool {
+    menu_open && show_cpu
 }
 
 /// Resolve the app to quit by its stable `group_key` rather than a menu position.
@@ -156,6 +164,13 @@ mod tests {
     }
 
     #[test]
+    fn cpu_sampling_is_gated_by_visibility_and_its_own_setting() {
+        assert!(!should_sample_cpu(false, true));
+        assert!(!should_sample_cpu(true, false));
+        assert!(should_sample_cpu(true, true));
+    }
+
+    #[test]
     fn find_quittable_skips_unquittable_and_missing_keys() {
         let mut rows = vec![usage("rami")];
         rows[0].can_quit = false;
@@ -203,10 +218,12 @@ impl AppState {
 
                 self.tray.set_gauge_snapshot(snapshot, trend, mtm);
                 if self.menu_open.get() {
+                    let cpu = self.sample_cpu_if_visible();
                     let apps = self.app_memory.borrow();
                     let history = self.trend_tracker.borrow().samples();
                     self.tray.set_menu_snapshot(
                         snapshot,
+                        cpu,
                         &apps,
                         &history,
                         self.launch_at_login_status.get(),
@@ -221,6 +238,26 @@ impl AppState {
                     .set_placeholder(self.launch_at_login_status.get(), mtm);
             }
         }
+    }
+
+    fn sample_cpu_if_visible(&self) -> CpuModuleState {
+        if !should_sample_cpu(self.menu_open.get(), self.show_cpu.get()) {
+            return if self.show_cpu.get() {
+                CpuModuleState::Loading
+            } else {
+                CpuModuleState::Disabled
+            };
+        }
+
+        let next = match self.cpu_sampler.borrow_mut().sample() {
+            Ok(Some(snapshot)) => CpuModuleState::Available(snapshot),
+            Ok(None) => CpuModuleState::Loading,
+            Err(error) => {
+                eprintln!("CPU sample failed: {error}");
+                CpuModuleState::Unavailable
+            }
+        };
+        next
     }
 
     fn start_app_scan(&self) {
@@ -330,6 +367,15 @@ impl AppState {
         }
     }
 
+    fn toggle_show_cpu(&self) {
+        let enabled = !self.show_cpu.get();
+        self.show_cpu.set(enabled);
+        self.settings.set_show_cpu(enabled);
+        self.cpu_sampler.borrow_mut().reset();
+        self.tray.set_show_cpu(enabled);
+        self.refresh(true);
+    }
+
     fn menu_will_open(&self) {
         self.menu_open.set(true);
         // The status read is an XPC round trip; menu open is the only moment
@@ -343,6 +389,7 @@ impl AppState {
     fn menu_did_close(&self) {
         self.menu_open.set(false);
         self.ticks_until_app_refresh.set(0);
+        self.cpu_sampler.borrow_mut().reset();
     }
 
     /// One-shot timer that drains the scan started by `menuWillOpen:` while the
@@ -457,6 +504,11 @@ define_class!(
             with_app_state(|state| state.toggle_show_app_usage());
         }
 
+        #[unsafe(method(toggleShowCpu:))]
+        fn toggle_show_cpu(&self, _sender: &AnyObject) {
+            with_app_state(|state| state.toggle_show_cpu());
+        }
+
         #[unsafe(method(copyDiagnostics:))]
         fn copy_diagnostics(&self, _sender: &AnyObject) {
             with_app_state(|state| state.copy_diagnostic_report());
@@ -540,6 +592,7 @@ impl App {
         let state = Rc::new(AppState {
             tray,
             sampler: MemorySampler::new()?,
+            cpu_sampler: RefCell::new(CpuSampler::new()),
             app_scan_sender,
             app_scan_receiver,
             app_scan_in_flight: Cell::new(false),
@@ -549,6 +602,7 @@ impl App {
             launch_at_login_status: Cell::new(launch_at_login_status),
             auto_refresh_enabled: Cell::new(settings.auto_refresh_enabled),
             show_app_usage: Cell::new(settings.show_app_usage),
+            show_cpu: Cell::new(settings.show_cpu),
             settings: settings_store,
             app_memory: RefCell::new(initial_app_memory),
             last_snapshot: RefCell::new(None),
@@ -561,6 +615,7 @@ impl App {
         install_app_state(&state);
         // Reflect the persisted "show apps" choice in the menu checkbox before first paint.
         state.tray.set_show_app_usage(settings.show_app_usage);
+        state.tray.set_show_cpu(settings.show_cpu);
         app.finishLaunching();
         state.refresh(true);
         // NSRunLoopCommonModes so ticks keep firing while the menu is tracking;

@@ -3,12 +3,14 @@ use objc2_foundation::{NSString, NSUserDefaults};
 
 const KEY_AUTO_REFRESH: &str = "autoRefreshEnabled";
 const KEY_SHOW_APPS: &str = "showAppUsage";
+const KEY_SHOW_CPU: &str = "showCpu";
 
 /// User-toggleable settings that persist across launches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     pub auto_refresh_enabled: bool,
     pub show_app_usage: bool,
+    pub show_cpu: bool,
 }
 
 impl Default for Settings {
@@ -16,6 +18,7 @@ impl Default for Settings {
         Self {
             auto_refresh_enabled: true,
             show_app_usage: true,
+            show_cpu: true,
         }
     }
 }
@@ -41,11 +44,11 @@ impl SettingsStore {
     }
 
     pub fn load(&self) -> Settings {
-        let fallback = Settings::default();
-        Settings {
-            auto_refresh_enabled: self.read_bool(KEY_AUTO_REFRESH, fallback.auto_refresh_enabled),
-            show_app_usage: self.read_bool(KEY_SHOW_APPS, fallback.show_app_usage),
-        }
+        resolve_settings(
+            self.read_stored_bool(KEY_AUTO_REFRESH),
+            self.read_stored_bool(KEY_SHOW_APPS),
+            self.read_stored_bool(KEY_SHOW_CPU),
+        )
     }
 
     pub fn set_auto_refresh_enabled(&self, value: bool) {
@@ -58,16 +61,32 @@ impl SettingsStore {
             .setBool_forKey(value, &NSString::from_str(KEY_SHOW_APPS));
     }
 
-    fn read_bool(&self, key: &str, fallback: bool) -> bool {
+    pub fn set_show_cpu(&self, value: bool) {
+        self.defaults
+            .setBool_forKey(value, &NSString::from_str(KEY_SHOW_CPU));
+    }
+
+    fn read_stored_bool(&self, key: &str) -> Option<bool> {
         let key = NSString::from_str(key);
         // objectForKey is None only when the key was never written, letting us
         // distinguish "unset" (use the default) from an explicitly stored `false`.
-        let stored = self
-            .defaults
+        self.defaults
             .objectForKey(&key)
             .is_some()
-            .then(|| self.defaults.boolForKey(&key));
-        resolve_bool(stored, fallback)
+            .then(|| self.defaults.boolForKey(&key))
+    }
+}
+
+fn resolve_settings(
+    auto_refresh_enabled: Option<bool>,
+    show_app_usage: Option<bool>,
+    show_cpu: Option<bool>,
+) -> Settings {
+    let fallback = Settings::default();
+    Settings {
+        auto_refresh_enabled: resolve_bool(auto_refresh_enabled, fallback.auto_refresh_enabled),
+        show_app_usage: resolve_bool(show_app_usage, fallback.show_app_usage),
+        show_cpu: resolve_bool(show_cpu, fallback.show_cpu),
     }
 }
 
@@ -77,7 +96,7 @@ fn resolve_bool(stored: Option<bool>, fallback: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_bool;
+    use super::{resolve_bool, resolve_settings};
 
     #[test]
     fn resolve_bool_uses_fallback_only_when_unset() {
@@ -86,5 +105,18 @@ mod tests {
         // A stored value always wins over the default, including an explicit false.
         assert!(!resolve_bool(Some(false), true));
         assert!(resolve_bool(Some(true), false));
+    }
+
+    #[test]
+    fn show_cpu_defaults_on_and_preserves_an_explicit_off_independently() {
+        let defaults = resolve_settings(None, None, None);
+        assert!(defaults.auto_refresh_enabled);
+        assert!(defaults.show_app_usage);
+        assert!(defaults.show_cpu);
+
+        let persisted = resolve_settings(Some(false), Some(true), Some(false));
+        assert!(!persisted.auto_refresh_enabled);
+        assert!(persisted.show_app_usage);
+        assert!(!persisted.show_cpu);
     }
 }
