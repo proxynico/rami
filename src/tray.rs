@@ -376,28 +376,6 @@ impl TrayController {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_snapshot(
-        &self,
-        snapshot: MemorySnapshot,
-        trend: MemoryTrend,
-        apps: &AppMemorySnapshot,
-        history: &[u64],
-        launch_at_login_status: LaunchAtLoginStatus,
-        auto_refresh_enabled: bool,
-        mtm: MainThreadMarker,
-    ) {
-        self.set_gauge_snapshot(snapshot, trend, mtm);
-        self.set_menu_snapshot(
-            snapshot,
-            apps,
-            history,
-            launch_at_login_status,
-            auto_refresh_enabled,
-            mtm,
-        );
-    }
-
     /// Attach the open/close delegate to the main tray menu only; the settings
     /// submenu opening must not count as a menu open.
     pub fn set_menu_delegate(&self, delegate: &ProtocolObject<dyn NSMenuDelegate>) {
