@@ -126,7 +126,7 @@ fn registry_property(entry: IoObjectId, key: &std::ffi::CStr) -> Option<CfObject
 }
 
 fn normalized_utilization(raw: i64) -> Option<u8> {
-    (raw >= 0).then(|| raw.min(100) as u8)
+    (0..=100).contains(&raw).then_some(raw as u8)
 }
 
 struct IoObject(IoObjectId);
@@ -170,11 +170,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn device_utilization_is_normalized_to_a_percentage() {
+    fn device_utilization_rejects_values_outside_percentage_range() {
         assert_eq!(normalized_utilization(-1), None);
         assert_eq!(normalized_utilization(0), Some(0));
         assert_eq!(normalized_utilization(76), Some(76));
-        assert_eq!(normalized_utilization(101), Some(100));
+        assert_eq!(normalized_utilization(101), None);
     }
 
     #[test]
