@@ -2,7 +2,7 @@ use rami::format::{
     dropdown_model, gauge_symbol_name, gb_pair, gb_text, mem_text, placeholder_dropdown_model,
     Accent, DropdownModel, ModuleDisplay,
 };
-use rami::model::{CpuModuleState, MemorySnapshot, PressureSource, SystemSnapshot};
+use rami::model::{CpuModuleState, GpuModuleState, MemorySnapshot, PressureSource, SystemSnapshot};
 
 const ONE_GIB: u64 = 1_073_741_824;
 const SIXTEEN_GIB: u64 = 16 * ONE_GIB;
@@ -66,6 +66,7 @@ fn dropdown_model_splits_memory_and_swap_rows() {
     let DropdownModel::Loaded { accent, modules } = dropdown_model(SystemSnapshot {
         memory: snapshot,
         cpu: CpuModuleState::Disabled,
+        gpu: GpuModuleState::Disabled,
     }) else {
         panic!("expected Loaded model");
     };
@@ -111,6 +112,7 @@ fn dropdown_model_hides_swap_when_zero() {
     let DropdownModel::Loaded { modules, .. } = dropdown_model(SystemSnapshot {
         memory: snapshot,
         cpu: CpuModuleState::Disabled,
+        gpu: GpuModuleState::Disabled,
     }) else {
         panic!("expected Loaded model");
     };

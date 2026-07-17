@@ -1,7 +1,7 @@
 use crate::format::{
     dropdown_model_with_apps, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
     placeholder_dropdown_model, Accent, AppSectionDisplay, CpuDisplayState, DropdownModel,
-    LegendRow, ModuleDisplay, RingDisplay, StatRow,
+    GpuModuleDisplay, LegendRow, ModuleDisplay, RingDisplay, StatRow,
 };
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_view::MemoryRingsView;
@@ -45,6 +45,12 @@ enum CpuShape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GpuShape {
+    Hidden,
+    Available,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuShape {
     Uninitialized,
     Loading,
@@ -52,6 +58,7 @@ enum MenuShape {
         apps: AppShape,
         show_swap: bool,
         cpu: CpuShape,
+        gpu: GpuShape,
     },
 }
 
@@ -75,10 +82,13 @@ pub struct TrayController {
     cpu_unavailable_item: Retained<NSMenuItem>,
     cpu_legend_items: Vec<Retained<NSMenuItem>>,
     cpu_core_items: Vec<Retained<NSMenuItem>>,
+    gpu_title_item: Retained<NSMenuItem>,
+    gpu_utilization_item: Retained<NSMenuItem>,
     refresh_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
     show_app_usage_item: Retained<NSMenuItem>,
     show_cpu_item: Retained<NSMenuItem>,
+    show_gpu_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
     _diagnostics_item: Retained<NSMenuItem>,
     _about_item: Retained<NSMenuItem>,
@@ -99,6 +109,7 @@ pub struct TrayController {
     last_history: RefCell<Vec<u64>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
     last_cpu_state: RefCell<Option<CpuDisplayState>>,
+    last_gpu: RefCell<Option<GpuModuleDisplay>>,
     last_auto_refresh_enabled: Cell<bool>,
     last_tooltip: RefCell<String>,
     last_launch_title: RefCell<String>,
@@ -163,6 +174,9 @@ impl TrayController {
         cpu_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
         let cpu_legend_items = (0..2).map(|_| make_stat_item(mtm)).collect();
         let cpu_core_items = (0..2).map(|_| make_stat_item(mtm)).collect();
+        let gpu_title_item = make_stat_item(mtm);
+        gpu_title_item.setImage(Some(&placeholder_icon));
+        let gpu_utilization_item = make_stat_item(mtm);
 
         let refresh_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -229,6 +243,20 @@ impl TrayController {
         show_cpu_item.setEnabled(true);
         show_cpu_item.setState(NSControlStateValueOn);
 
+        let show_gpu_item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str("Show GPU"),
+                Some(sel!(toggleShowGpu:)),
+                &empty,
+            )
+        };
+        unsafe {
+            show_gpu_item.setTarget(Some(&refresh_target));
+        }
+        show_gpu_item.setEnabled(true);
+        show_gpu_item.setState(NSControlStateValueOn);
+
         let launch_at_login_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
@@ -294,6 +322,7 @@ impl TrayController {
         settings_submenu.addItem(&auto_refresh_item);
         settings_submenu.addItem(&show_app_usage_item);
         settings_submenu.addItem(&show_cpu_item);
+        settings_submenu.addItem(&show_gpu_item);
         settings_submenu.addItem(&launch_at_login_item);
         settings_submenu.addItem(&diagnostics_item);
         settings_submenu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -351,10 +380,13 @@ impl TrayController {
             cpu_unavailable_item,
             cpu_legend_items,
             cpu_core_items,
+            gpu_title_item,
+            gpu_utilization_item,
             refresh_item,
             auto_refresh_item,
             show_app_usage_item,
             show_cpu_item,
+            show_gpu_item,
             launch_at_login_item,
             _diagnostics_item: diagnostics_item,
             _about_item: about_item,
@@ -375,6 +407,7 @@ impl TrayController {
             last_history: RefCell::new(Vec::new()),
             last_app_section: RefCell::new(None),
             last_cpu_state: RefCell::new(None),
+            last_gpu: RefCell::new(None),
             last_auto_refresh_enabled: Cell::new(true),
             last_tooltip: RefCell::new(String::new()),
             last_launch_title: RefCell::new(String::new()),
@@ -420,6 +453,7 @@ impl TrayController {
         &self,
         snapshot: MemorySnapshot,
         cpu: crate::model::CpuModuleState,
+        gpu: crate::model::GpuModuleState,
         apps: &AppMemorySnapshot,
         history: &[u64],
         launch_at_login_status: LaunchAtLoginStatus,
@@ -431,6 +465,7 @@ impl TrayController {
                 SystemSnapshot {
                     memory: snapshot,
                     cpu,
+                    gpu,
                 },
                 apps,
                 history,
@@ -458,6 +493,14 @@ impl TrayController {
 
     pub fn set_show_cpu(&self, enabled: bool) {
         self.show_cpu_item.setState(if enabled {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+    }
+
+    pub fn set_show_gpu(&self, enabled: bool) {
+        self.show_gpu_item.setState(if enabled {
             NSControlStateValueOn
         } else {
             NSControlStateValueOff
@@ -558,6 +601,7 @@ impl TrayController {
             self.last_history.borrow_mut().clear();
             self.last_app_section.borrow_mut().take();
             self.last_cpu_state.borrow_mut().take();
+            self.last_gpu.borrow_mut().take();
         }
 
         if let DropdownModel::Loaded { accent, modules } = model {
@@ -594,9 +638,15 @@ impl TrayController {
             }
             if let Some(cpu) = modules.iter().find_map(|module| match module {
                 ModuleDisplay::Cpu(cpu) => Some(cpu),
-                ModuleDisplay::Memory(_) => None,
+                ModuleDisplay::Memory(_) | ModuleDisplay::Gpu(_) => None,
             }) {
                 self.update_cpu_module(&cpu.state, &accent_color, accent_changed);
+            }
+            if let Some(gpu) = modules.iter().find_map(|module| match module {
+                ModuleDisplay::Gpu(gpu) => Some(gpu),
+                ModuleDisplay::Memory(_) | ModuleDisplay::Cpu(_) => None,
+            }) {
+                self.update_gpu_module(gpu, &accent_color, accent_changed);
             }
             self.last_accent.set(*accent);
         }
@@ -663,6 +713,31 @@ impl TrayController {
         *self.last_cpu_state.borrow_mut() = Some(cpu.clone());
     }
 
+    fn update_gpu_module(&self, gpu: &GpuModuleDisplay, accent: &NSColor, accent_changed: bool) {
+        if !accent_changed && self.last_gpu.borrow().as_ref() == Some(gpu) {
+            return;
+        }
+
+        self.gpu_title_item
+            .setAttributedTitle(Some(&stat_row_attributed(
+                &StatRow {
+                    primary: "GPU".to_string(),
+                    tail: None,
+                    quit_key: None,
+                    bundle_path: None,
+                },
+                accent.colorWithAlphaComponent(1.0),
+            )));
+        self.gpu_utilization_item
+            .setAttributedTitle(Some(&stat_row_attributed(
+                &gpu.utilization,
+                accent.colorWithAlphaComponent(1.0),
+            )));
+        self.gpu_utilization_item
+            .setImage(make_legend_icon(&accent.colorWithAlphaComponent(1.0)).as_deref());
+        *self.last_gpu.borrow_mut() = Some(gpu.clone());
+    }
+
     fn rebuild_menu(&self, shape: MenuShape, mtm: MainThreadMarker) {
         self.menu.removeAllItems();
         match shape {
@@ -674,6 +749,7 @@ impl TrayController {
                 apps,
                 show_swap,
                 cpu,
+                gpu,
             } => {
                 self.menu.addItem(&self.rings_item);
                 for item in &self.legend_items {
@@ -722,6 +798,11 @@ impl TrayController {
                             self.menu.addItem(item);
                         }
                     }
+                }
+                if gpu == GpuShape::Available {
+                    self.menu.addItem(&NSMenuItem::separatorItem(mtm));
+                    self.menu.addItem(&self.gpu_title_item);
+                    self.menu.addItem(&self.gpu_utilization_item);
                 }
             }
         }
@@ -826,9 +907,17 @@ fn menu_shape_for(model: &DropdownModel) -> MenuShape {
                                 cores: cores.len().min(2),
                             },
                         }),
-                        ModuleDisplay::Memory(_) => None,
+                        ModuleDisplay::Memory(_) | ModuleDisplay::Gpu(_) => None,
                     })
                     .unwrap_or(CpuShape::Hidden),
+                gpu: if modules
+                    .iter()
+                    .any(|module| matches!(module, ModuleDisplay::Gpu(_)))
+                {
+                    GpuShape::Available
+                } else {
+                    GpuShape::Hidden
+                },
             }
         }
     }
@@ -1116,6 +1205,7 @@ pub(crate) enum MenuEntry<'a> {
         auto_refresh_enabled: bool,
         show_app_usage: bool,
         show_cpu: bool,
+        show_gpu: bool,
         launch_at_login: LaunchAtLoginStatus,
     },
     Quit,
@@ -1131,6 +1221,7 @@ pub(crate) fn loaded_menu_entries<'a>(
         model,
         launch_at_login_status,
         auto_refresh_enabled,
+        false,
         false,
         false,
     )
@@ -1149,6 +1240,7 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
         auto_refresh_enabled,
         show_app_usage,
         false,
+        false,
     )
 }
 
@@ -1159,6 +1251,7 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
     auto_refresh_enabled: bool,
     show_app_usage: bool,
     show_cpu: bool,
+    show_gpu: bool,
 ) -> Vec<MenuEntry<'a>> {
     let mut entries = Vec::new();
     match model {
@@ -1209,28 +1302,38 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
                 }
             }
             for module in modules.iter().skip(1) {
-                let ModuleDisplay::Cpu(cpu) = module else {
-                    continue;
-                };
-                entries.push(MenuEntry::Separator);
-                entries.push(MenuEntry::ModuleTitle("CPU"));
-                match &cpu.state {
-                    CpuDisplayState::Loading => entries.push(MenuEntry::CpuLoading),
-                    CpuDisplayState::Unavailable => entries.push(MenuEntry::CpuUnavailable),
-                    CpuDisplayState::Available { utilization, cores } => {
-                        for row in utilization {
-                            entries.push(MenuEntry::Legend {
-                                label: &row.label,
-                                value: &row.value,
-                                opacity_percent: row.opacity_percent,
-                            });
+                match module {
+                    ModuleDisplay::Memory(_) => {}
+                    ModuleDisplay::Cpu(cpu) => {
+                        entries.push(MenuEntry::Separator);
+                        entries.push(MenuEntry::ModuleTitle("CPU"));
+                        match &cpu.state {
+                            CpuDisplayState::Loading => entries.push(MenuEntry::CpuLoading),
+                            CpuDisplayState::Unavailable => entries.push(MenuEntry::CpuUnavailable),
+                            CpuDisplayState::Available { utilization, cores } => {
+                                for row in utilization {
+                                    entries.push(MenuEntry::Legend {
+                                        label: &row.label,
+                                        value: &row.value,
+                                        opacity_percent: row.opacity_percent,
+                                    });
+                                }
+                                for row in cores {
+                                    entries.push(MenuEntry::Stat {
+                                        primary: &row.primary,
+                                        tail: row.tail.as_deref(),
+                                    });
+                                }
+                            }
                         }
-                        for row in cores {
-                            entries.push(MenuEntry::Stat {
-                                primary: &row.primary,
-                                tail: row.tail.as_deref(),
-                            });
-                        }
+                    }
+                    ModuleDisplay::Gpu(gpu) => {
+                        entries.push(MenuEntry::Separator);
+                        entries.push(MenuEntry::ModuleTitle("GPU"));
+                        entries.push(MenuEntry::Stat {
+                            primary: &gpu.utilization.primary,
+                            tail: gpu.utilization.tail.as_deref(),
+                        });
                     }
                 }
             }
@@ -1242,6 +1345,7 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
         auto_refresh_enabled,
         show_app_usage,
         show_cpu,
+        show_gpu,
         launch_at_login: launch_at_login_status,
     });
     entries.push(MenuEntry::Separator);
@@ -1255,7 +1359,8 @@ mod tests {
     use crate::format::{dropdown_model, dropdown_model_with_apps, placeholder_dropdown_model};
     use crate::login_item::LaunchAtLoginStatus;
     use crate::model::{
-        CpuModuleState, CpuSnapshot, MemorySnapshot, PressureSource, SystemSnapshot,
+        CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot, PressureSource,
+        SystemSnapshot,
     };
     use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
     use crate::trend::MemoryTrend;
@@ -1286,6 +1391,7 @@ mod tests {
                 available_bytes: 11_055_540_777,
             },
             cpu: CpuModuleState::Disabled,
+            gpu: crate::model::GpuModuleState::Disabled,
         }
     }
 
@@ -1303,6 +1409,7 @@ mod tests {
                     auto_refresh_enabled: true,
                     show_app_usage: false,
                     show_cpu: false,
+                    show_gpu: false,
                     launch_at_login: LaunchAtLoginStatus::Disabled,
                 },
                 MenuEntry::Separator,
@@ -1353,6 +1460,7 @@ mod tests {
                     auto_refresh_enabled: true,
                     show_app_usage: false,
                     show_cpu: false,
+                    show_gpu: false,
                     launch_at_login: LaunchAtLoginStatus::Enabled,
                 },
                 MenuEntry::Separator,
@@ -1428,7 +1536,7 @@ mod tests {
     }
 
     #[test]
-    fn show_cpu_state_is_independent_in_settings() {
+    fn module_visibility_states_are_independent_in_settings() {
         use super::loaded_menu_entries_with_settings;
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
         let entries = loaded_menu_entries_with_settings(
@@ -1437,6 +1545,7 @@ mod tests {
             false,
             true,
             true,
+            false,
         );
         assert!(entries.iter().any(|entry| matches!(
             entry,
@@ -1444,6 +1553,7 @@ mod tests {
                 auto_refresh_enabled: false,
                 show_app_usage: true,
                 show_cpu: true,
+                show_gpu: false,
                 ..
             }
         )));
@@ -1550,6 +1660,26 @@ mod tests {
             MenuEntry::Stat {
                 primary: "P-cores",
                 tail: Some("74%"),
+            }
+        );
+    }
+
+    #[test]
+    fn loaded_gpu_module_follows_existing_modules_with_one_utilization_row() {
+        let mut snapshot = snapshot();
+        snapshot.gpu = GpuModuleState::Available(GpuSnapshot {
+            utilization_percent: 76,
+        });
+        let model = dropdown_model(snapshot);
+        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+
+        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[8], MenuEntry::ModuleTitle("GPU"));
+        assert_eq!(
+            entries[9],
+            MenuEntry::Stat {
+                primary: "Utilization",
+                tail: Some("76%"),
             }
         );
     }
