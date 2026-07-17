@@ -3,7 +3,7 @@
 rami began as a memory-only menu bar monitor. We decided to add CPU and GPU
 modules, but concentrated entirely in the dropdown: there is exactly one
 NSStatusItem, its icon remains the memory gauge, and the dropdown stays an
-NSMenu with custom menu-item views (extending the sparkline pattern) rather
+NSMenu with a custom menu-item view for the ring dashboard rather
 than a popover. Rejected: iStat-style multiple status items (triples the
 status-item/settings surface and grows menu-bar footprint) and an
 NSPopover panel (reimplements dismissal, positioning, and native menu feel
@@ -16,3 +16,8 @@ the app's simplicity premise), no per-core rings (E/P cluster aggregates
 only), no per-process GPU (no public API), and no quit action on the
 CPU process list (only the memory list keeps it; killing a momentarily-hot
 process invites data loss).
+
+The dropdown is intentionally bounded: app-memory and CPU-process rankings
+show three rows each, and the decorative history sparkline is omitted. The
+full module set should remain usable without turning the native menu into a
+screen-height dashboard.

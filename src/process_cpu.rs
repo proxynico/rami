@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
-pub(crate) const PROCESS_CPU_ROW_LIMIT: usize = 5;
+pub(crate) const PROCESS_CPU_ROW_LIMIT: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessCpuUsage {

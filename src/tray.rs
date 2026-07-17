@@ -8,7 +8,6 @@ use crate::memory_view::MemoryRingsView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
 use crate::process_cpu::{ProcessCpuSnapshot, PROCESS_CPU_ROW_LIMIT};
 use crate::process_memory::AppMemorySnapshot;
-use crate::sparkline;
 #[cfg(test)]
 use crate::status_icon::{badge_for_state, BadgeKind};
 use crate::status_icon::{make_status_image, StatusImage};
@@ -70,8 +69,6 @@ pub struct TrayController {
     rings_view: Retained<MemoryRingsView>,
     legend_items: Vec<Retained<NSMenuItem>>,
     swap_item: Retained<NSMenuItem>,
-    sparkline_item: Retained<NSMenuItem>,
-    sparkline_view: Retained<sparkline::SparklineView>,
     loading_item: Retained<NSMenuItem>,
     app_loading_item: Retained<NSMenuItem>,
     app_unavailable_item: Retained<NSMenuItem>,
@@ -108,7 +105,6 @@ pub struct TrayController {
     last_breakdown: RefCell<Option<[LegendRow; 4]>>,
     last_accent: Cell<Accent>,
     last_swap_row: RefCell<Option<StatRow>>,
-    last_history: RefCell<Vec<u64>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
     last_cpu_state: RefCell<Option<CpuDisplayState>>,
     last_gpu: RefCell<Option<GpuModuleDisplay>>,
@@ -120,7 +116,7 @@ pub struct TrayController {
     app_icon_cache: RefCell<HashMap<String, Retained<NSImage>>>,
 }
 
-const APP_ROW_POOL: usize = 5;
+const APP_ROW_POOL: usize = 3;
 const ROW_ICON_SIZE: f64 = 16.0;
 
 impl TrayController {
@@ -139,11 +135,6 @@ impl TrayController {
         let legend_items = (0..4).map(|_| make_stat_item(mtm)).collect();
         let swap_item = make_stat_item(mtm);
         set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
-        let sparkline_item = make_stat_item(mtm);
-        let sparkline_view = sparkline::SparklineView::new(mtm, Vec::new());
-        unsafe {
-            let _: () = msg_send![&sparkline_item, setView: &*sparkline_view];
-        }
         let loading_item = make_stat_item(mtm);
         loading_item.setImage(Some(&placeholder_icon));
         loading_item.setAttributedTitle(Some(&loading_attributed_title()));
@@ -372,8 +363,6 @@ impl TrayController {
             rings_view,
             legend_items,
             swap_item,
-            sparkline_item,
-            sparkline_view,
             loading_item,
             app_loading_item,
             app_unavailable_item,
@@ -408,9 +397,8 @@ impl TrayController {
             shape: Cell::new(MenuShape::Uninitialized),
             last_rings: RefCell::new(None),
             last_breakdown: RefCell::new(None),
-            last_accent: Cell::new(Accent::Macos),
+            last_accent: Cell::new(Accent::Neutral),
             last_swap_row: RefCell::new(None),
-            last_history: RefCell::new(Vec::new()),
             last_app_section: RefCell::new(None),
             last_cpu_state: RefCell::new(None),
             last_gpu: RefCell::new(None),
@@ -581,11 +569,10 @@ impl TrayController {
                     *self.last_image_name.borrow_mut() = None;
                 }
             }
-            // Tint the template gauge to flag memory pressure: red when
-            // nearly exhausted, orange when tight, otherwise the default
-            // appearance. The non-template rising-fast composite uses a yellow
-            // climb badge instead, so pressure tint and climb signal stay distinct.
-            button.setContentTintColor(Some(&accent));
+            // Let the normal template gauge follow the menu bar's light/dark
+            // appearance. Only warning and critical pressure force a semantic tint.
+            let status_tint = status_tint_for_pressure(pressure).map(color_for_accent);
+            button.setContentTintColor(status_tint.as_deref());
             self.last_trend.set(trend);
             self.last_pressure.set(pressure);
         }
@@ -606,7 +593,6 @@ impl TrayController {
             self.last_rings.borrow_mut().take();
             self.last_breakdown.borrow_mut().take();
             self.last_swap_row.borrow_mut().take();
-            self.last_history.borrow_mut().clear();
             self.last_app_section.borrow_mut().take();
             self.last_cpu_state.borrow_mut().take();
             self.last_gpu.borrow_mut().take();
@@ -635,14 +621,6 @@ impl TrayController {
                     )));
                 }
                 *self.last_swap_row.borrow_mut() = memory.swap.clone();
-            }
-            if shape_changed
-                || accent_changed
-                || self.last_history.borrow().as_slice() != memory.history
-            {
-                self.sparkline_view
-                    .update(memory.history.clone(), accent_color.clone());
-                *self.last_history.borrow_mut() = memory.history.clone();
             }
             if let Some(cpu) = modules.iter().find_map(|module| match module {
                 ModuleDisplay::Cpu(cpu) => Some(cpu),
@@ -778,7 +756,6 @@ impl TrayController {
                 if show_swap {
                     self.menu.addItem(&self.swap_item);
                 }
-                self.menu.addItem(&self.sparkline_item);
                 match apps {
                     AppShape::Hidden => {}
                     AppShape::Loading => {
@@ -951,9 +928,17 @@ fn menu_shape_for(model: &DropdownModel) -> MenuShape {
 
 fn color_for_accent(accent: Accent) -> Retained<NSColor> {
     match accent {
-        Accent::Macos => NSColor::controlAccentColor(),
+        Accent::Neutral => NSColor::labelColor(),
         Accent::Warning => NSColor::systemOrangeColor(),
         Accent::Critical => NSColor::systemRedColor(),
+    }
+}
+
+fn status_tint_for_pressure(pressure: MemoryPressure) -> Option<Accent> {
+    match pressure {
+        MemoryPressure::Normal => None,
+        MemoryPressure::Warning => Some(Accent::Warning),
+        MemoryPressure::Critical => Some(Accent::Critical),
     }
 }
 
@@ -1305,7 +1290,6 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
                     tail: swap.tail.as_deref(),
                 });
             }
-            entries.push(MenuEntry::Sparkline);
             match &memory.apps {
                 AppSectionDisplay::Hidden => {}
                 AppSectionDisplay::Loading => {
@@ -1391,15 +1375,17 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{badge_for_state, loaded_menu_entries, BadgeKind, MenuEntry};
+    use super::{
+        badge_for_state, loaded_menu_entries, status_tint_for_pressure, BadgeKind, MenuEntry,
+    };
     use crate::format::{
         dropdown_model, dropdown_model_with_apps, dropdown_model_with_sections,
         placeholder_dropdown_model,
     };
     use crate::login_item::LaunchAtLoginStatus;
     use crate::model::{
-        CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot, PressureSource,
-        SystemSnapshot,
+        CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemoryPressure, MemorySnapshot,
+        PressureSource, SystemSnapshot,
     };
     use crate::process_cpu::{ProcessCpuSnapshot, ProcessCpuUsage};
     use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
@@ -1412,6 +1398,19 @@ mod tests {
         assert_eq!(
             badge_for_state(MemoryTrend::RisingFast),
             BadgeKind::RisingFast
+        );
+    }
+
+    #[test]
+    fn normal_pressure_leaves_the_template_icon_system_adaptive() {
+        assert_eq!(status_tint_for_pressure(MemoryPressure::Normal), None);
+        assert_eq!(
+            status_tint_for_pressure(MemoryPressure::Warning),
+            Some(crate::format::Accent::Warning)
+        );
+        assert_eq!(
+            status_tint_for_pressure(MemoryPressure::Critical),
+            Some(crate::format::Accent::Critical)
         );
     }
 
@@ -1493,7 +1492,6 @@ mod tests {
                     primary: "Swap",
                     tail: Some("1.2 GB"),
                 },
-                MenuEntry::Sparkline,
                 MenuEntry::Separator,
                 MenuEntry::Refresh,
                 MenuEntry::Settings {
@@ -1507,6 +1505,13 @@ mod tests {
                 MenuEntry::Quit,
             ]
         );
+    }
+
+    #[test]
+    fn compact_menu_omits_the_decorative_sparkline() {
+        let model = dropdown_model(snapshot());
+        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Enabled, true);
+        assert!(!entries.contains(&MenuEntry::Sparkline));
     }
 
     #[test]
@@ -1538,16 +1543,16 @@ mod tests {
     fn loaded_with_apps_loading_renders_loading_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading, &[]);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::AppLoading);
+        assert_eq!(entries[6], MenuEntry::Separator);
+        assert_eq!(entries[7], MenuEntry::AppLoading);
     }
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable, &[]);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::AppUnavailable);
+        assert_eq!(entries[6], MenuEntry::Separator);
+        assert_eq!(entries[7], MenuEntry::AppUnavailable);
     }
 
     #[test]
@@ -1637,10 +1642,9 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(entries[6], MenuEntry::Sparkline);
-        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[6], MenuEntry::Separator);
         assert_eq!(
-            entries[8],
+            entries[7],
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
@@ -1648,14 +1652,14 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[9],
+            entries[8],
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
                 quit_key: Some("/Applications/Chrome.app"),
             }
         );
-        assert_eq!(entries[10], MenuEntry::Separator);
+        assert_eq!(entries[9], MenuEntry::Separator);
     }
 
     #[test]
@@ -1670,10 +1674,10 @@ mod tests {
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
 
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::ModuleTitle("CPU"));
+        assert_eq!(entries[6], MenuEntry::Separator);
+        assert_eq!(entries[7], MenuEntry::ModuleTitle("CPU"));
         assert_eq!(
-            entries[9],
+            entries[8],
             MenuEntry::Legend {
                 label: "User",
                 value: "42%",
@@ -1681,7 +1685,7 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[10],
+            entries[9],
             MenuEntry::Legend {
                 label: "System",
                 value: "9%",
@@ -1689,14 +1693,14 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[11],
+            entries[10],
             MenuEntry::Stat {
                 primary: "E-cores",
                 tail: Some("18%"),
             }
         );
         assert_eq!(
-            entries[12],
+            entries[11],
             MenuEntry::Stat {
                 primary: "P-cores",
                 tail: Some("74%"),
@@ -1722,7 +1726,7 @@ mod tests {
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
 
         assert_eq!(
-            entries[11],
+            entries[10],
             MenuEntry::Stat {
                 primary: "Video Encoder",
                 tail: Some("240%"),
@@ -1746,10 +1750,10 @@ mod tests {
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
 
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::ModuleTitle("GPU"));
+        assert_eq!(entries[6], MenuEntry::Separator);
+        assert_eq!(entries[7], MenuEntry::ModuleTitle("GPU"));
         assert_eq!(
-            entries[9],
+            entries[8],
             MenuEntry::Stat {
                 primary: "Utilization",
                 tail: Some("76%"),
