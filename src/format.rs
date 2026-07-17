@@ -1,4 +1,4 @@
-use crate::model::MemorySnapshot;
+use crate::model::{classify_pressure, MemoryPressure, SystemSnapshot};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 
@@ -74,46 +74,110 @@ pub enum AppSectionDisplay {
     Unavailable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Accent {
+    Macos,
+    Warning,
+    Critical,
+}
+
+impl From<MemoryPressure> for Accent {
+    fn from(pressure: MemoryPressure) -> Self {
+        match pressure {
+            MemoryPressure::Normal => Self::Macos,
+            MemoryPressure::Warning => Self::Warning,
+            MemoryPressure::Critical => Self::Critical,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RingDisplay {
+    pub label: String,
+    pub percent: u8,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegendRow {
+    pub label: String,
+    pub value: String,
+    pub opacity_percent: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryModuleDisplay {
+    pub rings: [RingDisplay; 2],
+    pub breakdown: [LegendRow; 4],
+    pub swap: Option<StatRow>,
+    pub history: Vec<u64>,
+    pub apps: AppSectionDisplay,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModuleDisplay {
+    Memory(MemoryModuleDisplay),
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DropdownModel {
     Loading,
     Loaded {
-        memory: StatRow,
-        available: StatRow,
-        apps: AppSectionDisplay,
-        swap: Option<StatRow>,
+        accent: Accent,
+        modules: Vec<ModuleDisplay>,
     },
 }
 
-pub fn dropdown_model(snapshot: MemorySnapshot) -> DropdownModel {
-    dropdown_model_with_apps(snapshot, &AppMemorySnapshot::Hidden)
+pub fn dropdown_model(snapshot: SystemSnapshot) -> DropdownModel {
+    dropdown_model_with_apps(snapshot, &AppMemorySnapshot::Hidden, &[])
 }
 
 pub fn dropdown_model_with_apps(
-    snapshot: MemorySnapshot,
+    snapshot: SystemSnapshot,
     apps: &AppMemorySnapshot,
+    history: &[u64],
 ) -> DropdownModel {
+    let memory = snapshot.memory;
+    let accent = Accent::from(classify_pressure(memory.pressure_percent));
     DropdownModel::Loaded {
-        memory: StatRow {
-            primary: gb_pair(snapshot.used_bytes, snapshot.total_bytes),
-            tail: Some(format!("{}%", snapshot.used_percent)),
-            quit_key: None,
-            bundle_path: None,
-        },
-        available: StatRow {
-            primary: "Available".to_string(),
-            tail: Some(mem_text(snapshot.available_bytes)),
-            quit_key: None,
-            bundle_path: None,
-        },
-        apps: app_section_display(apps),
-        swap: (snapshot.swap_used_bytes > 0).then(|| StatRow {
-            primary: "Swap".to_string(),
-            tail: Some(mem_text(snapshot.swap_used_bytes)),
-            quit_key: None,
-            bundle_path: None,
-        }),
+        accent,
+        modules: vec![ModuleDisplay::Memory(MemoryModuleDisplay {
+            rings: [
+                RingDisplay {
+                    label: "Memory %".to_string(),
+                    percent: memory.used_percent,
+                    detail: gb_pair(memory.used_bytes, memory.total_bytes),
+                },
+                RingDisplay {
+                    label: "Pressure".to_string(),
+                    percent: memory.pressure_percent,
+                    detail: String::new(),
+                },
+            ],
+            breakdown: [
+                legend_row("App Memory", memory.app_memory_bytes, 100),
+                legend_row("Wired", memory.wired_bytes, 65),
+                legend_row("Compressed", memory.compressed_bytes, 35),
+                legend_row("Free", memory.free_bytes, 12),
+            ],
+            swap: (memory.swap_used_bytes > 0).then(|| StatRow {
+                primary: "Swap".to_string(),
+                tail: Some(mem_text(memory.swap_used_bytes)),
+                quit_key: None,
+                bundle_path: None,
+            }),
+            history: history.to_vec(),
+            apps: app_section_display(apps),
+        })],
+    }
+}
+
+fn legend_row(label: &str, bytes: u64, opacity_percent: u8) -> LegendRow {
+    LegendRow {
+        label: label.to_string(),
+        value: mem_text(bytes),
+        opacity_percent,
     }
 }
 
@@ -170,16 +234,35 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{MemorySnapshot, PressureSource};
     use crate::trend::rank_app_rows;
 
-    fn snapshot(total_bytes: u64) -> MemorySnapshot {
-        MemorySnapshot {
-            used_bytes: total_bytes / 2,
-            total_bytes,
-            used_percent: 50,
-            swap_used_bytes: 0,
-            available_bytes: total_bytes / 2,
+    fn snapshot(total_bytes: u64) -> SystemSnapshot {
+        SystemSnapshot {
+            memory: MemorySnapshot {
+                used_bytes: total_bytes / 2,
+                total_bytes,
+                used_percent: 50,
+                pressure_percent: 50,
+                pressure_source: PressureSource::Kernel,
+                app_memory_bytes: total_bytes / 4,
+                wired_bytes: total_bytes / 8,
+                compressed_bytes: total_bytes / 8,
+                free_bytes: total_bytes / 4,
+                swap_used_bytes: 0,
+                available_bytes: total_bytes / 2,
+            },
         }
+    }
+
+    fn memory_module(model: &DropdownModel) -> &MemoryModuleDisplay {
+        let DropdownModel::Loaded { modules, .. } = model else {
+            panic!("expected loaded model");
+        };
+        let Some(ModuleDisplay::Memory(memory)) = modules.first() else {
+            panic!("expected memory module");
+        };
+        memory
     }
 
     const SIXTEEN_GIB: u64 = 17_179_869_184;
@@ -229,35 +312,21 @@ mod tests {
     #[test]
     fn dropdown_model_default_apps_hidden() {
         let model = dropdown_model(snapshot(SIXTEEN_GIB));
-        match model {
-            DropdownModel::Loaded { apps, .. } => {
-                assert_eq!(apps, AppSectionDisplay::Hidden);
-            }
-            _ => panic!("expected Loaded"),
-        }
+        assert_eq!(memory_module(&model).apps, AppSectionDisplay::Hidden);
     }
 
     #[test]
     fn dropdown_model_with_apps_loading() {
-        let model = dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loading);
-        match model {
-            DropdownModel::Loaded { apps, .. } => {
-                assert_eq!(apps, AppSectionDisplay::Loading);
-            }
-            _ => panic!("expected Loaded"),
-        }
+        let model =
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loading, &[]);
+        assert_eq!(memory_module(&model).apps, AppSectionDisplay::Loading);
     }
 
     #[test]
     fn dropdown_model_with_apps_unavailable() {
         let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Unavailable);
-        match model {
-            DropdownModel::Loaded { apps, .. } => {
-                assert_eq!(apps, AppSectionDisplay::Unavailable);
-            }
-            _ => panic!("expected Loaded"),
-        }
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Unavailable, &[]);
+        assert_eq!(memory_module(&model).apps, AppSectionDisplay::Unavailable);
     }
 
     #[test]
@@ -270,23 +339,21 @@ mod tests {
             can_quit: true,
             delta_bytes: None,
         }];
-        let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
-        match model {
-            DropdownModel::Loaded { apps, .. } => match apps {
-                AppSectionDisplay::Rows { rows } => {
-                    assert_eq!(rows.len(), 1);
-                    assert_eq!(rows[0].primary, "Cursor");
-                    assert_eq!(rows[0].tail.as_deref(), Some("2.0 GB"));
-                    assert_eq!(
-                        rows[0].quit_key.as_deref(),
-                        Some("/Applications/Cursor.app")
-                    );
-                }
-                _ => panic!("expected Rows"),
-            },
-            _ => panic!("expected Loaded"),
-        }
+        let model = dropdown_model_with_apps(
+            snapshot(SIXTEEN_GIB),
+            &AppMemorySnapshot::Loaded(usage),
+            &[],
+        );
+        let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
+            panic!("expected Rows");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].primary, "Cursor");
+        assert_eq!(rows[0].tail.as_deref(), Some("2.0 GB"));
+        assert_eq!(
+            rows[0].quit_key.as_deref(),
+            Some("/Applications/Cursor.app")
+        );
     }
 
     #[test]
@@ -299,17 +366,15 @@ mod tests {
             can_quit: true,
             delta_bytes: None,
         }];
-        let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
-        match model {
-            DropdownModel::Loaded { apps, .. } => match apps {
-                AppSectionDisplay::Rows { rows, .. } => {
-                    assert_eq!(rows[0].tail.as_deref(), Some("245 MB"));
-                }
-                _ => panic!("expected Rows"),
-            },
-            _ => panic!("expected Loaded"),
-        }
+        let model = dropdown_model_with_apps(
+            snapshot(SIXTEEN_GIB),
+            &AppMemorySnapshot::Loaded(usage),
+            &[],
+        );
+        let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
+            panic!("expected Rows");
+        };
+        assert_eq!(rows[0].tail.as_deref(), Some("245 MB"));
     }
 
     #[test]
@@ -322,33 +387,24 @@ mod tests {
             can_quit: true,
             delta_bytes: None,
         }];
-        let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
-        match model {
-            DropdownModel::Loaded { apps, .. } => match apps {
-                AppSectionDisplay::Rows { rows, .. } => {
-                    assert_eq!(rows[0].primary, "Codex Computer …");
-                    assert_eq!(rows[0].tail.as_deref(), Some("81 MB"));
-                }
-                _ => panic!("expected Rows"),
-            },
-            _ => panic!("expected Loaded"),
-        }
+        let model = dropdown_model_with_apps(
+            snapshot(SIXTEEN_GIB),
+            &AppMemorySnapshot::Loaded(usage),
+            &[],
+        );
+        let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
+            panic!("expected Rows");
+        };
+        assert_eq!(rows[0].primary, "Codex Computer …");
+        assert_eq!(rows[0].tail.as_deref(), Some("81 MB"));
     }
 
     #[test]
-    fn dropdown_model_memory_row_shows_percent_tail() {
-        let snapshot = MemorySnapshot {
-            used_bytes: 9_663_676_416,
-            total_bytes: SIXTEEN_GIB,
-            used_percent: 56,
-            swap_used_bytes: 0,
-            available_bytes: 7_516_192_768,
-        };
-        let DropdownModel::Loaded { memory, .. } = dropdown_model(snapshot) else {
-            panic!("expected Loaded model");
-        };
-        assert_eq!(memory.tail.as_deref(), Some("56%"));
+    fn dropdown_model_memory_ring_shows_percent() {
+        let mut snapshot = snapshot(SIXTEEN_GIB);
+        snapshot.memory.used_percent = 56;
+        let model = dropdown_model(snapshot);
+        assert_eq!(memory_module(&model).rings[0].percent, 56);
     }
 
     #[test]
@@ -363,17 +419,12 @@ mod tests {
             usage("Three", 3, None),
         ];
         rank_app_rows(&mut usage);
-        let model = dropdown_model_with_apps(snapshot(100), &AppMemorySnapshot::Loaded(usage));
-        match model {
-            DropdownModel::Loaded {
-                apps: AppSectionDisplay::Rows { rows, .. },
-                ..
-            } => {
-                let names: Vec<_> = rows.iter().map(|row| row.primary.as_str()).collect();
-                assert_eq!(names, vec!["Six", "Five", "Four", "Three", "Two"]);
-            }
-            _ => panic!("expected app rows"),
-        }
+        let model = dropdown_model_with_apps(snapshot(100), &AppMemorySnapshot::Loaded(usage), &[]);
+        let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
+            panic!("expected app rows");
+        };
+        let names: Vec<_> = rows.iter().map(|row| row.primary.as_str()).collect();
+        assert_eq!(names, vec!["Six", "Five", "Four", "Three", "Two"]);
     }
 
     #[test]
@@ -384,19 +435,17 @@ mod tests {
             usage("Codex", 500_000_000, Some(80_000_000)),
         ];
         rank_app_rows(&mut usage);
-        let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
-        match model {
-            DropdownModel::Loaded {
-                apps: AppSectionDisplay::Rows { rows },
-                ..
-            } => {
-                assert_eq!(rows[0].primary, "Zen");
-                assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB"));
-                assert_eq!(rows[0].quit_key.as_deref(), Some("/Applications/Zen.app"));
-            }
-            _ => panic!("expected app rows"),
-        }
+        let model = dropdown_model_with_apps(
+            snapshot(SIXTEEN_GIB),
+            &AppMemorySnapshot::Loaded(usage),
+            &[],
+        );
+        let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
+            panic!("expected app rows");
+        };
+        assert_eq!(rows[0].primary, "Zen");
+        assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB"));
+        assert_eq!(rows[0].quit_key.as_deref(), Some("/Applications/Zen.app"));
     }
 
     fn usage(name: &str, footprint_bytes: u64, delta_bytes: Option<i64>) -> AppMemoryUsage {

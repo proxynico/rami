@@ -1,9 +1,11 @@
 use crate::format::{
     dropdown_model_with_apps, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
-    placeholder_dropdown_model, AppSectionDisplay, DropdownModel, StatRow,
+    placeholder_dropdown_model, Accent, AppSectionDisplay, DropdownModel, LegendRow, ModuleDisplay,
+    RingDisplay, StatRow,
 };
 use crate::login_item::LaunchAtLoginStatus;
-use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot};
+use crate::memory_view::MemoryRingsView;
+use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
 use crate::process_memory::AppMemorySnapshot;
 use crate::sparkline;
 #[cfg(test)]
@@ -44,8 +46,9 @@ enum MenuShape {
 pub struct TrayController {
     status_item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
-    memory_item: Retained<NSMenuItem>,
-    available_item: Retained<NSMenuItem>,
+    rings_item: Retained<NSMenuItem>,
+    rings_view: Retained<MemoryRingsView>,
+    legend_items: Vec<Retained<NSMenuItem>>,
     swap_item: Retained<NSMenuItem>,
     sparkline_item: Retained<NSMenuItem>,
     sparkline_view: Retained<sparkline::SparklineView>,
@@ -71,8 +74,9 @@ pub struct TrayController {
     last_trend: Cell<MemoryTrend>,
     last_pressure: Cell<MemoryPressure>,
     shape: Cell<MenuShape>,
-    last_memory_row: RefCell<Option<StatRow>>,
-    last_available_row: RefCell<Option<StatRow>>,
+    last_rings: RefCell<Option<[RingDisplay; 2]>>,
+    last_breakdown: RefCell<Option<[LegendRow; 4]>>,
+    last_accent: Cell<Accent>,
     last_swap_row: RefCell<Option<StatRow>>,
     last_history: RefCell<Vec<u64>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
@@ -95,10 +99,12 @@ impl TrayController {
         let empty = NSString::from_str("");
 
         let placeholder_icon = make_placeholder_icon();
-        let memory_item = make_stat_item(mtm);
-        set_row_icon(&memory_item, "memorychip", &placeholder_icon);
-        let available_item = make_stat_item(mtm);
-        set_row_icon(&available_item, "tray.and.arrow.down", &placeholder_icon);
+        let rings_item = make_stat_item(mtm);
+        let rings_view = MemoryRingsView::new(mtm);
+        unsafe {
+            let _: () = msg_send![&rings_item, setView: &*rings_view];
+        }
+        let legend_items = (0..4).map(|_| make_stat_item(mtm)).collect();
         let swap_item = make_stat_item(mtm);
         set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
         let sparkline_item = make_stat_item(mtm);
@@ -284,8 +290,9 @@ impl TrayController {
         let controller = Self {
             status_item,
             menu,
-            memory_item,
-            available_item,
+            rings_item,
+            rings_view,
+            legend_items,
             swap_item,
             sparkline_item,
             sparkline_view,
@@ -311,8 +318,9 @@ impl TrayController {
             last_trend: Cell::new(MemoryTrend::Stable),
             last_pressure: Cell::new(MemoryPressure::Normal),
             shape: Cell::new(MenuShape::Uninitialized),
-            last_memory_row: RefCell::new(None),
-            last_available_row: RefCell::new(None),
+            last_rings: RefCell::new(None),
+            last_breakdown: RefCell::new(None),
+            last_accent: Cell::new(Accent::Macos),
             last_swap_row: RefCell::new(None),
             last_history: RefCell::new(Vec::new()),
             last_app_section: RefCell::new(None),
@@ -326,7 +334,6 @@ impl TrayController {
         controller.set_gauge(0, MemoryTrend::Stable, MemoryPressure::Normal, mtm);
         controller.apply_model(
             &placeholder_dropdown_model(),
-            &[],
             LaunchAtLoginStatus::Disabled,
             true,
             mtm,
@@ -340,7 +347,7 @@ impl TrayController {
         trend: MemoryTrend,
         mtm: MainThreadMarker,
     ) {
-        let pressure = classify_pressure(snapshot.available_bytes, snapshot.total_bytes);
+        let pressure = classify_pressure(snapshot.pressure_percent);
         self.set_gauge(snapshot.used_percent, trend, pressure, mtm);
         self.set_button_help(
             &gauge_tooltip(
@@ -368,8 +375,7 @@ impl TrayController {
         mtm: MainThreadMarker,
     ) {
         self.apply_model(
-            &dropdown_model_with_apps(snapshot, apps),
-            history,
+            &dropdown_model_with_apps(SystemSnapshot { memory: snapshot }, apps, history),
             launch_at_login_status,
             auto_refresh_enabled,
             mtm,
@@ -405,7 +411,6 @@ impl TrayController {
         self.set_button_help("rami — memory unavailable", "rami, memory unavailable", mtm);
         self.apply_model(
             &placeholder_dropdown_model(),
-            &[],
             launch_at_login_status,
             true,
             mtm,
@@ -446,7 +451,8 @@ impl TrayController {
         }
 
         if let Some(button) = self.status_item.button(mtm) {
-            match make_status_image(name, trend) {
+            let accent = color_for_accent(Accent::from(pressure));
+            match make_status_image(name, trend, &accent) {
                 Some(StatusImage { image, template }) => {
                     image.setTemplate(template);
                     button.setImage(Some(&image));
@@ -461,12 +467,7 @@ impl TrayController {
             // nearly exhausted, orange when tight, otherwise the default
             // appearance. The non-template rising-fast composite uses a yellow
             // climb badge instead, so pressure tint and climb signal stay distinct.
-            let tint = match pressure {
-                MemoryPressure::Critical => Some(NSColor::systemRedColor()),
-                MemoryPressure::Warning => Some(NSColor::systemOrangeColor()),
-                MemoryPressure::Normal => None,
-            };
-            button.setContentTintColor(tint.as_deref());
+            button.setContentTintColor(Some(&accent));
             self.last_trend.set(trend);
             self.last_pressure.set(pressure);
         }
@@ -475,7 +476,6 @@ impl TrayController {
     fn apply_model(
         &self,
         model: &DropdownModel,
-        history: &[u64],
         launch_at_login_status: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
@@ -484,60 +484,61 @@ impl TrayController {
         if self.shape.get() != new_shape {
             self.rebuild_menu(new_shape, mtm);
             self.shape.set(new_shape);
-            self.last_memory_row.borrow_mut().take();
-            self.last_available_row.borrow_mut().take();
+            self.last_rings.borrow_mut().take();
+            self.last_breakdown.borrow_mut().take();
             self.last_swap_row.borrow_mut().take();
             self.last_history.borrow_mut().clear();
             self.last_app_section.borrow_mut().take();
         }
 
-        if let DropdownModel::Loaded {
-            memory,
-            available,
-            apps,
-            swap,
-        } = model
-        {
-            if self.last_memory_row.borrow().as_ref() != Some(memory) {
-                self.memory_item
-                    .setAttributedTitle(Some(&stat_row_attributed(memory, NSColor::labelColor())));
-                *self.last_memory_row.borrow_mut() = Some(memory.clone());
+        if let DropdownModel::Loaded { accent, modules } = model {
+            let Some(ModuleDisplay::Memory(memory)) = modules.first() else {
+                return;
+            };
+            let accent_changed = self.last_accent.get() != *accent;
+            let accent_color = color_for_accent(*accent);
+            if accent_changed || self.last_rings.borrow().as_ref() != Some(&memory.rings) {
+                self.rings_view.update(&memory.rings, accent_color.clone());
+                *self.last_rings.borrow_mut() = Some(memory.rings.clone());
             }
-            if self.last_available_row.borrow().as_ref() != Some(available) {
-                self.available_item
-                    .setAttributedTitle(Some(&stat_row_attributed(
-                        available,
-                        NSColor::labelColor(),
-                    )));
-                *self.last_available_row.borrow_mut() = Some(available.clone());
+            if accent_changed || self.last_breakdown.borrow().as_ref() != Some(&memory.breakdown) {
+                for (item, row) in self.legend_items.iter().zip(memory.breakdown.iter()) {
+                    let row_color = accent_color
+                        .colorWithAlphaComponent(f64::from(row.opacity_percent) / 100.0);
+                    item.setAttributedTitle(Some(&legend_row_attributed(row, row_color.clone())));
+                    item.setImage(make_legend_icon(&row_color).as_deref());
+                }
+                *self.last_breakdown.borrow_mut() = Some(memory.breakdown.clone());
             }
-            self.update_app_section(apps);
-            if self.last_swap_row.borrow().as_ref() != swap.as_ref() {
-                if let Some(swap_row) = swap {
+            self.update_app_section(&memory.apps, &accent_color, accent_changed);
+            if accent_changed || self.last_swap_row.borrow().as_ref() != memory.swap.as_ref() {
+                if let Some(swap_row) = &memory.swap {
                     self.swap_item.setAttributedTitle(Some(&stat_row_attributed(
                         swap_row,
-                        NSColor::labelColor(),
+                        accent_color.clone(),
                     )));
                 }
-                *self.last_swap_row.borrow_mut() = swap.clone();
+                *self.last_swap_row.borrow_mut() = memory.swap.clone();
             }
-            if self.last_history.borrow().as_slice() != history {
-                self.sparkline_view.update(history.to_vec());
-                *self.last_history.borrow_mut() = history.to_vec();
+            if accent_changed || self.last_history.borrow().as_slice() != memory.history {
+                self.sparkline_view
+                    .update(memory.history.clone(), accent_color);
+                *self.last_history.borrow_mut() = memory.history.clone();
             }
+            self.last_accent.set(*accent);
         }
 
         self.update_auto_refresh(auto_refresh_enabled);
         self.update_launch_at_login(launch_at_login_status);
     }
 
-    fn update_app_section(&self, apps: &AppSectionDisplay) {
-        if self.last_app_section.borrow().as_ref() == Some(apps) {
+    fn update_app_section(&self, apps: &AppSectionDisplay, accent: &NSColor, accent_changed: bool) {
+        if !accent_changed && self.last_app_section.borrow().as_ref() == Some(apps) {
             return;
         }
         if let AppSectionDisplay::Rows { rows } = apps {
             for (item, row) in self.app_items.iter().zip(rows.iter()) {
-                item.setAttributedTitle(Some(&app_row_attributed(row)));
+                item.setAttributedTitle(Some(&app_row_attributed(row, accent)));
                 item.setImage(self.app_row_icon(row).as_deref());
             }
             for (idx, row) in rows.iter().enumerate() {
@@ -569,8 +570,10 @@ impl TrayController {
                 self.menu.addItem(&self.loading_item);
             }
             MenuShape::Loaded { apps, show_swap } => {
-                self.menu.addItem(&self.memory_item);
-                self.menu.addItem(&self.available_item);
+                self.menu.addItem(&self.rings_item);
+                for item in &self.legend_items {
+                    self.menu.addItem(item);
+                }
                 if show_swap {
                     self.menu.addItem(&self.swap_item);
                 }
@@ -662,8 +665,11 @@ impl TrayController {
 fn menu_shape_for(model: &DropdownModel) -> MenuShape {
     match model {
         DropdownModel::Loading => MenuShape::Loading,
-        DropdownModel::Loaded { apps, swap, .. } => {
-            let app_shape = match apps {
+        DropdownModel::Loaded { modules, .. } => {
+            let Some(ModuleDisplay::Memory(memory)) = modules.first() else {
+                return MenuShape::Uninitialized;
+            };
+            let app_shape = match &memory.apps {
                 AppSectionDisplay::Hidden => AppShape::Hidden,
                 AppSectionDisplay::Loading => AppShape::Loading,
                 AppSectionDisplay::Unavailable => AppShape::Unavailable,
@@ -673,9 +679,17 @@ fn menu_shape_for(model: &DropdownModel) -> MenuShape {
             };
             MenuShape::Loaded {
                 apps: app_shape,
-                show_swap: swap.is_some(),
+                show_swap: memory.swap.is_some(),
             }
         }
+    }
+}
+
+fn color_for_accent(accent: Accent) -> Retained<NSColor> {
+    match accent {
+        Accent::Macos => NSColor::controlAccentColor(),
+        Accent::Warning => NSColor::systemOrangeColor(),
+        Accent::Critical => NSColor::systemRedColor(),
     }
 }
 
@@ -711,8 +725,31 @@ fn make_quit_app_item(
     item
 }
 
-fn app_row_attributed(row: &StatRow) -> Retained<NSAttributedString> {
-    stat_row_attributed_colored(row, NSColor::labelColor(), NSColor::secondaryLabelColor())
+fn app_row_attributed(row: &StatRow, accent: &NSColor) -> Retained<NSAttributedString> {
+    let primary = accent.colorWithAlphaComponent(1.0);
+    stat_row_attributed_colored(
+        row,
+        primary.clone(),
+        accent.colorWithAlphaComponent(0.65),
+        primary,
+    )
+}
+
+fn legend_row_attributed(
+    row: &LegendRow,
+    color: Retained<NSColor>,
+) -> Retained<NSAttributedString> {
+    stat_row_attributed_colored(
+        &StatRow {
+            primary: row.label.clone(),
+            tail: Some(row.value.clone()),
+            quit_key: None,
+            bundle_path: None,
+        },
+        color.clone(),
+        color.clone(),
+        color,
+    )
 }
 
 const ROW_TAIL_TAB: f64 = 180.0;
@@ -767,6 +804,19 @@ fn make_action_icon(name: &str) -> Option<Retained<NSImage>> {
     Some(image)
 }
 
+fn make_legend_icon(color: &NSColor) -> Option<Retained<NSImage>> {
+    let symbol_name = NSString::from_str("circle.fill");
+    let desc = NSString::from_str("");
+    let base =
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
+    let scale = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Small);
+    let tint = NSImageSymbolConfiguration::configurationWithHierarchicalColor(color);
+    let config = scale.configurationByApplyingConfiguration(&tint);
+    let image = base.imageWithSymbolConfiguration(&config)?;
+    image.setSize(NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE));
+    Some(image)
+}
+
 fn stat_font() -> Retained<NSFont> {
     let weight = unsafe { NSFontWeightRegular };
     NSFont::monospacedDigitSystemFontOfSize_weight(13.0, weight)
@@ -790,13 +840,19 @@ fn stat_row_attributed(
     row: &StatRow,
     primary_color: Retained<NSColor>,
 ) -> Retained<NSAttributedString> {
-    stat_row_attributed_colored(row, primary_color, NSColor::secondaryLabelColor())
+    stat_row_attributed_colored(
+        row,
+        primary_color.clone(),
+        NSColor::secondaryLabelColor(),
+        primary_color,
+    )
 }
 
 fn stat_row_attributed_colored(
     row: &StatRow,
     primary_color: Retained<NSColor>,
     tail_color: Retained<NSColor>,
+    delta_color: Retained<NSColor>,
 ) -> Retained<NSAttributedString> {
     let font = stat_font();
     let primary_attrs = attrs_for(primary_color, font.clone());
@@ -816,7 +872,7 @@ fn stat_row_attributed_colored(
         unsafe { NSAttributedString::new_with_attributes(&separator_str, &separator_attrs) };
     result.appendAttributedString(&separator);
 
-    // Split tail on \t so the delta keeps its own color (orange) while sharing
+    // Split tail on \t so the delta can use the stronger Accent opacity while sharing
     // a single right-aligned tail column with the footprint. No reserved delta
     // gutter: the row's right edge collapses when nothing is rising.
     let mut tail_parts = tail.splitn(2, '\t');
@@ -833,7 +889,7 @@ fn stat_row_attributed_colored(
         let gap = unsafe { NSAttributedString::new_with_attributes(&gap_str, &tail_attrs) };
         result.appendAttributedString(&gap);
 
-        let delta_attrs = attrs_for(NSColor::systemOrangeColor(), font.clone());
+        let delta_attrs = attrs_for(delta_color, font.clone());
         let delta_str = NSString::from_str(delta);
         let delta_attr =
             unsafe { NSAttributedString::new_with_attributes(&delta_str, &delta_attrs) };
@@ -883,10 +939,18 @@ fn unavailable_attributed_title() -> Retained<NSAttributedString> {
 #[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MenuEntry<'a> {
+    Rings {
+        memory_percent: u8,
+        pressure_percent: u8,
+    },
+    Legend {
+        label: &'a str,
+        value: &'a str,
+        opacity_percent: u8,
+    },
     Stat {
         primary: &'a str,
         tail: Option<&'a str>,
-        is_high: bool,
     },
     Sparkline,
     Loading,
@@ -928,31 +992,29 @@ pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
         DropdownModel::Loading => {
             entries.push(MenuEntry::Loading);
         }
-        DropdownModel::Loaded {
-            memory,
-            available,
-            apps,
-            swap,
-        } => {
-            entries.push(MenuEntry::Stat {
-                primary: &memory.primary,
-                tail: memory.tail.as_deref(),
-                is_high: false,
+        DropdownModel::Loaded { modules, .. } => {
+            let Some(ModuleDisplay::Memory(memory)) = modules.first() else {
+                return entries;
+            };
+            entries.push(MenuEntry::Rings {
+                memory_percent: memory.rings[0].percent,
+                pressure_percent: memory.rings[1].percent,
             });
-            entries.push(MenuEntry::Stat {
-                primary: &available.primary,
-                tail: available.tail.as_deref(),
-                is_high: false,
-            });
-            if let Some(swap) = swap {
+            for row in &memory.breakdown {
+                entries.push(MenuEntry::Legend {
+                    label: &row.label,
+                    value: &row.value,
+                    opacity_percent: row.opacity_percent,
+                });
+            }
+            if let Some(swap) = &memory.swap {
                 entries.push(MenuEntry::Stat {
                     primary: &swap.primary,
                     tail: swap.tail.as_deref(),
-                    is_high: false,
                 });
             }
             entries.push(MenuEntry::Sparkline);
-            match apps {
+            match &memory.apps {
                 AppSectionDisplay::Hidden => {}
                 AppSectionDisplay::Loading => {
                     entries.push(MenuEntry::Separator);
@@ -992,7 +1054,7 @@ mod tests {
     use super::{badge_for_state, loaded_menu_entries, BadgeKind, MenuEntry};
     use crate::format::{dropdown_model, dropdown_model_with_apps, placeholder_dropdown_model};
     use crate::login_item::LaunchAtLoginStatus;
-    use crate::model::MemorySnapshot;
+    use crate::model::{MemorySnapshot, PressureSource, SystemSnapshot};
     use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
     use crate::trend::MemoryTrend;
 
@@ -1006,13 +1068,21 @@ mod tests {
         );
     }
 
-    fn snapshot() -> MemorySnapshot {
-        MemorySnapshot {
-            used_bytes: 6_120_328_397,
-            total_bytes: 17_179_869_184,
-            used_percent: 47,
-            swap_used_bytes: 1_288_490_189,
-            available_bytes: 11_055_540_777,
+    fn snapshot() -> SystemSnapshot {
+        SystemSnapshot {
+            memory: MemorySnapshot {
+                used_bytes: 6_120_328_397,
+                total_bytes: 17_179_869_184,
+                used_percent: 47,
+                pressure_percent: 34,
+                pressure_source: PressureSource::Kernel,
+                app_memory_bytes: 4_294_967_296,
+                wired_bytes: 1_073_741_824,
+                compressed_bytes: 751_619_276,
+                free_bytes: 2_147_483_648,
+                swap_used_bytes: 1_288_490_189,
+                available_bytes: 11_055_540_777,
+            },
         }
     }
 
@@ -1039,32 +1109,38 @@ mod tests {
 
     #[test]
     fn loaded_layout_renders_memory_and_swap_rows() {
-        let snapshot = MemorySnapshot {
-            used_bytes: 6_120_328_397,
-            total_bytes: 17_179_869_184,
-            used_percent: 47,
-            swap_used_bytes: 1_288_490_189,
-            available_bytes: 11_055_540_777,
-        };
-        let model = dropdown_model(snapshot);
+        let model = dropdown_model(snapshot());
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Enabled, true);
         assert_eq!(
             entries,
             vec![
-                MenuEntry::Stat {
-                    primary: "5.7 / 16.0 GB",
-                    tail: Some("47%"),
-                    is_high: false,
+                MenuEntry::Rings {
+                    memory_percent: 47,
+                    pressure_percent: 34,
                 },
-                MenuEntry::Stat {
-                    primary: "Available",
-                    tail: Some("10.3 GB"),
-                    is_high: false,
+                MenuEntry::Legend {
+                    label: "App Memory",
+                    value: "4.0 GB",
+                    opacity_percent: 100,
+                },
+                MenuEntry::Legend {
+                    label: "Wired",
+                    value: "1.0 GB",
+                    opacity_percent: 65,
+                },
+                MenuEntry::Legend {
+                    label: "Compressed",
+                    value: "717 MB",
+                    opacity_percent: 35,
+                },
+                MenuEntry::Legend {
+                    label: "Free",
+                    value: "2.0 GB",
+                    opacity_percent: 12,
                 },
                 MenuEntry::Stat {
                     primary: "Swap",
                     tail: Some("1.2 GB"),
-                    is_high: false,
                 },
                 MenuEntry::Sparkline,
                 MenuEntry::Separator,
@@ -1082,13 +1158,8 @@ mod tests {
 
     #[test]
     fn loaded_layout_hides_swap_row_when_zero() {
-        let snapshot = MemorySnapshot {
-            used_bytes: 6_120_328_397,
-            total_bytes: 17_179_869_184,
-            used_percent: 47,
-            swap_used_bytes: 0,
-            available_bytes: 11_055_540_777,
-        };
+        let mut snapshot = snapshot();
+        snapshot.memory.swap_used_bytes = 0;
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
         assert!(!entries.iter().any(|e| matches!(
@@ -1102,7 +1173,7 @@ mod tests {
 
     #[test]
     fn loaded_with_apps_hidden_omits_apps_section() {
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
         assert!(!entries.iter().any(|e| matches!(
             e,
@@ -1112,24 +1183,24 @@ mod tests {
 
     #[test]
     fn loaded_with_apps_loading_renders_loading_row() {
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading);
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading, &[]);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[4], MenuEntry::Separator);
-        assert_eq!(entries[5], MenuEntry::AppLoading);
+        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[8], MenuEntry::AppLoading);
     }
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable);
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable, &[]);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[4], MenuEntry::Separator);
-        assert_eq!(entries[5], MenuEntry::AppUnavailable);
+        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[8], MenuEntry::AppUnavailable);
     }
 
     #[test]
     fn show_app_usage_state_reflects_toggle() {
         use super::loaded_menu_entries_with_app_usage;
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
         let on =
             loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, true);
         assert!(on.iter().any(|e| matches!(
@@ -1171,35 +1242,28 @@ mod tests {
                 delta_bytes: None,
             },
         ];
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage));
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage), &[]);
         let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
 
-        // Memory, Available, Swap, Sparkline, separator, two app rows, separator.
-        assert!(matches!(
-            entries[0],
-            MenuEntry::Stat {
-                primary: "5.7 / 16.0 GB",
-                ..
-            }
-        ));
+        assert!(matches!(entries[0], MenuEntry::Rings { .. }));
         assert!(matches!(
             entries[1],
-            MenuEntry::Stat {
-                primary: "Available",
+            MenuEntry::Legend {
+                label: "App Memory",
                 ..
             }
         ));
         assert!(matches!(
-            entries[2],
+            entries[5],
             MenuEntry::Stat {
                 primary: "Swap",
                 ..
             }
         ));
-        assert_eq!(entries[3], MenuEntry::Sparkline);
-        assert_eq!(entries[4], MenuEntry::Separator);
+        assert_eq!(entries[6], MenuEntry::Sparkline);
+        assert_eq!(entries[7], MenuEntry::Separator);
         assert_eq!(
-            entries[5],
+            entries[8],
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
@@ -1207,13 +1271,13 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[6],
+            entries[9],
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
                 quit_key: Some("/Applications/Chrome.app"),
             }
         );
-        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[10], MenuEntry::Separator);
     }
 }

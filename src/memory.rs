@@ -1,4 +1,4 @@
-use crate::model::MemorySnapshot;
+use crate::model::{MemorySnapshot, PressureSource};
 use libc::{
     boolean_t, c_void, host_statistics64, mach_msg_type_number_t, size_t, sysctlbyname,
     vm_page_size, vm_statistics64, HOST_VM_INFO64, HOST_VM_INFO64_COUNT,
@@ -22,6 +22,7 @@ pub struct MemoryCounts {
     pub total_bytes: u64,
     pub page_size: u64,
     pub active_pages: u64,
+    pub internal_pages: u64,
     pub wired_pages: u64,
     pub compressed_pages: u64,
     pub free_pages: u64,
@@ -30,7 +31,11 @@ pub struct MemoryCounts {
     pub purgeable_pages: u64,
 }
 
-pub fn snapshot_from_counts(counts: MemoryCounts, swap_used_bytes: u64) -> MemorySnapshot {
+pub fn snapshot_from_counts(
+    counts: MemoryCounts,
+    swap_used_bytes: u64,
+    kernel_available_percent: Option<i32>,
+) -> MemorySnapshot {
     // "Used" = active + wired + compressed pages from host_statistics64. This is a simple,
     // stable definition; Activity Monitor's "Memory Used" applies extra app-memory
     // attribution, so this figure can drift from it by a few percent.
@@ -50,6 +55,16 @@ pub fn snapshot_from_counts(counts: MemoryCounts, swap_used_bytes: u64) -> Memor
         .saturating_add(counts.purgeable_pages);
     let available_bytes = available_pages.saturating_mul(counts.page_size);
 
+    // Activity Monitor's App Memory is based on anonymous/internal pages. Purgeable
+    // internal pages can be reclaimed, so do not attribute them to applications.
+    let app_memory_bytes = counts
+        .internal_pages
+        .saturating_sub(counts.purgeable_pages)
+        .saturating_mul(counts.page_size);
+    let wired_bytes = counts.wired_pages.saturating_mul(counts.page_size);
+    let compressed_bytes = counts.compressed_pages.saturating_mul(counts.page_size);
+    let free_bytes = counts.free_pages.saturating_mul(counts.page_size);
+
     let raw_percent = if counts.total_bytes == 0 {
         0.0
     } else {
@@ -57,11 +72,34 @@ pub fn snapshot_from_counts(counts: MemoryCounts, swap_used_bytes: u64) -> Memor
     };
 
     let used_percent = raw_percent.round().clamp(0.0, 100.0) as u8;
+    let (pressure_percent, pressure_source) = match kernel_available_percent {
+        Some(available_percent) => (
+            100_u8.saturating_sub(available_percent.clamp(0, 100) as u8),
+            PressureSource::Kernel,
+        ),
+        None => {
+            let available_percent = if counts.total_bytes == 0 {
+                100.0
+            } else {
+                available_bytes as f64 / counts.total_bytes as f64 * 100.0
+            };
+            (
+                100_u8.saturating_sub(available_percent.round().clamp(0.0, 100.0) as u8),
+                PressureSource::AvailableFallback,
+            )
+        }
+    };
 
     MemorySnapshot {
         used_bytes,
         total_bytes: counts.total_bytes,
         used_percent,
+        pressure_percent,
+        pressure_source,
+        app_memory_bytes,
+        wired_bytes,
+        compressed_bytes,
+        free_bytes,
         swap_used_bytes,
         available_bytes,
     }
@@ -143,11 +181,14 @@ impl MemorySampler {
         validate_stats_count(count)?;
         let swap_used_bytes = self.swap_used_bytes()?;
 
+        let kernel_available_percent = read_memory_status_level().ok();
+
         Ok(snapshot_from_counts(
             MemoryCounts {
                 total_bytes: self.total_bytes,
                 page_size: self.page_size,
                 active_pages: stats.active_count as u64,
+                internal_pages: stats.internal_page_count as u64,
                 wired_pages: stats.wire_count as u64,
                 compressed_pages: stats.compressor_page_count as u64,
                 free_pages: stats.free_count as u64,
@@ -156,6 +197,7 @@ impl MemorySampler {
                 purgeable_pages: stats.purgeable_count as u64,
             },
             swap_used_bytes,
+            kernel_available_percent,
         ))
     }
 
@@ -205,6 +247,10 @@ fn read_sysctl_value<T: Copy>(name: &[u8]) -> io::Result<T> {
 fn read_swap_used_bytes() -> io::Result<u64> {
     let usage: XswUsage = read_sysctl_value(b"vm.swapusage\0")?;
     Ok(usage.xsu_used)
+}
+
+fn read_memory_status_level() -> io::Result<i32> {
+    read_sysctl_value(b"kern.memorystatus_level\0")
 }
 
 fn total_memory_bytes() -> io::Result<u64> {
