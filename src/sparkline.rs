@@ -38,7 +38,7 @@ impl SparklineView {
         let frame = NSRect::new(NSPoint::ZERO, NSSize::new(VIEW_WIDTH, VIEW_HEIGHT));
         let this = Self::alloc(mtm).set_ivars(SparklineIvars {
             samples: RefCell::new(samples),
-            accent: RefCell::new(NSColor::controlAccentColor()),
+            accent: RefCell::new(NSColor::labelColor()),
         });
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }

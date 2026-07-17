@@ -6,7 +6,7 @@ use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 
 const APP_NAME_MAX_CHARS: usize = 16;
-const APP_USAGE_ROW_LIMIT: usize = 5;
+const APP_USAGE_ROW_LIMIT: usize = 3;
 
 pub fn gauge_symbol_name(percent: u8) -> &'static str {
     match percent {
@@ -79,7 +79,7 @@ pub enum AppSectionDisplay {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Accent {
-    Macos,
+    Neutral,
     Warning,
     Critical,
 }
@@ -87,7 +87,7 @@ pub enum Accent {
 impl From<MemoryPressure> for Accent {
     fn from(pressure: MemoryPressure) -> Self {
         match pressure {
-            MemoryPressure::Normal => Self::Macos,
+            MemoryPressure::Normal => Self::Neutral,
             MemoryPressure::Warning => Self::Warning,
             MemoryPressure::Critical => Self::Critical,
         }
@@ -321,7 +321,7 @@ fn app_row(app: &AppMemoryUsage) -> StatRow {
     StatRow {
         primary: truncate_name(&app.name, APP_NAME_MAX_CHARS),
         tail: Some(tail),
-        quit_key: app.can_quit.then(|| app.group_key.clone()),
+        quit_key: None,
         bundle_path: app
             .group_key
             .ends_with(".app")
@@ -462,10 +462,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].primary, "Cursor");
         assert_eq!(rows[0].tail.as_deref(), Some("2.0 GB"));
-        assert_eq!(
-            rows[0].quit_key.as_deref(),
-            Some("/Applications/Cursor.app")
-        );
+        assert_eq!(rows[0].quit_key, None);
     }
 
     #[test]
@@ -576,6 +573,14 @@ mod tests {
                 name: "Browser".to_string(),
                 utilization_percent: 38,
             },
+            ProcessCpuUsage {
+                name: "Renderer".to_string(),
+                utilization_percent: 20,
+            },
+            ProcessCpuUsage {
+                name: "Background Helper".to_string(),
+                utilization_percent: 10,
+            },
         ]);
 
         let DropdownModel::Loaded { modules, .. } =
@@ -589,9 +594,10 @@ mod tests {
         else {
             panic!("expected available CPU module");
         };
-        assert_eq!(processes.len(), 2);
+        assert_eq!(processes.len(), 3);
         assert_eq!(processes[0].primary, "Video Encoder");
         assert_eq!(processes[0].tail.as_deref(), Some("240%"));
+        assert_eq!(processes[2].primary, "Renderer");
         assert!(processes.iter().all(|row| row.quit_key.is_none()));
         assert!(processes.iter().all(|row| row.bundle_path.is_none()));
     }
@@ -656,8 +662,8 @@ mod tests {
     }
 
     #[test]
-    fn dropdown_model_with_apps_keeps_top_five_sorted() {
-        // Input arrives pre-ranked from trend::rank_app_rows; format only projects the top 5.
+    fn dropdown_model_with_apps_keeps_top_three_sorted() {
+        // Input arrives pre-ranked from trend::rank_app_rows; the compact menu projects three.
         let mut usage = vec![
             usage("Six", 6, None),
             usage("One", 1, None),
@@ -672,7 +678,7 @@ mod tests {
             panic!("expected app rows");
         };
         let names: Vec<_> = rows.iter().map(|row| row.primary.as_str()).collect();
-        assert_eq!(names, vec!["Six", "Five", "Four", "Three", "Two"]);
+        assert_eq!(names, vec!["Six", "Five", "Four"]);
     }
 
     #[test]
@@ -693,7 +699,7 @@ mod tests {
         };
         assert_eq!(rows[0].primary, "Zen");
         assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB"));
-        assert_eq!(rows[0].quit_key.as_deref(), Some("/Applications/Zen.app"));
+        assert_eq!(rows[0].quit_key, None);
     }
 
     fn usage(name: &str, footprint_bytes: u64, delta_bytes: Option<i64>) -> AppMemoryUsage {

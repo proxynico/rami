@@ -46,7 +46,7 @@ impl MemoryRingsView {
         let this = Self::alloc(mtm).set_ivars(MemoryRingsIvars {
             state: RefCell::new(RingsState {
                 rings: None,
-                accent: NSColor::controlAccentColor(),
+                accent: NSColor::labelColor(),
             }),
         });
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };

@@ -109,7 +109,7 @@ fn dropdown_model_hides_swap_when_zero() {
         available_bytes: 11 * ONE_GIB,
     };
 
-    let DropdownModel::Loaded { modules, .. } = dropdown_model(SystemSnapshot {
+    let DropdownModel::Loaded { accent, modules } = dropdown_model(SystemSnapshot {
         memory: snapshot,
         cpu: CpuModuleState::Disabled,
         gpu: GpuModuleState::Disabled,
@@ -120,5 +120,6 @@ fn dropdown_model_hides_swap_when_zero() {
         panic!("expected memory module first");
     };
 
+    assert_eq!(accent, Accent::Neutral);
     assert!(memory.swap.is_none());
 }

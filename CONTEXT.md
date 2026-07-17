@@ -65,8 +65,9 @@ section; CPU and GPU can be hidden via Settings toggles.
 
 **Accent**:
 The single hue the whole dropdown inherits, driven by pressure state:
-calm = the user's macOS accent color, Warning = orange, Critical = red.
-There is no separate fixed brand color.
+calm = adaptive neutral label color, Warning = orange, Critical = red.
+The user's macOS accent color is deliberately ignored so a bright personal
+accent does not dominate routine telemetry.
 
 **Opacity ramp**:
 How multi-category displays encode categories in monochrome: one hue at
@@ -82,5 +83,7 @@ The four-way monochrome list (App Memory / Wired / Compressed / Free) that
 accounts for where RAM is going.
 
 **Status gauge**:
-The single menu-bar icon (SF Symbol gauge, pressure-tinted). There is exactly
-one status item regardless of how many modules the dropdown shows.
+The single menu-bar icon (SF Symbol gauge). In normal pressure it remains a
+template image so macOS renders it black or white for the current menu bar;
+Warning and Critical pressure tint it orange or red. There is exactly one
+status item regardless of how many modules the dropdown shows.

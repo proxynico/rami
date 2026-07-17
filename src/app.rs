@@ -1,4 +1,3 @@
-use crate::app_control::quit_app_group;
 use crate::cpu::CpuSampler;
 use crate::diagnostics::{build_diagnostic_report, current_report_input};
 use crate::gpu::GpuSampler;
@@ -148,14 +147,6 @@ fn merge_cpu_process_rows(
     }
 }
 
-/// Resolve the app to quit by its stable `group_key` rather than a menu position.
-/// A background scan may reorder or drop rows between the menu being shown and the
-/// click landing; matching on identity guarantees we quit the app the user picked,
-/// or nothing if it is gone.
-fn find_quittable<'a>(rows: &'a [AppMemoryUsage], key: &str) -> Option<&'a AppMemoryUsage> {
-    rows.iter().find(|row| row.can_quit && row.group_key == key)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,22 +167,6 @@ mod tests {
         )
         .is_empty());
         assert!(previous_app_rows_if_fresh(None, now, &rows).is_empty());
-    }
-
-    #[test]
-    fn find_quittable_matches_identity_regardless_of_position() {
-        let rows = vec![usage("Chrome"), usage("Zen"), usage("Cursor")];
-        // The same key resolves to the same app no matter where it sits in the list,
-        // so a reorder between menu render and click cannot quit the wrong app.
-        assert_eq!(
-            find_quittable(&rows, "/Applications/Zen.app").map(|u| u.name.as_str()),
-            Some("Zen")
-        );
-        let reordered = vec![usage("Zen"), usage("Cursor"), usage("Chrome")];
-        assert_eq!(
-            find_quittable(&reordered, "/Applications/Zen.app").map(|u| u.name.as_str()),
-            Some("Zen")
-        );
     }
 
     #[test]
@@ -254,14 +229,6 @@ mod tests {
         assert!(!updated);
     }
 
-    #[test]
-    fn find_quittable_skips_unquittable_and_missing_keys() {
-        let mut rows = vec![usage("rami")];
-        rows[0].can_quit = false;
-        assert!(find_quittable(&rows, "/Applications/rami.app").is_none());
-        assert!(find_quittable(&rows, "/Applications/Ghost.app").is_none());
-    }
-
     fn usage(name: &str) -> AppMemoryUsage {
         AppMemoryUsage {
             name: name.to_string(),
@@ -279,6 +246,7 @@ impl AppState {
         if !manual && !self.auto_refresh_enabled.get() {
             return;
         }
+        self.sync_settings_menu();
         let mtm = MainThreadMarker::new().expect("refreshes must stay on the main thread");
         self.drain_app_scan_results();
         let cpu_processes_updated = self.drain_cpu_process_scan_results();
@@ -337,6 +305,16 @@ impl AppState {
                     .set_placeholder(self.launch_at_login_status.get(), mtm);
             }
         }
+    }
+
+    fn sync_settings_menu(&self) {
+        self.tray.set_settings_state(
+            self.launch_at_login_status.get(),
+            self.auto_refresh_enabled.get(),
+            self.show_app_usage.get(),
+            self.show_cpu.get(),
+            self.show_gpu.get(),
+        );
     }
 
     fn sample_cpu_if_visible(&self) -> CpuModuleState {
@@ -489,19 +467,6 @@ impl AppState {
             .set(self.cpu_process_scan_generation.get().wrapping_add(1));
     }
 
-    fn quit_app_with_key(&self, key: &str) {
-        let usage = match &*self.app_memory.borrow() {
-            AppMemorySnapshot::Loaded(rows) => find_quittable(rows, key).cloned(),
-            _ => None,
-        };
-        if let Some(usage) = usage {
-            if let Err(err) = quit_app_group(&usage) {
-                eprintln!("failed to quit {}: {err}", usage.name);
-            }
-            self.refresh(true);
-        }
-    }
-
     fn toggle_launch_at_login(&self) {
         match self.launch_at_login.toggle() {
             Ok(status) => self.launch_at_login_status.set(status),
@@ -531,7 +496,6 @@ impl AppState {
         } else {
             self.clear_app_usage();
         }
-        self.tray.set_show_app_usage(on);
         self.refresh(true);
         if on {
             self.reopen_menu_soon();
@@ -548,7 +512,6 @@ impl AppState {
         } else {
             self.clear_cpu_processes();
         }
-        self.tray.set_show_cpu(enabled);
         self.refresh(true);
     }
 
@@ -556,7 +519,6 @@ impl AppState {
         let enabled = !self.show_gpu.get();
         self.show_gpu.set(enabled);
         self.settings.set_show_gpu(enabled);
-        self.tray.set_show_gpu(enabled);
         self.refresh(true);
     }
 
@@ -602,6 +564,18 @@ impl AppState {
                 MENU_REOPEN_DELAY_SECONDS,
                 &self.refresh_target,
                 sel!(reopenMenu:),
+                None,
+                false,
+            )
+        };
+    }
+
+    fn open_settings_menu_soon(&self) {
+        let _timer = unsafe {
+            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+                MENU_REOPEN_DELAY_SECONDS,
+                &self.refresh_target,
+                sel!(openSettingsMenu:),
                 None,
                 false,
             )
@@ -712,19 +686,21 @@ define_class!(
             open_releases_page();
         }
 
+        #[unsafe(method(openSettings:))]
+        fn open_settings(&self, _sender: &AnyObject) {
+            with_app_state(|state| state.open_settings_menu_soon());
+        }
+
+        #[unsafe(method(openSettingsMenu:))]
+        fn open_settings_menu(&self, _sender: &AnyObject) {
+            with_app_state(|state| state.tray.pop_up_settings_menu());
+        }
+
         #[unsafe(method(reopenMenu:))]
         fn reopen_menu(&self, _sender: &AnyObject) {
             with_app_state(|state| state.reopen_menu_if_app_usage_visible());
         }
 
-        #[unsafe(method(quitApp:))]
-        fn quit_app(&self, sender: &AnyObject) {
-            let key: Option<Retained<NSString>> = unsafe { msg_send![sender, representedObject] };
-            let Some(key) = key else {
-                return;
-            };
-            with_app_state(|state| state.quit_app_with_key(&key.to_string()));
-        }
     }
 
     unsafe impl NSObjectProtocol for RefreshTarget {}
@@ -814,10 +790,6 @@ impl App {
             menu_open: Cell::new(false),
         });
         install_app_state(&state);
-        // Reflect the persisted "show apps" choice in the menu checkbox before first paint.
-        state.tray.set_show_app_usage(settings.show_app_usage);
-        state.tray.set_show_cpu(settings.show_cpu);
-        state.tray.set_show_gpu(settings.show_gpu);
         app.finishLaunching();
         state.refresh(true);
         // NSRunLoopCommonModes so ticks keep firing while the menu is tracking;

@@ -6,9 +6,9 @@ use crate::format::{
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_view::MemoryRingsView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
+use crate::module_title_view::ModuleTitleView;
 use crate::process_cpu::{ProcessCpuSnapshot, PROCESS_CPU_ROW_LIMIT};
 use crate::process_memory::AppMemorySnapshot;
-use crate::sparkline;
 #[cfg(test)]
 use crate::status_icon::{badge_for_state, BadgeKind};
 use crate::status_icon::{make_status_image, StatusImage};
@@ -17,11 +17,11 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn,
-    NSEventModifierFlags, NSFont, NSFontAttributeName, NSFontWeightRegular,
-    NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
-    NSMenu, NSMenuDelegate, NSMenuItem, NSMutableParagraphStyle, NSParagraphStyleAttributeName,
-    NSStatusBar, NSStatusItem, NSTextAlignment, NSTextTab, NSWorkspace,
+    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSFont,
+    NSFontAttributeName, NSFontWeightRegular, NSForegroundColorAttributeName, NSImage,
+    NSImageSymbolConfiguration, NSImageSymbolScale, NSMenu, NSMenuDelegate, NSMenuItem,
+    NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSStatusBar, NSStatusItem,
+    NSTextAlignment, NSTextTab, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSSize, NSString,
@@ -63,6 +63,31 @@ enum MenuShape {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SettingsMenuProjection {
+    launch_at_login: LaunchAtLoginStatus,
+    auto_refresh_enabled: bool,
+    show_app_usage: bool,
+    show_cpu: bool,
+    show_gpu: bool,
+}
+
+fn settings_menu_projection(
+    launch_at_login: LaunchAtLoginStatus,
+    auto_refresh_enabled: bool,
+    show_app_usage: bool,
+    show_cpu: bool,
+    show_gpu: bool,
+) -> SettingsMenuProjection {
+    SettingsMenuProjection {
+        launch_at_login,
+        auto_refresh_enabled,
+        show_app_usage,
+        show_cpu,
+        show_gpu,
+    }
+}
+
 pub struct TrayController {
     status_item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
@@ -70,14 +95,10 @@ pub struct TrayController {
     rings_view: Retained<MemoryRingsView>,
     legend_items: Vec<Retained<NSMenuItem>>,
     swap_item: Retained<NSMenuItem>,
-    sparkline_item: Retained<NSMenuItem>,
-    sparkline_view: Retained<sparkline::SparklineView>,
     loading_item: Retained<NSMenuItem>,
     app_loading_item: Retained<NSMenuItem>,
     app_unavailable_item: Retained<NSMenuItem>,
     app_items: Vec<Retained<NSMenuItem>>,
-    app_quit_items: Vec<Retained<NSMenuItem>>,
-    app_submenus: Vec<Retained<NSMenu>>,
     cpu_title_item: Retained<NSMenuItem>,
     cpu_loading_item: Retained<NSMenuItem>,
     cpu_unavailable_item: Retained<NSMenuItem>,
@@ -96,7 +117,7 @@ pub struct TrayController {
     _about_item: Retained<NSMenuItem>,
     _check_updates_item: Retained<NSMenuItem>,
     settings_item: Retained<NSMenuItem>,
-    _settings_submenu: Retained<NSMenu>,
+    settings_menu: Retained<NSMenu>,
     quit_item: Retained<NSMenuItem>,
     pause_icon: Option<Retained<NSImage>>,
     play_icon: Option<Retained<NSImage>>,
@@ -108,7 +129,6 @@ pub struct TrayController {
     last_breakdown: RefCell<Option<[LegendRow; 4]>>,
     last_accent: Cell<Accent>,
     last_swap_row: RefCell<Option<StatRow>>,
-    last_history: RefCell<Vec<u64>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
     last_cpu_state: RefCell<Option<CpuDisplayState>>,
     last_gpu: RefCell<Option<GpuModuleDisplay>>,
@@ -120,7 +140,7 @@ pub struct TrayController {
     app_icon_cache: RefCell<HashMap<String, Retained<NSImage>>>,
 }
 
-const APP_ROW_POOL: usize = 5;
+const APP_ROW_POOL: usize = 3;
 const ROW_ICON_SIZE: f64 = 16.0;
 
 impl TrayController {
@@ -139,11 +159,6 @@ impl TrayController {
         let legend_items = (0..4).map(|_| make_stat_item(mtm)).collect();
         let swap_item = make_stat_item(mtm);
         set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
-        let sparkline_item = make_stat_item(mtm);
-        let sparkline_view = sparkline::SparklineView::new(mtm, Vec::new());
-        unsafe {
-            let _: () = msg_send![&sparkline_item, setView: &*sparkline_view];
-        }
         let loading_item = make_stat_item(mtm);
         loading_item.setImage(Some(&placeholder_icon));
         loading_item.setAttributedTitle(Some(&loading_attributed_title()));
@@ -155,19 +170,11 @@ impl TrayController {
         app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
         let app_items: Vec<Retained<NSMenuItem>> =
             (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
-        let app_quit_items: Vec<Retained<NSMenuItem>> = (0..APP_ROW_POOL)
-            .map(|_| make_quit_app_item(mtm, &refresh_target))
-            .collect();
-        let app_submenus: Vec<Retained<NSMenu>> = (0..APP_ROW_POOL)
-            .map(|idx| {
-                let submenu = NSMenu::new(mtm);
-                submenu.setAutoenablesItems(false);
-                submenu.addItem(&app_quit_items[idx]);
-                submenu
-            })
-            .collect();
         let cpu_title_item = make_stat_item(mtm);
-        cpu_title_item.setImage(Some(&placeholder_icon));
+        let cpu_title_view = ModuleTitleView::new(mtm, "CPU");
+        unsafe {
+            let _: () = msg_send![&cpu_title_item, setView: &*cpu_title_view];
+        }
         let cpu_loading_item = make_stat_item(mtm);
         cpu_loading_item.setImage(Some(&placeholder_icon));
         cpu_loading_item.setAttributedTitle(Some(&loading_attributed_title()));
@@ -180,7 +187,10 @@ impl TrayController {
             .map(|_| make_stat_item(mtm))
             .collect();
         let gpu_title_item = make_stat_item(mtm);
-        gpu_title_item.setImage(Some(&placeholder_icon));
+        let gpu_title_view = ModuleTitleView::new(mtm, "GPU");
+        unsafe {
+            let _: () = msg_send![&gpu_title_item, setView: &*gpu_title_view];
+        }
         let gpu_utilization_item = make_stat_item(mtm);
 
         let refresh_item = unsafe {
@@ -188,13 +198,12 @@ impl TrayController {
                 NSMenuItem::alloc(mtm),
                 &NSString::from_str("Refresh"),
                 Some(sel!(refreshNow:)),
-                &NSString::from_str("r"),
+                &empty,
             )
         };
         unsafe {
             refresh_item.setTarget(Some(&refresh_target));
         }
-        refresh_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
         refresh_item.setEnabled(true);
         let refresh_icon = make_action_icon("arrow.clockwise");
         if let Some(img) = &refresh_icon {
@@ -322,27 +331,29 @@ impl TrayController {
             check_updates_item.setImage(Some(&img));
         }
 
-        let settings_submenu = NSMenu::new(mtm);
-        settings_submenu.setAutoenablesItems(false);
-        settings_submenu.addItem(&auto_refresh_item);
-        settings_submenu.addItem(&show_app_usage_item);
-        settings_submenu.addItem(&show_cpu_item);
-        settings_submenu.addItem(&show_gpu_item);
-        settings_submenu.addItem(&launch_at_login_item);
-        settings_submenu.addItem(&diagnostics_item);
-        settings_submenu.addItem(&NSMenuItem::separatorItem(mtm));
-        settings_submenu.addItem(&check_updates_item);
-        settings_submenu.addItem(&about_item);
+        let settings_menu = NSMenu::new(mtm);
+        settings_menu.setAutoenablesItems(false);
+        settings_menu.addItem(&auto_refresh_item);
+        settings_menu.addItem(&show_app_usage_item);
+        settings_menu.addItem(&show_cpu_item);
+        settings_menu.addItem(&show_gpu_item);
+        settings_menu.addItem(&launch_at_login_item);
+        settings_menu.addItem(&diagnostics_item);
+        settings_menu.addItem(&NSMenuItem::separatorItem(mtm));
+        settings_menu.addItem(&check_updates_item);
+        settings_menu.addItem(&about_item);
 
         let settings_item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
                 &NSString::from_str("Settings"),
-                None,
+                Some(sel!(openSettings:)),
                 &empty,
             )
         };
-        settings_item.setSubmenu(Some(&settings_submenu));
+        unsafe {
+            settings_item.setTarget(Some(&refresh_target));
+        }
         settings_item.setEnabled(true);
         if let Some(img) = make_action_icon("gearshape") {
             settings_item.setImage(Some(&img));
@@ -353,10 +364,9 @@ impl TrayController {
                 NSMenuItem::alloc(mtm),
                 &NSString::from_str("Quit"),
                 Some(sel!(terminate:)),
-                &NSString::from_str("q"),
+                &empty,
             )
         };
-        quit_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
         quit_item.setEnabled(true);
 
         status_item.setMenu(Some(&menu));
@@ -372,14 +382,10 @@ impl TrayController {
             rings_view,
             legend_items,
             swap_item,
-            sparkline_item,
-            sparkline_view,
             loading_item,
             app_loading_item,
             app_unavailable_item,
             app_items,
-            app_quit_items,
-            app_submenus,
             cpu_title_item,
             cpu_loading_item,
             cpu_unavailable_item,
@@ -398,7 +404,7 @@ impl TrayController {
             _about_item: about_item,
             _check_updates_item: check_updates_item,
             settings_item,
-            _settings_submenu: settings_submenu,
+            settings_menu,
             quit_item,
             pause_icon,
             play_icon,
@@ -408,9 +414,8 @@ impl TrayController {
             shape: Cell::new(MenuShape::Uninitialized),
             last_rings: RefCell::new(None),
             last_breakdown: RefCell::new(None),
-            last_accent: Cell::new(Accent::Macos),
+            last_accent: Cell::new(Accent::Neutral),
             last_swap_row: RefCell::new(None),
-            last_history: RefCell::new(Vec::new()),
             last_app_section: RefCell::new(None),
             last_cpu_state: RefCell::new(None),
             last_gpu: RefCell::new(None),
@@ -484,8 +489,8 @@ impl TrayController {
         );
     }
 
-    /// Attach the open/close delegate to the main tray menu only; the settings
-    /// submenu opening must not count as a menu open.
+    /// Attach the open/close delegate to the main tray menu only; the separate
+    /// settings menu must not count as the live monitor menu being open.
     pub fn set_menu_delegate(&self, delegate: &ProtocolObject<dyn NSMenuDelegate>) {
         self.menu.setDelegate(Some(delegate));
     }
@@ -515,9 +520,37 @@ impl TrayController {
         });
     }
 
+    pub fn set_settings_state(
+        &self,
+        launch_at_login: LaunchAtLoginStatus,
+        auto_refresh_enabled: bool,
+        show_app_usage: bool,
+        show_cpu: bool,
+        show_gpu: bool,
+    ) {
+        let projection = settings_menu_projection(
+            launch_at_login,
+            auto_refresh_enabled,
+            show_app_usage,
+            show_cpu,
+            show_gpu,
+        );
+        self.update_auto_refresh(projection.auto_refresh_enabled);
+        self.set_show_app_usage(projection.show_app_usage);
+        self.set_show_cpu(projection.show_cpu);
+        self.set_show_gpu(projection.show_gpu);
+        self.update_launch_at_login(projection.launch_at_login);
+    }
+
     #[allow(deprecated)]
     pub fn pop_up_menu(&self) {
         self.status_item.popUpStatusItemMenu(&self.menu);
+    }
+
+    pub fn pop_up_settings_menu(&self) {
+        let location = NSEvent::mouseLocation();
+        self.settings_menu
+            .popUpMenuPositioningItem_atLocation_inView(None, location, None);
     }
 
     pub fn set_placeholder(
@@ -581,11 +614,10 @@ impl TrayController {
                     *self.last_image_name.borrow_mut() = None;
                 }
             }
-            // Tint the template gauge to flag memory pressure: red when
-            // nearly exhausted, orange when tight, otherwise the default
-            // appearance. The non-template rising-fast composite uses a yellow
-            // climb badge instead, so pressure tint and climb signal stay distinct.
-            button.setContentTintColor(Some(&accent));
+            // Let the normal template gauge follow the menu bar's light/dark
+            // appearance. Only warning and critical pressure force a semantic tint.
+            let status_tint = status_tint_for_pressure(pressure).map(color_for_accent);
+            button.setContentTintColor(status_tint.as_deref());
             self.last_trend.set(trend);
             self.last_pressure.set(pressure);
         }
@@ -606,7 +638,6 @@ impl TrayController {
             self.last_rings.borrow_mut().take();
             self.last_breakdown.borrow_mut().take();
             self.last_swap_row.borrow_mut().take();
-            self.last_history.borrow_mut().clear();
             self.last_app_section.borrow_mut().take();
             self.last_cpu_state.borrow_mut().take();
             self.last_gpu.borrow_mut().take();
@@ -636,14 +667,6 @@ impl TrayController {
                 }
                 *self.last_swap_row.borrow_mut() = memory.swap.clone();
             }
-            if shape_changed
-                || accent_changed
-                || self.last_history.borrow().as_slice() != memory.history
-            {
-                self.sparkline_view
-                    .update(memory.history.clone(), accent_color.clone());
-                *self.last_history.borrow_mut() = memory.history.clone();
-            }
             if let Some(cpu) = modules.iter().find_map(|module| match module {
                 ModuleDisplay::Cpu(cpu) => Some(cpu),
                 ModuleDisplay::Memory(_) | ModuleDisplay::Gpu(_) => None,
@@ -671,23 +694,7 @@ impl TrayController {
             for (item, row) in self.app_items.iter().zip(rows.iter()) {
                 item.setAttributedTitle(Some(&app_row_attributed(row, accent)));
                 item.setImage(self.app_row_icon(row).as_deref());
-            }
-            for (idx, row) in rows.iter().enumerate() {
-                let item = &self.app_items[idx];
-                if let Some(key) = &row.quit_key {
-                    let quit_item = &self.app_quit_items[idx];
-                    quit_item.setTitle(&NSString::from_str(&format!("Quit {}", row.primary)));
-                    // Carry the app's stable identity on the menu item so the quit handler
-                    // targets the app the user saw, never a positional slot that may have shifted.
-                    let key_obj = NSString::from_str(key);
-                    unsafe {
-                        let _: () = msg_send![&**quit_item, setRepresentedObject: &*key_obj];
-                    }
-                    quit_item.setEnabled(true);
-                    item.setSubmenu(Some(&self.app_submenus[idx]));
-                } else {
-                    item.setSubmenu(None);
-                }
+                item.setSubmenu(None);
             }
         }
         *self.last_app_section.borrow_mut() = Some(apps.clone());
@@ -698,16 +705,6 @@ impl TrayController {
             return;
         }
 
-        self.cpu_title_item
-            .setAttributedTitle(Some(&stat_row_attributed(
-                &StatRow {
-                    primary: "CPU".to_string(),
-                    tail: None,
-                    quit_key: None,
-                    bundle_path: None,
-                },
-                accent.colorWithAlphaComponent(1.0),
-            )));
         if let CpuDisplayState::Available {
             utilization,
             cores,
@@ -738,16 +735,6 @@ impl TrayController {
             return;
         }
 
-        self.gpu_title_item
-            .setAttributedTitle(Some(&stat_row_attributed(
-                &StatRow {
-                    primary: "GPU".to_string(),
-                    tail: None,
-                    quit_key: None,
-                    bundle_path: None,
-                },
-                accent.colorWithAlphaComponent(1.0),
-            )));
         self.gpu_utilization_item
             .setAttributedTitle(Some(&stat_row_attributed(
                 &gpu.utilization,
@@ -778,7 +765,6 @@ impl TrayController {
                 if show_swap {
                     self.menu.addItem(&self.swap_item);
                 }
-                self.menu.addItem(&self.sparkline_item);
                 match apps {
                     AppShape::Hidden => {}
                     AppShape::Loading => {
@@ -951,9 +937,17 @@ fn menu_shape_for(model: &DropdownModel) -> MenuShape {
 
 fn color_for_accent(accent: Accent) -> Retained<NSColor> {
     match accent {
-        Accent::Macos => NSColor::controlAccentColor(),
+        Accent::Neutral => NSColor::labelColor(),
         Accent::Warning => NSColor::systemOrangeColor(),
         Accent::Critical => NSColor::systemRedColor(),
+    }
+}
+
+fn status_tint_for_pressure(pressure: MemoryPressure) -> Option<Accent> {
+    match pressure {
+        MemoryPressure::Normal => None,
+        MemoryPressure::Warning => Some(Accent::Warning),
+        MemoryPressure::Critical => Some(Accent::Critical),
     }
 }
 
@@ -966,25 +960,6 @@ fn make_stat_item(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
             &NSString::from_str(""),
         )
     };
-    item.setEnabled(true);
-    item
-}
-
-fn make_quit_app_item(
-    mtm: MainThreadMarker,
-    refresh_target: &Retained<AnyObject>,
-) -> Retained<NSMenuItem> {
-    let item = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm),
-            &NSString::from_str("Quit App"),
-            Some(sel!(quitApp:)),
-            &NSString::from_str(""),
-        )
-    };
-    unsafe {
-        item.setTarget(Some(refresh_target));
-    }
     item.setEnabled(true);
     item
 }
@@ -1226,59 +1201,17 @@ pub(crate) enum MenuEntry<'a> {
         quit_key: Option<&'a str>,
     },
     Separator,
-    Refresh,
-    Settings {
-        auto_refresh_enabled: bool,
-        show_app_usage: bool,
-        show_cpu: bool,
-        show_gpu: bool,
-        launch_at_login: LaunchAtLoginStatus,
+    Refresh {
+        key_equivalent: Option<&'a str>,
     },
-    Quit,
+    SettingsCommand,
+    Quit {
+        key_equivalent: Option<&'a str>,
+    },
 }
 
 #[cfg(test)]
-pub(crate) fn loaded_menu_entries<'a>(
-    model: &'a DropdownModel,
-    launch_at_login_status: LaunchAtLoginStatus,
-    auto_refresh_enabled: bool,
-) -> Vec<MenuEntry<'a>> {
-    loaded_menu_entries_with_settings(
-        model,
-        launch_at_login_status,
-        auto_refresh_enabled,
-        false,
-        false,
-        false,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn loaded_menu_entries_with_app_usage<'a>(
-    model: &'a DropdownModel,
-    launch_at_login_status: LaunchAtLoginStatus,
-    auto_refresh_enabled: bool,
-    show_app_usage: bool,
-) -> Vec<MenuEntry<'a>> {
-    loaded_menu_entries_with_settings(
-        model,
-        launch_at_login_status,
-        auto_refresh_enabled,
-        show_app_usage,
-        false,
-        false,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn loaded_menu_entries_with_settings<'a>(
-    model: &'a DropdownModel,
-    launch_at_login_status: LaunchAtLoginStatus,
-    auto_refresh_enabled: bool,
-    show_app_usage: bool,
-    show_cpu: bool,
-    show_gpu: bool,
-) -> Vec<MenuEntry<'a>> {
+pub(crate) fn loaded_menu_entries(model: &DropdownModel) -> Vec<MenuEntry<'_>> {
     let mut entries = Vec::new();
     match model {
         DropdownModel::Loading => {
@@ -1305,7 +1238,6 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
                     tail: swap.tail.as_deref(),
                 });
             }
-            entries.push(MenuEntry::Sparkline);
             match &memory.apps {
                 AppSectionDisplay::Hidden => {}
                 AppSectionDisplay::Loading => {
@@ -1376,30 +1308,30 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
         }
     }
     entries.push(MenuEntry::Separator);
-    entries.push(MenuEntry::Refresh);
-    entries.push(MenuEntry::Settings {
-        auto_refresh_enabled,
-        show_app_usage,
-        show_cpu,
-        show_gpu,
-        launch_at_login: launch_at_login_status,
+    entries.push(MenuEntry::Refresh {
+        key_equivalent: None,
     });
+    entries.push(MenuEntry::SettingsCommand);
     entries.push(MenuEntry::Separator);
-    entries.push(MenuEntry::Quit);
+    entries.push(MenuEntry::Quit {
+        key_equivalent: None,
+    });
     entries
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{badge_for_state, loaded_menu_entries, BadgeKind, MenuEntry};
+    use super::{
+        badge_for_state, loaded_menu_entries, status_tint_for_pressure, BadgeKind, MenuEntry,
+    };
     use crate::format::{
         dropdown_model, dropdown_model_with_apps, dropdown_model_with_sections,
         placeholder_dropdown_model,
     };
     use crate::login_item::LaunchAtLoginStatus;
     use crate::model::{
-        CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot, PressureSource,
-        SystemSnapshot,
+        CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemoryPressure, MemorySnapshot,
+        PressureSource, SystemSnapshot,
     };
     use crate::process_cpu::{ProcessCpuSnapshot, ProcessCpuUsage};
     use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
@@ -1412,6 +1344,19 @@ mod tests {
         assert_eq!(
             badge_for_state(MemoryTrend::RisingFast),
             BadgeKind::RisingFast
+        );
+    }
+
+    #[test]
+    fn normal_pressure_leaves_the_template_icon_system_adaptive() {
+        assert_eq!(status_tint_for_pressure(MemoryPressure::Normal), None);
+        assert_eq!(
+            status_tint_for_pressure(MemoryPressure::Warning),
+            Some(crate::format::Accent::Warning)
+        );
+        assert_eq!(
+            status_tint_for_pressure(MemoryPressure::Critical),
+            Some(crate::format::Accent::Critical)
         );
     }
 
@@ -1438,22 +1383,20 @@ mod tests {
     #[test]
     fn loading_layout_omits_memory_detail_sections() {
         let model = placeholder_dropdown_model();
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
         assert_eq!(
             entries,
             vec![
                 MenuEntry::Loading,
                 MenuEntry::Separator,
-                MenuEntry::Refresh,
-                MenuEntry::Settings {
-                    auto_refresh_enabled: true,
-                    show_app_usage: false,
-                    show_cpu: false,
-                    show_gpu: false,
-                    launch_at_login: LaunchAtLoginStatus::Disabled,
+                MenuEntry::Refresh {
+                    key_equivalent: None,
                 },
+                MenuEntry::SettingsCommand,
                 MenuEntry::Separator,
-                MenuEntry::Quit,
+                MenuEntry::Quit {
+                    key_equivalent: None,
+                },
             ]
         );
     }
@@ -1461,7 +1404,7 @@ mod tests {
     #[test]
     fn loaded_layout_renders_memory_and_swap_rows() {
         let model = dropdown_model(snapshot());
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Enabled, true);
+        let entries = loaded_menu_entries(&model);
         assert_eq!(
             entries,
             vec![
@@ -1493,20 +1436,24 @@ mod tests {
                     primary: "Swap",
                     tail: Some("1.2 GB"),
                 },
-                MenuEntry::Sparkline,
                 MenuEntry::Separator,
-                MenuEntry::Refresh,
-                MenuEntry::Settings {
-                    auto_refresh_enabled: true,
-                    show_app_usage: false,
-                    show_cpu: false,
-                    show_gpu: false,
-                    launch_at_login: LaunchAtLoginStatus::Enabled,
+                MenuEntry::Refresh {
+                    key_equivalent: None,
                 },
+                MenuEntry::SettingsCommand,
                 MenuEntry::Separator,
-                MenuEntry::Quit,
+                MenuEntry::Quit {
+                    key_equivalent: None,
+                },
             ]
         );
+    }
+
+    #[test]
+    fn compact_menu_omits_the_decorative_sparkline() {
+        let model = dropdown_model(snapshot());
+        let entries = loaded_menu_entries(&model);
+        assert!(!entries.contains(&MenuEntry::Sparkline));
     }
 
     #[test]
@@ -1514,7 +1461,7 @@ mod tests {
         let mut snapshot = snapshot();
         snapshot.memory.swap_used_bytes = 0;
         let model = dropdown_model(snapshot);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
         assert!(!entries.iter().any(|e| matches!(
             e,
             MenuEntry::Stat {
@@ -1527,7 +1474,7 @@ mod tests {
     #[test]
     fn loaded_with_apps_hidden_omits_apps_section() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
         assert!(!entries.iter().any(|e| matches!(
             e,
             MenuEntry::AppRow { .. } | MenuEntry::AppLoading | MenuEntry::AppUnavailable
@@ -1537,66 +1484,43 @@ mod tests {
     #[test]
     fn loaded_with_apps_loading_renders_loading_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading, &[]);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::AppLoading);
+        let entries = loaded_menu_entries(&model);
+        assert_eq!(entries[6], MenuEntry::Separator);
+        assert_eq!(entries[7], MenuEntry::AppLoading);
     }
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable, &[]);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::AppUnavailable);
+        let entries = loaded_menu_entries(&model);
+        assert_eq!(entries[6], MenuEntry::Separator);
+        assert_eq!(entries[7], MenuEntry::AppUnavailable);
     }
 
     #[test]
     fn show_app_usage_state_reflects_toggle() {
-        use super::loaded_menu_entries_with_app_usage;
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
-        let on =
-            loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, true);
-        assert!(on.iter().any(|e| matches!(
-            e,
-            MenuEntry::Settings {
-                show_app_usage: true,
-                ..
-            }
-        )));
+        use super::settings_menu_projection;
+        let on = settings_menu_projection(LaunchAtLoginStatus::Disabled, true, true, false, false);
+        assert!(on.show_app_usage);
 
         let off =
-            loaded_menu_entries_with_app_usage(&model, LaunchAtLoginStatus::Disabled, true, false);
-        assert!(off.iter().any(|e| matches!(
-            e,
-            MenuEntry::Settings {
-                show_app_usage: false,
-                ..
-            }
-        )));
+            settings_menu_projection(LaunchAtLoginStatus::Disabled, true, false, false, false);
+        assert!(!off.show_app_usage);
     }
 
     #[test]
     fn module_visibility_states_are_independent_in_settings() {
-        use super::loaded_menu_entries_with_settings;
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
-        let entries = loaded_menu_entries_with_settings(
-            &model,
-            LaunchAtLoginStatus::Disabled,
-            false,
-            true,
-            true,
-            false,
-        );
-        assert!(entries.iter().any(|entry| matches!(
-            entry,
-            MenuEntry::Settings {
+        use super::{settings_menu_projection, SettingsMenuProjection};
+        assert_eq!(
+            settings_menu_projection(LaunchAtLoginStatus::Disabled, false, true, true, false),
+            SettingsMenuProjection {
                 auto_refresh_enabled: false,
                 show_app_usage: true,
                 show_cpu: true,
                 show_gpu: false,
-                ..
+                launch_at_login: LaunchAtLoginStatus::Disabled,
             }
-        )));
+        );
     }
 
     #[test]
@@ -1620,7 +1544,7 @@ mod tests {
             },
         ];
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage), &[]);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
 
         assert!(matches!(entries[0], MenuEntry::Rings { .. }));
         assert!(matches!(
@@ -1637,25 +1561,24 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(entries[6], MenuEntry::Sparkline);
-        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[6], MenuEntry::Separator);
         assert_eq!(
-            entries[8],
+            entries[7],
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
-                quit_key: Some("/Applications/Cursor.app"),
+                quit_key: None,
             }
         );
         assert_eq!(
-            entries[9],
+            entries[8],
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
-                quit_key: Some("/Applications/Chrome.app"),
+                quit_key: None,
             }
         );
-        assert_eq!(entries[10], MenuEntry::Separator);
+        assert_eq!(entries[9], MenuEntry::Separator);
     }
 
     #[test]
@@ -1668,12 +1591,12 @@ mod tests {
             performance_percent: Some(74),
         });
         let model = dropdown_model(snapshot);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
 
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::ModuleTitle("CPU"));
+        assert_eq!(entries[6], MenuEntry::Separator);
+        assert_eq!(entries[7], MenuEntry::ModuleTitle("CPU"));
         assert_eq!(
-            entries[9],
+            entries[8],
             MenuEntry::Legend {
                 label: "User",
                 value: "42%",
@@ -1681,7 +1604,7 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[10],
+            entries[9],
             MenuEntry::Legend {
                 label: "System",
                 value: "9%",
@@ -1689,14 +1612,14 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[11],
+            entries[10],
             MenuEntry::Stat {
                 primary: "E-cores",
                 tail: Some("18%"),
             }
         );
         assert_eq!(
-            entries[12],
+            entries[11],
             MenuEntry::Stat {
                 primary: "P-cores",
                 tail: Some("74%"),
@@ -1719,10 +1642,10 @@ mod tests {
         }]);
         let model =
             dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes, &[]);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
 
         assert_eq!(
-            entries[11],
+            entries[10],
             MenuEntry::Stat {
                 primary: "Video Encoder",
                 tail: Some("240%"),
@@ -1744,12 +1667,12 @@ mod tests {
             utilization_percent: 76,
         });
         let model = dropdown_model(snapshot);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
 
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::ModuleTitle("GPU"));
+        assert_eq!(entries[6], MenuEntry::Separator);
+        assert_eq!(entries[7], MenuEntry::ModuleTitle("GPU"));
         assert_eq!(
-            entries[9],
+            entries[8],
             MenuEntry::Stat {
                 primary: "Utilization",
                 tail: Some("76%"),
