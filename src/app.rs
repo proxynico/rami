@@ -246,6 +246,7 @@ impl AppState {
         if !manual && !self.auto_refresh_enabled.get() {
             return;
         }
+        self.sync_settings_menu();
         let mtm = MainThreadMarker::new().expect("refreshes must stay on the main thread");
         self.drain_app_scan_results();
         let cpu_processes_updated = self.drain_cpu_process_scan_results();
@@ -304,6 +305,16 @@ impl AppState {
                     .set_placeholder(self.launch_at_login_status.get(), mtm);
             }
         }
+    }
+
+    fn sync_settings_menu(&self) {
+        self.tray.set_settings_state(
+            self.launch_at_login_status.get(),
+            self.auto_refresh_enabled.get(),
+            self.show_app_usage.get(),
+            self.show_cpu.get(),
+            self.show_gpu.get(),
+        );
     }
 
     fn sample_cpu_if_visible(&self) -> CpuModuleState {
@@ -485,7 +496,6 @@ impl AppState {
         } else {
             self.clear_app_usage();
         }
-        self.tray.set_show_app_usage(on);
         self.refresh(true);
         if on {
             self.reopen_menu_soon();
@@ -502,7 +512,6 @@ impl AppState {
         } else {
             self.clear_cpu_processes();
         }
-        self.tray.set_show_cpu(enabled);
         self.refresh(true);
     }
 
@@ -510,7 +519,6 @@ impl AppState {
         let enabled = !self.show_gpu.get();
         self.show_gpu.set(enabled);
         self.settings.set_show_gpu(enabled);
-        self.tray.set_show_gpu(enabled);
         self.refresh(true);
     }
 
@@ -782,10 +790,6 @@ impl App {
             menu_open: Cell::new(false),
         });
         install_app_state(&state);
-        // Reflect the persisted "show apps" choice in the menu checkbox before first paint.
-        state.tray.set_show_app_usage(settings.show_app_usage);
-        state.tray.set_show_cpu(settings.show_cpu);
-        state.tray.set_show_gpu(settings.show_gpu);
         app.finishLaunching();
         state.refresh(true);
         // NSRunLoopCommonModes so ticks keep firing while the menu is tracking;

@@ -63,6 +63,31 @@ enum MenuShape {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SettingsMenuProjection {
+    launch_at_login: LaunchAtLoginStatus,
+    auto_refresh_enabled: bool,
+    show_app_usage: bool,
+    show_cpu: bool,
+    show_gpu: bool,
+}
+
+fn settings_menu_projection(
+    launch_at_login: LaunchAtLoginStatus,
+    auto_refresh_enabled: bool,
+    show_app_usage: bool,
+    show_cpu: bool,
+    show_gpu: bool,
+) -> SettingsMenuProjection {
+    SettingsMenuProjection {
+        launch_at_login,
+        auto_refresh_enabled,
+        show_app_usage,
+        show_cpu,
+        show_gpu,
+    }
+}
+
 pub struct TrayController {
     status_item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
@@ -493,6 +518,28 @@ impl TrayController {
         } else {
             NSControlStateValueOff
         });
+    }
+
+    pub fn set_settings_state(
+        &self,
+        launch_at_login: LaunchAtLoginStatus,
+        auto_refresh_enabled: bool,
+        show_app_usage: bool,
+        show_cpu: bool,
+        show_gpu: bool,
+    ) {
+        let projection = settings_menu_projection(
+            launch_at_login,
+            auto_refresh_enabled,
+            show_app_usage,
+            show_cpu,
+            show_gpu,
+        );
+        self.update_auto_refresh(projection.auto_refresh_enabled);
+        self.set_show_app_usage(projection.show_app_usage);
+        self.set_show_cpu(projection.show_cpu);
+        self.set_show_gpu(projection.show_gpu);
+        self.update_launch_at_login(projection.launch_at_login);
     }
 
     #[allow(deprecated)]
@@ -1158,43 +1205,13 @@ pub(crate) enum MenuEntry<'a> {
         key_equivalent: Option<&'a str>,
     },
     SettingsCommand,
-    Settings {
-        auto_refresh_enabled: bool,
-        show_app_usage: bool,
-        show_cpu: bool,
-        show_gpu: bool,
-        launch_at_login: LaunchAtLoginStatus,
-    },
     Quit {
         key_equivalent: Option<&'a str>,
     },
 }
 
 #[cfg(test)]
-pub(crate) fn loaded_menu_entries<'a>(
-    model: &'a DropdownModel,
-    launch_at_login_status: LaunchAtLoginStatus,
-    auto_refresh_enabled: bool,
-) -> Vec<MenuEntry<'a>> {
-    loaded_menu_entries_with_settings(
-        model,
-        launch_at_login_status,
-        auto_refresh_enabled,
-        false,
-        false,
-        false,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn loaded_menu_entries_with_settings<'a>(
-    model: &'a DropdownModel,
-    _launch_at_login_status: LaunchAtLoginStatus,
-    _auto_refresh_enabled: bool,
-    _show_app_usage: bool,
-    _show_cpu: bool,
-    _show_gpu: bool,
-) -> Vec<MenuEntry<'a>> {
+pub(crate) fn loaded_menu_entries(model: &DropdownModel) -> Vec<MenuEntry<'_>> {
     let mut entries = Vec::new();
     match model {
         DropdownModel::Loading => {
@@ -1303,23 +1320,6 @@ pub(crate) fn loaded_menu_entries_with_settings<'a>(
 }
 
 #[cfg(test)]
-fn settings_menu_entry(
-    launch_at_login: LaunchAtLoginStatus,
-    auto_refresh_enabled: bool,
-    show_app_usage: bool,
-    show_cpu: bool,
-    show_gpu: bool,
-) -> MenuEntry<'static> {
-    MenuEntry::Settings {
-        auto_refresh_enabled,
-        show_app_usage,
-        show_cpu,
-        show_gpu,
-        launch_at_login,
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::{
         badge_for_state, loaded_menu_entries, status_tint_for_pressure, BadgeKind, MenuEntry,
@@ -1383,7 +1383,7 @@ mod tests {
     #[test]
     fn loading_layout_omits_memory_detail_sections() {
         let model = placeholder_dropdown_model();
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
         assert_eq!(
             entries,
             vec![
@@ -1404,7 +1404,7 @@ mod tests {
     #[test]
     fn loaded_layout_renders_memory_and_swap_rows() {
         let model = dropdown_model(snapshot());
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Enabled, true);
+        let entries = loaded_menu_entries(&model);
         assert_eq!(
             entries,
             vec![
@@ -1452,7 +1452,7 @@ mod tests {
     #[test]
     fn compact_menu_omits_the_decorative_sparkline() {
         let model = dropdown_model(snapshot());
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Enabled, true);
+        let entries = loaded_menu_entries(&model);
         assert!(!entries.contains(&MenuEntry::Sparkline));
     }
 
@@ -1461,7 +1461,7 @@ mod tests {
         let mut snapshot = snapshot();
         snapshot.memory.swap_used_bytes = 0;
         let model = dropdown_model(snapshot);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
         assert!(!entries.iter().any(|e| matches!(
             e,
             MenuEntry::Stat {
@@ -1474,7 +1474,7 @@ mod tests {
     #[test]
     fn loaded_with_apps_hidden_omits_apps_section() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
         assert!(!entries.iter().any(|e| matches!(
             e,
             MenuEntry::AppRow { .. } | MenuEntry::AppLoading | MenuEntry::AppUnavailable
@@ -1484,7 +1484,7 @@ mod tests {
     #[test]
     fn loaded_with_apps_loading_renders_loading_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading, &[]);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
         assert_eq!(entries[6], MenuEntry::Separator);
         assert_eq!(entries[7], MenuEntry::AppLoading);
     }
@@ -1492,47 +1492,35 @@ mod tests {
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable, &[]);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
         assert_eq!(entries[6], MenuEntry::Separator);
         assert_eq!(entries[7], MenuEntry::AppUnavailable);
     }
 
     #[test]
     fn show_app_usage_state_reflects_toggle() {
-        use super::settings_menu_entry;
-        let on = settings_menu_entry(LaunchAtLoginStatus::Disabled, true, true, false, false);
-        assert!(matches!(
-            on,
-            MenuEntry::Settings {
-                show_app_usage: true,
-                ..
-            }
-        ));
+        use super::settings_menu_projection;
+        let on = settings_menu_projection(LaunchAtLoginStatus::Disabled, true, true, false, false);
+        assert!(on.show_app_usage);
 
-        let off = settings_menu_entry(LaunchAtLoginStatus::Disabled, true, false, false, false);
-        assert!(matches!(
-            off,
-            MenuEntry::Settings {
-                show_app_usage: false,
-                ..
-            }
-        ));
+        let off =
+            settings_menu_projection(LaunchAtLoginStatus::Disabled, true, false, false, false);
+        assert!(!off.show_app_usage);
     }
 
     #[test]
     fn module_visibility_states_are_independent_in_settings() {
-        use super::settings_menu_entry;
-        let settings = settings_menu_entry(LaunchAtLoginStatus::Disabled, false, true, true, false);
-        assert!(matches!(
-            settings,
-            MenuEntry::Settings {
+        use super::{settings_menu_projection, SettingsMenuProjection};
+        assert_eq!(
+            settings_menu_projection(LaunchAtLoginStatus::Disabled, false, true, true, false),
+            SettingsMenuProjection {
                 auto_refresh_enabled: false,
                 show_app_usage: true,
                 show_cpu: true,
                 show_gpu: false,
-                ..
+                launch_at_login: LaunchAtLoginStatus::Disabled,
             }
-        ));
+        );
     }
 
     #[test]
@@ -1556,7 +1544,7 @@ mod tests {
             },
         ];
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage), &[]);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
 
         assert!(matches!(entries[0], MenuEntry::Rings { .. }));
         assert!(matches!(
@@ -1603,7 +1591,7 @@ mod tests {
             performance_percent: Some(74),
         });
         let model = dropdown_model(snapshot);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
 
         assert_eq!(entries[6], MenuEntry::Separator);
         assert_eq!(entries[7], MenuEntry::ModuleTitle("CPU"));
@@ -1654,7 +1642,7 @@ mod tests {
         }]);
         let model =
             dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes, &[]);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
 
         assert_eq!(
             entries[10],
@@ -1679,7 +1667,7 @@ mod tests {
             utilization_percent: 76,
         });
         let model = dropdown_model(snapshot);
-        let entries = loaded_menu_entries(&model, LaunchAtLoginStatus::Disabled, true);
+        let entries = loaded_menu_entries(&model);
 
         assert_eq!(entries[6], MenuEntry::Separator);
         assert_eq!(entries[7], MenuEntry::ModuleTitle("GPU"));
