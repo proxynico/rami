@@ -45,13 +45,19 @@ pub fn snapshot_from_counts(
         .saturating_add(counts.compressed_pages);
     let used_bytes = used_pages.saturating_mul(counts.page_size);
 
-    // "Available" = free + inactive + speculative + purgeable: pages the system can
-    // reclaim without swapping. A rough mirror of Activity Monitor's "Memory Available";
-    // same few-percent drift caveat as `used_bytes`.
+    // "Available" = free + inactive + purgeable: pages the system can reclaim without
+    // swapping. A rough mirror of Activity Monitor's "Memory Available"; same
+    // few-percent drift caveat as `used_bytes`.
+    //
+    // Speculative pages are NOT added here. `host_statistics64` reports
+    // `free_count` as raw free pages *plus* speculative pages, so adding
+    // `speculative_count` again double-counts them. Verified against the kernel on
+    // Darwin 25: free_count 7368 - speculative_count 2838 == vm.page_free_count 4530,
+    // exactly. This is also why `vm_stat` prints a smaller "Pages free" than
+    // `free_count`.
     let available_pages = counts
         .free_pages
         .saturating_add(counts.inactive_pages)
-        .saturating_add(counts.speculative_pages)
         .saturating_add(counts.purgeable_pages);
     let available_bytes = available_pages.saturating_mul(counts.page_size);
 
@@ -63,7 +69,14 @@ pub fn snapshot_from_counts(
         .saturating_mul(counts.page_size);
     let wired_bytes = counts.wired_pages.saturating_mul(counts.page_size);
     let compressed_bytes = counts.compressed_pages.saturating_mul(counts.page_size);
-    let free_bytes = counts.free_pages.saturating_mul(counts.page_size);
+    // The Free row shows genuinely free pages, so strip the speculative pages that
+    // `free_count` bundles in. Without this the row reads high against Activity
+    // Monitor and `vm_stat` by the speculative count, which on a warm system is
+    // routinely larger than free itself.
+    let free_bytes = counts
+        .free_pages
+        .saturating_sub(counts.speculative_pages)
+        .saturating_mul(counts.page_size);
 
     let raw_percent = if counts.total_bytes == 0 {
         0.0
