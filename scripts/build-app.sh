@@ -13,6 +13,64 @@ ICON_PATH="$ROOT_DIR/target/$APP_NAME.icns"
 ENTITLEMENTS_PATH="$ROOT_DIR/macos/$APP_NAME.entitlements"
 MACOSX_DEPLOYMENT_TARGET_VALUE="14.0"
 
+running_pids() {
+  pgrep -x "$APP_NAME" 2>/dev/null || true
+}
+
+process_binary_path() {
+  ps -o comm= -p "$1" 2>/dev/null | awk 'NR == 1 { sub(/^[[:space:]]+/, ""); print; exit }' || true
+}
+
+binary_mtime() {
+  local binary_path="$1"
+  local mtime
+
+  if [ ! -f "$binary_path" ]; then
+    printf '%s' "unavailable (binary not found)"
+    return
+  fi
+
+  if ! mtime="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S %z' "$binary_path" 2>/dev/null)"; then
+    printf '%s' "unavailable"
+    return
+  fi
+
+  printf '%s' "$mtime"
+}
+
+report_running_binaries() {
+  local pids="$1"
+  local pid
+  local binary_path
+
+  printf '%s\n' "$pids" | while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    binary_path="$(process_binary_path "$pid")"
+    if [ -n "$binary_path" ]; then
+      printf '  PID %s: %s (mtime: %s)\n' "$pid" "$binary_path" "$(binary_mtime "$binary_path")"
+    else
+      printf '  PID %s: binary path and mtime unavailable\n' "$pid"
+    fi
+  done
+}
+
+wait_for_processes_to_exit() {
+  local timeout_seconds="$1"
+  local deadline=$(( $(date +%s) + timeout_seconds ))
+  local pids
+
+  while :; do
+    pids="$(running_pids)"
+    if [ -z "$pids" ]; then
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
 if command -v cargo >/dev/null 2>&1; then
   cargo_bin="$(command -v cargo)"
 elif command -v rustup >/dev/null 2>&1; then
@@ -66,14 +124,40 @@ printf '%s\n' "$APP_DIR"
 # build. Enable with RAMI_INSTALL=1.
 if [ "${RAMI_INSTALL:-0}" = "1" ]; then
   INSTALL_DIR="/Applications/$APP_NAME.app"
+  INSTALLED_BINARY_PATH="$INSTALL_DIR/Contents/MacOS/$APP_NAME"
+  RUNNING_PIDS="$(running_pids)"
+
   echo "==> Installing $APP_DIR -> $INSTALL_DIR"
-  if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
-    echo "==> Quitting running $APP_NAME"
-    pkill -x "$APP_NAME" || true
-    sleep 1
+  echo "==> Replacing $INSTALLED_BINARY_PATH (mtime: $(binary_mtime "$INSTALLED_BINARY_PATH"))"
+  if [ -n "$RUNNING_PIDS" ]; then
+    echo "==> Terminating running $APP_NAME PID(s): $RUNNING_PIDS"
+    report_running_binaries "$RUNNING_PIDS"
+    # Signal by name, not by the PIDs captured above: a process could exit and
+    # its PID be recycled between capture and signal. The captured list is for
+    # reporting only. Matches the SIGKILL fallback below.
+    pkill -TERM -x "$APP_NAME" 2>/dev/null || true
+
+    if ! wait_for_processes_to_exit 10; then
+      echo "warning: $APP_NAME did not exit after SIGTERM; sending SIGKILL" >&2
+      pkill -9 -x "$APP_NAME" 2>/dev/null || true
+      if ! wait_for_processes_to_exit 2; then
+        echo "error: $APP_NAME is still running; refusing to replace $INSTALL_DIR" >&2
+        exit 1
+      fi
+    fi
   fi
   rm -rf "$INSTALL_DIR"
   cp -R "$APP_DIR" "$INSTALL_DIR"
   open "$INSTALL_DIR"
-  echo "==> Launched $INSTALL_DIR"
+  echo "==> Replaced and launched $INSTALL_DIR"
+elif [ -z "${RAMI_SIGNING_IDENTITY:-}" ]; then
+  RUNNING_PIDS="$(running_pids)"
+  if [ -n "$RUNNING_PIDS" ]; then
+    {
+      echo "warning: a new $APP_NAME build was produced, but it is NOT live."
+      echo "warning: running $APP_NAME PID(s): $RUNNING_PIDS"
+      report_running_binaries "$RUNNING_PIDS"
+      echo "warning: make this build live with: RAMI_INSTALL=1 ./scripts/build-app.sh"
+    } >&2
+  fi
 fi
