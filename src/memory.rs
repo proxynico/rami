@@ -151,7 +151,18 @@ pub fn parse_forced_pressure(raw: &str) -> Option<u8> {
 fn forced_pressure() -> Option<u8> {
     static FORCED: OnceLock<Option<u8>> = OnceLock::new();
     *FORCED.get_or_init(|| {
-        let raw = std::env::var(FORCE_PRESSURE_ENV).ok()?;
+        let raw = match std::env::var(FORCE_PRESSURE_ENV) {
+            Ok(raw) => raw,
+            // Unset is the normal case and stays silent.
+            Err(std::env::VarError::NotPresent) => return None,
+            // A value that is set but unreadable must not look like an unset one:
+            // someone deliberately asked for an override and would otherwise get
+            // no override and no explanation.
+            Err(std::env::VarError::NotUnicode(_)) => {
+                eprintln!("{FORCE_PRESSURE_ENV}: ignoring, value is not valid UTF-8");
+                return None;
+            }
+        };
         match parse_forced_pressure(&raw) {
             Some(percent) => {
                 eprintln!(
