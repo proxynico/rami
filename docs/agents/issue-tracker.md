@@ -20,7 +20,7 @@ Infer the repo from `git remote -v` — `gh` does this automatically when run in
 When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
 
 - **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>` for the diff.
-- **List external PRs for triage**: `gh pr list --state open --json number,title,body,labels,author,comments`, then fetch each candidate's association with `gh api repos/<owner>/<repo>/pulls/<number> --jq .author_association`. Keep only `CONTRIBUTOR`, `FIRST_TIMER`, `FIRST_TIME_CONTRIBUTOR`, or `NONE` (drop `OWNER`, `MEMBER`, and `COLLABORATOR`).
+- **List external PRs for triage**: `gh pr list --state open --limit 100 --json number,title,body,labels,author,comments`, then fetch each candidate's association with `gh api repos/<owner>/<repo>/pulls/<number> --jq .author_association`. Keep only `CONTRIBUTOR`, `FIRST_TIMER`, `FIRST_TIME_CONTRIBUTOR`, or `NONE` (drop `OWNER`, `MEMBER`, and `COLLABORATOR`).
 - **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either — resolve with `gh pr view 42` and fall back to `gh issue view 42`.
