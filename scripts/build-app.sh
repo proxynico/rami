@@ -132,10 +132,10 @@ if [ "${RAMI_INSTALL:-0}" = "1" ]; then
   if [ -n "$RUNNING_PIDS" ]; then
     echo "==> Terminating running $APP_NAME PID(s): $RUNNING_PIDS"
     report_running_binaries "$RUNNING_PIDS"
-    printf '%s\n' "$RUNNING_PIDS" | while IFS= read -r pid; do
-      [ -n "$pid" ] || continue
-      kill -TERM "$pid" 2>/dev/null || true
-    done
+    # Signal by name, not by the PIDs captured above: a process could exit and
+    # its PID be recycled between capture and signal. The captured list is for
+    # reporting only. Matches the SIGKILL fallback below.
+    pkill -TERM -x "$APP_NAME" 2>/dev/null || true
 
     if ! wait_for_processes_to_exit 10; then
       echo "warning: $APP_NAME did not exit after SIGTERM; sending SIGKILL" >&2

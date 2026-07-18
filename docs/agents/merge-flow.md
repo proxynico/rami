@@ -28,7 +28,7 @@ this split on the tracker.
 Claude reviews everything before merge, regardless of who wrote it, and runs:
 
 ```sh
-cargo fmt
+cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
 RAMI_INSTALL=1 ./scripts/build-app.sh    # then spot-check the rebuilt app
