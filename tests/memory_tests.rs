@@ -235,3 +235,43 @@ fn snapshot_falls_back_to_available_share_when_kernel_pressure_is_unavailable() 
     assert_eq!(snapshot.pressure_percent, 89);
     assert_eq!(snapshot.pressure_source, PressureSource::AvailableFallback);
 }
+
+#[test]
+fn forced_pressure_names_map_into_their_bands() {
+    use rami::memory::parse_forced_pressure;
+    use rami::model::{classify_pressure, MemoryPressure};
+
+    let normal = parse_forced_pressure("normal").expect("normal is a valid state");
+    let warning = parse_forced_pressure("warning").expect("warning is a valid state");
+    let critical = parse_forced_pressure("critical").expect("critical is a valid state");
+
+    // The point of the hook is the accent, so assert the classification rather
+    // than the percent it happens to pick.
+    assert_eq!(classify_pressure(normal), MemoryPressure::Normal);
+    assert_eq!(classify_pressure(warning), MemoryPressure::Warning);
+    assert_eq!(classify_pressure(critical), MemoryPressure::Critical);
+}
+
+#[test]
+fn forced_pressure_is_case_and_whitespace_insensitive() {
+    use rami::memory::parse_forced_pressure;
+
+    assert_eq!(
+        parse_forced_pressure("  CRITICAL \n"),
+        parse_forced_pressure("critical")
+    );
+    assert_eq!(
+        parse_forced_pressure("Warning"),
+        parse_forced_pressure("warning")
+    );
+}
+
+#[test]
+fn forced_pressure_rejects_unknown_values() {
+    use rami::memory::parse_forced_pressure;
+
+    assert_eq!(parse_forced_pressure(""), None);
+    assert_eq!(parse_forced_pressure("high"), None);
+    // Numeric values are not accepted; the hook takes state names only.
+    assert_eq!(parse_forced_pressure("95"), None);
+}

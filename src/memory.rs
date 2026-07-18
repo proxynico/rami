@@ -1,4 +1,4 @@
-use crate::model::{MemorySnapshot, PressureSource};
+use crate::model::{MemorySnapshot, PressureSource, CRITICAL_PRESSURE_PCT, WARNING_PRESSURE_PCT};
 use libc::{
     boolean_t, c_void, host_statistics64, mach_msg_type_number_t, size_t, sysctlbyname,
     vm_page_size, vm_statistics64, HOST_VM_INFO64, HOST_VM_INFO64_COUNT,
@@ -6,6 +6,9 @@ use libc::{
 use std::cell::Cell;
 use std::io;
 use std::mem::{size_of, MaybeUninit};
+use std::sync::OnceLock;
+
+const FORCE_PRESSURE_ENV: &str = "RAMI_FORCE_PRESSURE";
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -118,6 +121,54 @@ pub fn snapshot_from_counts(
     }
 }
 
+/// Parse the `RAMI_FORCE_PRESSURE` development override into a pressure percent.
+///
+/// The Warning and Critical accents are otherwise unreachable without genuinely
+/// exhausting system memory, so they went unverified — a UI pass could only ever
+/// capture Normal. This maps a state name onto a percent that
+/// [`classify_pressure`](crate::model::classify_pressure) will classify into that
+/// band.
+///
+/// `warning` and `critical` deliberately resolve to the threshold values
+/// themselves rather than the middle of each band, so previewing an accent also
+/// exercises the `>=` boundary.
+pub fn parse_forced_pressure(raw: &str) -> Option<u8> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        // Comfortably inside the Normal band, not adjacent to the warning edge.
+        "normal" => Some(50),
+        "warning" => Some(WARNING_PRESSURE_PCT),
+        "critical" => Some(CRITICAL_PRESSURE_PCT),
+        _ => None,
+    }
+}
+
+/// The override, read from the environment exactly once.
+///
+/// Development hook only. It is compiled into release builds on purpose:
+/// `scripts/build-app.sh` produces a release bundle, so gating it behind
+/// `debug_assertions` would make it useless for checking the accents in the app
+/// people actually run. It changes displayed pressure and nothing else.
+fn forced_pressure() -> Option<u8> {
+    static FORCED: OnceLock<Option<u8>> = OnceLock::new();
+    *FORCED.get_or_init(|| {
+        let raw = std::env::var(FORCE_PRESSURE_ENV).ok()?;
+        match parse_forced_pressure(&raw) {
+            Some(percent) => {
+                eprintln!(
+                    "{FORCE_PRESSURE_ENV}={raw}: forcing pressure to {percent}% (development override)"
+                );
+                Some(percent)
+            }
+            None => {
+                eprintln!(
+                    "{FORCE_PRESSURE_ENV}={raw}: ignoring, expected one of normal, warning, critical"
+                );
+                None
+            }
+        }
+    })
+}
+
 pub fn validate_stats_count(count: u32) -> io::Result<()> {
     if count < HOST_VM_INFO64_COUNT {
         return Err(io::Error::new(
@@ -196,7 +247,7 @@ impl MemorySampler {
 
         let kernel_available_percent = read_memory_status_level().ok();
 
-        Ok(snapshot_from_counts(
+        let snapshot = snapshot_from_counts(
             MemoryCounts {
                 total_bytes: self.total_bytes,
                 page_size: self.page_size,
@@ -211,7 +262,18 @@ impl MemorySampler {
             },
             swap_used_bytes,
             kernel_available_percent,
-        ))
+        );
+
+        // Applied here rather than inside snapshot_from_counts so that function
+        // stays a pure mapping from kernel counts and remains testable without
+        // touching the environment.
+        Ok(match forced_pressure() {
+            Some(pressure_percent) => MemorySnapshot {
+                pressure_percent,
+                ..snapshot
+            },
+            None => snapshot,
+        })
     }
 
     fn swap_used_bytes(&self) -> io::Result<u64> {
