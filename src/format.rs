@@ -73,7 +73,7 @@ pub enum AppSectionDisplay {
     Unavailable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Accent {
     Neutral,
     Warning,

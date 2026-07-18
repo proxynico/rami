@@ -88,6 +88,43 @@ fn settings_menu_projection(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct LegendIconKey {
+    accent: Accent,
+    opacity_percent: u8,
+}
+
+struct RowRenderCache {
+    font: Retained<NSFont>,
+    paragraph_style: Retained<NSMutableParagraphStyle>,
+    legend_icons: RefCell<HashMap<LegendIconKey, Option<Retained<NSImage>>>>,
+}
+
+impl RowRenderCache {
+    fn new() -> Self {
+        Self {
+            font: stat_font(),
+            paragraph_style: row_paragraph_style(),
+            legend_icons: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn legend_icon(&self, accent: Accent, opacity_percent: u8) -> Option<Retained<NSImage>> {
+        let key = LegendIconKey {
+            accent,
+            opacity_percent,
+        };
+        if let Some(icon) = self.legend_icons.borrow().get(&key) {
+            return icon.clone();
+        }
+        let color =
+            color_for_accent(accent).colorWithAlphaComponent(f64::from(opacity_percent) / 100.0);
+        let icon = make_legend_icon(&color);
+        self.legend_icons.borrow_mut().insert(key, icon.clone());
+        icon
+    }
+}
+
 pub struct TrayController {
     status_item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
@@ -137,7 +174,11 @@ pub struct TrayController {
     last_launch_title: RefCell<String>,
     last_launch_checked: Cell<bool>,
     last_launch_enabled: Cell<bool>,
+    last_show_app_usage: Cell<bool>,
+    last_show_cpu: Cell<bool>,
+    last_show_gpu: Cell<bool>,
     app_icon_cache: RefCell<HashMap<String, Retained<NSImage>>>,
+    row_render_cache: RowRenderCache,
 }
 
 const APP_ROW_POOL: usize = 3;
@@ -151,6 +192,7 @@ impl TrayController {
         let empty = NSString::from_str("");
 
         let placeholder_icon = make_placeholder_icon();
+        let row_render_cache = RowRenderCache::new();
         let rings_item = make_stat_item(mtm);
         let rings_view = MemoryRingsView::new(mtm);
         unsafe {
@@ -161,13 +203,14 @@ impl TrayController {
         set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
         let loading_item = make_stat_item(mtm);
         loading_item.setImage(Some(&placeholder_icon));
-        loading_item.setAttributedTitle(Some(&loading_attributed_title()));
+        loading_item.setAttributedTitle(Some(&loading_attributed_title(&row_render_cache)));
         let app_loading_item = make_stat_item(mtm);
         app_loading_item.setImage(Some(&placeholder_icon));
-        app_loading_item.setAttributedTitle(Some(&loading_attributed_title()));
+        app_loading_item.setAttributedTitle(Some(&loading_attributed_title(&row_render_cache)));
         let app_unavailable_item = make_stat_item(mtm);
         app_unavailable_item.setImage(Some(&placeholder_icon));
-        app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
+        app_unavailable_item
+            .setAttributedTitle(Some(&unavailable_attributed_title(&row_render_cache)));
         let app_items: Vec<Retained<NSMenuItem>> =
             (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
         let cpu_title_item = make_stat_item(mtm);
@@ -177,10 +220,11 @@ impl TrayController {
         }
         let cpu_loading_item = make_stat_item(mtm);
         cpu_loading_item.setImage(Some(&placeholder_icon));
-        cpu_loading_item.setAttributedTitle(Some(&loading_attributed_title()));
+        cpu_loading_item.setAttributedTitle(Some(&loading_attributed_title(&row_render_cache)));
         let cpu_unavailable_item = make_stat_item(mtm);
         cpu_unavailable_item.setImage(Some(&placeholder_icon));
-        cpu_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title()));
+        cpu_unavailable_item
+            .setAttributedTitle(Some(&unavailable_attributed_title(&row_render_cache)));
         let cpu_legend_items = (0..2).map(|_| make_stat_item(mtm)).collect();
         let cpu_core_items = (0..2).map(|_| make_stat_item(mtm)).collect();
         let cpu_process_items = (0..PROCESS_CPU_ROW_LIMIT)
@@ -424,7 +468,11 @@ impl TrayController {
             last_launch_title: RefCell::new(String::new()),
             last_launch_checked: Cell::new(false),
             last_launch_enabled: Cell::new(false),
+            last_show_app_usage: Cell::new(true),
+            last_show_cpu: Cell::new(true),
+            last_show_gpu: Cell::new(true),
             app_icon_cache: RefCell::new(HashMap::new()),
+            row_render_cache,
         };
         controller.set_gauge(0, MemoryTrend::Stable, MemoryPressure::Normal, mtm);
         controller.apply_model(
@@ -495,27 +543,39 @@ impl TrayController {
 
     pub fn set_show_app_usage(&self, enabled: bool) {
         // "Show Apps" follows the macOS convention: checked when the app list is visible.
+        if self.last_show_app_usage.get() == enabled {
+            return;
+        }
         self.show_app_usage_item.setState(if enabled {
             NSControlStateValueOn
         } else {
             NSControlStateValueOff
         });
+        self.last_show_app_usage.set(enabled);
     }
 
     pub fn set_show_cpu(&self, enabled: bool) {
+        if self.last_show_cpu.get() == enabled {
+            return;
+        }
         self.show_cpu_item.setState(if enabled {
             NSControlStateValueOn
         } else {
             NSControlStateValueOff
         });
+        self.last_show_cpu.set(enabled);
     }
 
     pub fn set_show_gpu(&self, enabled: bool) {
+        if self.last_show_gpu.get() == enabled {
+            return;
+        }
         self.show_gpu_item.setState(if enabled {
             NSControlStateValueOn
         } else {
             NSControlStateValueOff
         });
+        self.last_show_gpu.set(enabled);
     }
 
     pub fn set_settings_state(
@@ -652,7 +712,12 @@ impl TrayController {
                 *self.last_rings.borrow_mut() = Some(memory.rings.clone());
             }
             if accent_changed || self.last_breakdown.borrow().as_ref() != Some(&memory.breakdown) {
-                update_legend_items(&self.legend_items, &memory.breakdown, &accent_color);
+                update_legend_items(
+                    &self.legend_items,
+                    &memory.breakdown,
+                    *accent,
+                    &self.row_render_cache,
+                );
                 *self.last_breakdown.borrow_mut() = Some(memory.breakdown.clone());
             }
             self.update_app_section(&memory.apps, &accent_color, accent_changed);
@@ -661,6 +726,7 @@ impl TrayController {
                     self.swap_item.setAttributedTitle(Some(&stat_row_attributed(
                         swap_row,
                         accent_color.clone(),
+                        &self.row_render_cache,
                     )));
                 }
                 *self.last_swap_row.borrow_mut() = memory.swap.clone();
@@ -669,13 +735,13 @@ impl TrayController {
                 ModuleDisplay::Cpu(cpu) => Some(cpu),
                 ModuleDisplay::Memory(_) | ModuleDisplay::Gpu(_) => None,
             }) {
-                self.update_cpu_module(&cpu.state, &accent_color, accent_changed);
+                self.update_cpu_module(&cpu.state, &accent_color, *accent, accent_changed);
             }
             if let Some(gpu) = modules.iter().find_map(|module| match module {
                 ModuleDisplay::Gpu(gpu) => Some(gpu),
                 ModuleDisplay::Memory(_) | ModuleDisplay::Cpu(_) => None,
             }) {
-                self.update_gpu_module(gpu, &accent_color, accent_changed);
+                self.update_gpu_module(gpu, &accent_color, *accent, accent_changed);
             }
             self.last_accent.set(*accent);
         }
@@ -690,7 +756,11 @@ impl TrayController {
         }
         if let AppSectionDisplay::Rows { rows } = apps {
             for (item, row) in self.app_items.iter().zip(rows.iter()) {
-                item.setAttributedTitle(Some(&app_row_attributed(row, accent)));
+                item.setAttributedTitle(Some(&app_row_attributed(
+                    row,
+                    accent,
+                    &self.row_render_cache,
+                )));
                 item.setImage(self.app_row_icon(row).as_deref());
                 item.setSubmenu(None);
             }
@@ -698,7 +768,13 @@ impl TrayController {
         *self.last_app_section.borrow_mut() = Some(apps.clone());
     }
 
-    fn update_cpu_module(&self, cpu: &CpuDisplayState, accent: &NSColor, accent_changed: bool) {
+    fn update_cpu_module(
+        &self,
+        cpu: &CpuDisplayState,
+        accent: &NSColor,
+        accent_kind: Accent,
+        accent_changed: bool,
+    ) {
         if !accent_changed && self.last_cpu_state.borrow().as_ref() == Some(cpu) {
             return;
         }
@@ -709,26 +785,47 @@ impl TrayController {
             processes,
         } = cpu
         {
-            update_legend_items(&self.cpu_legend_items, utilization, accent);
+            update_legend_items(
+                &self.cpu_legend_items,
+                utilization,
+                accent_kind,
+                &self.row_render_cache,
+            );
             for (item, row) in self.cpu_core_items.iter().zip(cores) {
                 item.setAttributedTitle(Some(&stat_row_attributed(
                     row,
                     accent.colorWithAlphaComponent(1.0),
+                    &self.row_render_cache,
                 )));
-                item.setImage(make_legend_icon(&accent.colorWithAlphaComponent(0.65)).as_deref());
+                item.setImage(
+                    self.row_render_cache
+                        .legend_icon(accent_kind, 65)
+                        .as_deref(),
+                );
             }
             for (item, row) in self.cpu_process_items.iter().zip(processes) {
                 item.setAttributedTitle(Some(&stat_row_attributed(
                     row,
                     accent.colorWithAlphaComponent(1.0),
+                    &self.row_render_cache,
                 )));
-                item.setImage(make_legend_icon(&accent.colorWithAlphaComponent(0.35)).as_deref());
+                item.setImage(
+                    self.row_render_cache
+                        .legend_icon(accent_kind, 35)
+                        .as_deref(),
+                );
             }
         }
         *self.last_cpu_state.borrow_mut() = Some(cpu.clone());
     }
 
-    fn update_gpu_module(&self, gpu: &GpuModuleDisplay, accent: &NSColor, accent_changed: bool) {
+    fn update_gpu_module(
+        &self,
+        gpu: &GpuModuleDisplay,
+        accent: &NSColor,
+        accent_kind: Accent,
+        accent_changed: bool,
+    ) {
         if !accent_changed && self.last_gpu.borrow().as_ref() == Some(gpu) {
             return;
         }
@@ -737,9 +834,13 @@ impl TrayController {
             .setAttributedTitle(Some(&stat_row_attributed(
                 &gpu.utilization,
                 accent.colorWithAlphaComponent(1.0),
+                &self.row_render_cache,
             )));
-        self.gpu_utilization_item
-            .setImage(make_legend_icon(&accent.colorWithAlphaComponent(1.0)).as_deref());
+        self.gpu_utilization_item.setImage(
+            self.row_render_cache
+                .legend_icon(accent_kind, 100)
+                .as_deref(),
+        );
         *self.last_gpu.borrow_mut() = Some(gpu.clone());
     }
 
@@ -878,11 +979,19 @@ impl TrayController {
     }
 }
 
-fn update_legend_items(items: &[Retained<NSMenuItem>], rows: &[LegendRow], accent: &NSColor) {
+fn update_legend_items(
+    items: &[Retained<NSMenuItem>],
+    rows: &[LegendRow],
+    accent: Accent,
+    render_cache: &RowRenderCache,
+) {
     for (item, row) in items.iter().zip(rows) {
-        let row_color = accent.colorWithAlphaComponent(f64::from(row.opacity_percent) / 100.0);
-        item.setAttributedTitle(Some(&legend_row_attributed(row)));
-        item.setImage(make_legend_icon(&row_color).as_deref());
+        item.setAttributedTitle(Some(&legend_row_attributed(row, render_cache)));
+        item.setImage(
+            render_cache
+                .legend_icon(accent, row.opacity_percent)
+                .as_deref(),
+        );
     }
 }
 
@@ -962,17 +1071,25 @@ fn make_stat_item(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
     item
 }
 
-fn app_row_attributed(row: &StatRow, accent: &NSColor) -> Retained<NSAttributedString> {
+fn app_row_attributed(
+    row: &StatRow,
+    accent: &NSColor,
+    render_cache: &RowRenderCache,
+) -> Retained<NSAttributedString> {
     let primary = accent.colorWithAlphaComponent(1.0);
     stat_row_attributed_colored(
         row,
         primary.clone(),
         accent.colorWithAlphaComponent(0.65),
         primary,
+        render_cache,
     )
 }
 
-fn legend_row_attributed(row: &LegendRow) -> Retained<NSAttributedString> {
+fn legend_row_attributed(
+    row: &LegendRow,
+    render_cache: &RowRenderCache,
+) -> Retained<NSAttributedString> {
     stat_row_attributed_colored(
         &StatRow {
             primary: row.label.clone(),
@@ -982,6 +1099,7 @@ fn legend_row_attributed(row: &LegendRow) -> Retained<NSAttributedString> {
         NSColor::labelColor(),
         NSColor::secondaryLabelColor(),
         NSColor::labelColor(),
+        render_cache,
     )
 }
 
@@ -1072,12 +1190,14 @@ fn attrs_for(
 fn stat_row_attributed(
     row: &StatRow,
     primary_color: Retained<NSColor>,
+    render_cache: &RowRenderCache,
 ) -> Retained<NSAttributedString> {
     stat_row_attributed_colored(
         row,
         primary_color.clone(),
         NSColor::secondaryLabelColor(),
         primary_color,
+        render_cache,
     )
 }
 
@@ -1086,8 +1206,9 @@ fn stat_row_attributed_colored(
     primary_color: Retained<NSColor>,
     tail_color: Retained<NSColor>,
     delta_color: Retained<NSColor>,
+    render_cache: &RowRenderCache,
 ) -> Retained<NSAttributedString> {
-    let font = stat_font();
+    let font = render_cache.font.clone();
     let primary_attrs = attrs_for(primary_color, font.clone());
     let primary_str = NSString::from_str(&row.primary);
     let primary = unsafe { NSAttributedString::new_with_attributes(&primary_str, &primary_attrs) };
@@ -1129,13 +1250,12 @@ fn stat_row_attributed_colored(
         result.appendAttributedString(&delta_attr);
     }
 
-    apply_paragraph_style(&result);
+    apply_paragraph_style(&result, &render_cache.paragraph_style);
     Retained::into_super(result)
 }
 
-fn apply_paragraph_style(s: &NSMutableAttributedString) {
-    let style = row_paragraph_style();
-    let style_obj = unsafe { Retained::cast_unchecked::<AnyObject>(style) };
+fn apply_paragraph_style(s: &NSMutableAttributedString, style: &Retained<NSMutableParagraphStyle>) {
+    let style_obj = unsafe { Retained::cast_unchecked::<AnyObject>(style.clone()) };
     let range = objc2_foundation::NSRange {
         location: 0,
         length: s.length(),
@@ -1145,7 +1265,7 @@ fn apply_paragraph_style(s: &NSMutableAttributedString) {
     }
 }
 
-fn loading_attributed_title() -> Retained<NSAttributedString> {
+fn loading_attributed_title(render_cache: &RowRenderCache) -> Retained<NSAttributedString> {
     stat_row_attributed(
         &StatRow {
             primary: "Loading…".to_string(),
@@ -1153,10 +1273,11 @@ fn loading_attributed_title() -> Retained<NSAttributedString> {
             bundle_path: None,
         },
         NSColor::secondaryLabelColor(),
+        render_cache,
     )
 }
 
-fn unavailable_attributed_title() -> Retained<NSAttributedString> {
+fn unavailable_attributed_title(render_cache: &RowRenderCache) -> Retained<NSAttributedString> {
     stat_row_attributed(
         &StatRow {
             primary: "Unavailable".to_string(),
@@ -1164,6 +1285,7 @@ fn unavailable_attributed_title() -> Retained<NSAttributedString> {
             bundle_path: None,
         },
         NSColor::secondaryLabelColor(),
+        render_cache,
     )
 }
 
