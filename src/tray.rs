@@ -467,7 +467,6 @@ impl TrayController {
         gpu: crate::model::GpuModuleState,
         apps: &AppMemorySnapshot,
         cpu_processes: &ProcessCpuSnapshot,
-        history: &[u64],
         launch_at_login_status: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
@@ -481,7 +480,6 @@ impl TrayController {
                 },
                 apps,
                 cpu_processes,
-                history,
             ),
             launch_at_login_status,
             auto_refresh_enabled,
@@ -979,7 +977,6 @@ fn legend_row_attributed(row: &LegendRow) -> Retained<NSAttributedString> {
         &StatRow {
             primary: row.label.clone(),
             tail: Some(row.value.clone()),
-            quit_key: None,
             bundle_path: None,
         },
         NSColor::labelColor(),
@@ -1153,7 +1150,6 @@ fn loading_attributed_title() -> Retained<NSAttributedString> {
         &StatRow {
             primary: "Loading…".to_string(),
             tail: None,
-            quit_key: None,
             bundle_path: None,
         },
         NSColor::secondaryLabelColor(),
@@ -1165,7 +1161,6 @@ fn unavailable_attributed_title() -> Retained<NSAttributedString> {
         &StatRow {
             primary: "Unavailable".to_string(),
             tail: None,
-            quit_key: None,
             bundle_path: None,
         },
         NSColor::secondaryLabelColor(),
@@ -1189,7 +1184,6 @@ pub(crate) enum MenuEntry<'a> {
         primary: &'a str,
         tail: Option<&'a str>,
     },
-    Sparkline,
     Loading,
     AppLoading,
     AppUnavailable,
@@ -1198,7 +1192,6 @@ pub(crate) enum MenuEntry<'a> {
     AppRow {
         primary: &'a str,
         tail: Option<&'a str>,
-        quit_key: Option<&'a str>,
     },
     Separator,
     Refresh {
@@ -1254,7 +1247,6 @@ pub(crate) fn loaded_menu_entries(model: &DropdownModel) -> Vec<MenuEntry<'_>> {
                         entries.push(MenuEntry::AppRow {
                             primary: &row.primary,
                             tail: row.tail.as_deref(),
-                            quit_key: row.quit_key.as_deref(),
                         });
                     }
                 }
@@ -1450,10 +1442,25 @@ mod tests {
     }
 
     #[test]
-    fn compact_menu_omits_the_decorative_sparkline() {
+    fn compact_menu_omits_decorative_history() {
+        // ADR-0001 keeps the native dropdown bounded: memory is current state,
+        // not a decorative history dashboard.
         let model = dropdown_model(snapshot());
         let entries = loaded_menu_entries(&model);
-        assert!(!entries.contains(&MenuEntry::Sparkline));
+        assert!(matches!(
+            &entries[..6],
+            [
+                MenuEntry::Rings { .. },
+                MenuEntry::Legend { .. },
+                MenuEntry::Legend { .. },
+                MenuEntry::Legend { .. },
+                MenuEntry::Legend { .. },
+                MenuEntry::Stat {
+                    primary: "Swap",
+                    ..
+                },
+            ]
+        ));
     }
 
     #[test]
@@ -1473,7 +1480,7 @@ mod tests {
 
     #[test]
     fn loaded_with_apps_hidden_omits_apps_section() {
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden, &[]);
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Hidden);
         let entries = loaded_menu_entries(&model);
         assert!(!entries.iter().any(|e| matches!(
             e,
@@ -1483,7 +1490,7 @@ mod tests {
 
     #[test]
     fn loaded_with_apps_loading_renders_loading_row() {
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading, &[]);
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading);
         let entries = loaded_menu_entries(&model);
         assert_eq!(entries[6], MenuEntry::Separator);
         assert_eq!(entries[7], MenuEntry::AppLoading);
@@ -1491,7 +1498,7 @@ mod tests {
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable, &[]);
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable);
         let entries = loaded_menu_entries(&model);
         assert_eq!(entries[6], MenuEntry::Separator);
         assert_eq!(entries[7], MenuEntry::AppUnavailable);
@@ -1531,7 +1538,6 @@ mod tests {
                 group_key: "/Applications/Cursor.app".to_string(),
                 footprint_bytes: 2_147_483_648,
                 pids: vec![1],
-                can_quit: true,
                 delta_bytes: None,
             },
             AppMemoryUsage {
@@ -1539,11 +1545,10 @@ mod tests {
                 group_key: "/Applications/Chrome.app".to_string(),
                 footprint_bytes: 1_288_490_189,
                 pids: vec![2],
-                can_quit: true,
                 delta_bytes: None,
             },
         ];
-        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage), &[]);
+        let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loaded(usage));
         let entries = loaded_menu_entries(&model);
 
         assert!(matches!(entries[0], MenuEntry::Rings { .. }));
@@ -1567,7 +1572,6 @@ mod tests {
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
-                quit_key: None,
             }
         );
         assert_eq!(
@@ -1575,7 +1579,6 @@ mod tests {
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
-                quit_key: None,
             }
         );
         assert_eq!(entries[9], MenuEntry::Separator);
@@ -1640,8 +1643,7 @@ mod tests {
             name: "Video Encoder".to_string(),
             utilization_percent: 240,
         }]);
-        let model =
-            dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes, &[]);
+        let model = dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes);
         let entries = loaded_menu_entries(&model);
 
         assert_eq!(

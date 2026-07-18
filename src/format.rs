@@ -62,10 +62,6 @@ pub fn delta_bytes_text(delta_bytes: u64) -> String {
 pub struct StatRow {
     pub primary: String,
     pub tail: Option<String>,
-    /// Stable identity (the app's `group_key`) used to quit the app. `Some` only
-    /// when the row is quittable. Kept as an identity rather than a positional
-    /// index so a reordered or refreshed app list can never quit the wrong app.
-    pub quit_key: Option<String>,
     pub bundle_path: Option<String>,
 }
 
@@ -113,7 +109,6 @@ pub struct MemoryModuleDisplay {
     pub rings: [RingDisplay; 2],
     pub breakdown: [LegendRow; 4],
     pub swap: Option<StatRow>,
-    pub history: Vec<u64>,
     pub apps: AppSectionDisplay,
 }
 
@@ -156,22 +151,20 @@ pub enum DropdownModel {
 }
 
 pub fn dropdown_model(snapshot: SystemSnapshot) -> DropdownModel {
-    dropdown_model_with_apps(snapshot, &AppMemorySnapshot::Hidden, &[])
+    dropdown_model_with_apps(snapshot, &AppMemorySnapshot::Hidden)
 }
 
 pub fn dropdown_model_with_apps(
     snapshot: SystemSnapshot,
     apps: &AppMemorySnapshot,
-    history: &[u64],
 ) -> DropdownModel {
-    dropdown_model_with_sections(snapshot, apps, &ProcessCpuSnapshot::Hidden, history)
+    dropdown_model_with_sections(snapshot, apps, &ProcessCpuSnapshot::Hidden)
 }
 
 pub(crate) fn dropdown_model_with_sections(
     snapshot: SystemSnapshot,
     apps: &AppMemorySnapshot,
     cpu_processes: &ProcessCpuSnapshot,
-    history: &[u64],
 ) -> DropdownModel {
     let memory = snapshot.memory;
     let accent = Accent::from(classify_pressure(memory.pressure_percent));
@@ -197,10 +190,8 @@ pub(crate) fn dropdown_model_with_sections(
         swap: (memory.swap_used_bytes > 0).then(|| StatRow {
             primary: "Swap".to_string(),
             tail: Some(mem_text(memory.swap_used_bytes)),
-            quit_key: None,
             bundle_path: None,
         }),
-        history: history.to_vec(),
         apps: app_section_display(apps),
     }))];
     match snapshot.cpu {
@@ -236,7 +227,6 @@ pub(crate) fn dropdown_model_with_sections(
             utilization: StatRow {
                 primary: "Utilization".to_string(),
                 tail: Some(format!("{}%", gpu.utilization_percent.min(100))),
-                quit_key: None,
                 bundle_path: None,
             },
         }));
@@ -258,7 +248,6 @@ fn cpu_process_row(process: &ProcessCpuUsage) -> StatRow {
     StatRow {
         primary: truncate_name(&process.name, APP_NAME_MAX_CHARS),
         tail: Some(format!("{}%", process.utilization_percent)),
-        quit_key: None,
         bundle_path: None,
     }
 }
@@ -275,7 +264,6 @@ fn cpu_core_row(label: &str, percent: u8) -> StatRow {
     StatRow {
         primary: label.to_string(),
         tail: Some(format!("{}%", percent.min(100))),
-        quit_key: None,
         bundle_path: None,
     }
 }
@@ -321,7 +309,6 @@ fn app_row(app: &AppMemoryUsage) -> StatRow {
     StatRow {
         primary: truncate_name(&app.name, APP_NAME_MAX_CHARS),
         tail: Some(tail),
-        quit_key: None,
         bundle_path: app
             .group_key
             .ends_with(".app")
@@ -429,15 +416,14 @@ mod tests {
 
     #[test]
     fn dropdown_model_with_apps_loading() {
-        let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loading, &[]);
+        let model = dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loading);
         assert_eq!(memory_module(&model).apps, AppSectionDisplay::Loading);
     }
 
     #[test]
     fn dropdown_model_with_apps_unavailable() {
         let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Unavailable, &[]);
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Unavailable);
         assert_eq!(memory_module(&model).apps, AppSectionDisplay::Unavailable);
     }
 
@@ -448,21 +434,16 @@ mod tests {
             group_key: "/Applications/Cursor.app".to_string(),
             footprint_bytes: 2_147_483_648,
             pids: vec![42],
-            can_quit: true,
             delta_bytes: None,
         }];
-        let model = dropdown_model_with_apps(
-            snapshot(SIXTEEN_GIB),
-            &AppMemorySnapshot::Loaded(usage),
-            &[],
-        );
+        let model =
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
         let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
             panic!("expected Rows");
         };
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].primary, "Cursor");
         assert_eq!(rows[0].tail.as_deref(), Some("2.0 GB"));
-        assert_eq!(rows[0].quit_key, None);
     }
 
     #[test]
@@ -472,14 +453,10 @@ mod tests {
             group_key: "/Applications/Tiny.app".to_string(),
             footprint_bytes: 256_901_120,
             pids: vec![1],
-            can_quit: true,
             delta_bytes: None,
         }];
-        let model = dropdown_model_with_apps(
-            snapshot(SIXTEEN_GIB),
-            &AppMemorySnapshot::Loaded(usage),
-            &[],
-        );
+        let model =
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
         let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
             panic!("expected Rows");
         };
@@ -493,14 +470,10 @@ mod tests {
             group_key: "/Applications/Codex Computer Use.app".to_string(),
             footprint_bytes: 84_934_656,
             pids: vec![1],
-            can_quit: true,
             delta_bytes: None,
         }];
-        let model = dropdown_model_with_apps(
-            snapshot(SIXTEEN_GIB),
-            &AppMemorySnapshot::Loaded(usage),
-            &[],
-        );
+        let model =
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
         let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
             panic!("expected Rows");
         };
@@ -584,7 +557,7 @@ mod tests {
         ]);
 
         let DropdownModel::Loaded { modules, .. } =
-            dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes, &[])
+            dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes)
         else {
             panic!("expected loaded model");
         };
@@ -598,7 +571,6 @@ mod tests {
         assert_eq!(processes[0].primary, "Video Encoder");
         assert_eq!(processes[0].tail.as_deref(), Some("240%"));
         assert_eq!(processes[2].primary, "Renderer");
-        assert!(processes.iter().all(|row| row.quit_key.is_none()));
         assert!(processes.iter().all(|row| row.bundle_path.is_none()));
     }
 
@@ -673,7 +645,7 @@ mod tests {
             usage("Three", 3, None),
         ];
         rank_app_rows(&mut usage);
-        let model = dropdown_model_with_apps(snapshot(100), &AppMemorySnapshot::Loaded(usage), &[]);
+        let model = dropdown_model_with_apps(snapshot(100), &AppMemorySnapshot::Loaded(usage));
         let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
             panic!("expected app rows");
         };
@@ -689,17 +661,13 @@ mod tests {
             usage("Codex", 500_000_000, Some(80_000_000)),
         ];
         rank_app_rows(&mut usage);
-        let model = dropdown_model_with_apps(
-            snapshot(SIXTEEN_GIB),
-            &AppMemorySnapshot::Loaded(usage),
-            &[],
-        );
+        let model =
+            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
         let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
             panic!("expected app rows");
         };
         assert_eq!(rows[0].primary, "Zen");
         assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB"));
-        assert_eq!(rows[0].quit_key, None);
     }
 
     fn usage(name: &str, footprint_bytes: u64, delta_bytes: Option<i64>) -> AppMemoryUsage {
@@ -708,7 +676,6 @@ mod tests {
             group_key: format!("/Applications/{name}.app"),
             footprint_bytes,
             pids: vec![1],
-            can_quit: true,
             delta_bytes,
         }
     }

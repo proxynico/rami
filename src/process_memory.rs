@@ -36,7 +36,6 @@ pub struct AppMemoryUsage {
     pub group_key: String,
     pub footprint_bytes: u64,
     pub pids: Vec<pid_t>,
-    pub can_quit: bool,
     pub delta_bytes: Option<i64>,
 }
 
@@ -288,13 +287,11 @@ fn aggregate(records: Vec<ProcessMemoryRecord>, top_n: usize) -> Vec<AppMemoryUs
         .into_iter()
         .map(|(group_key, (name, bytes, mut pids))| {
             pids.sort_unstable();
-            let can_quit = can_quit_group(&group_key, &name);
             AppMemoryUsage {
                 name,
                 group_key,
                 footprint_bytes: bytes,
                 pids,
-                can_quit,
                 delta_bytes: None,
             }
         })
@@ -307,14 +304,6 @@ fn aggregate(records: Vec<ProcessMemoryRecord>, top_n: usize) -> Vec<AppMemoryUs
     });
     rows.truncate(top_n);
     rows
-}
-
-fn can_quit_group(group_key: &str, name: &str) -> bool {
-    is_absolute_app_bundle_path(group_key) && !name.eq_ignore_ascii_case("rami")
-}
-
-fn is_absolute_app_bundle_path(group_key: &str) -> bool {
-    group_key.starts_with('/') && group_key.ends_with(".app")
 }
 
 #[cfg(test)]
@@ -479,14 +468,6 @@ mod tests {
         assert_eq!(rows[0].name, "Cursor");
         assert_eq!(rows[0].footprint_bytes, 600);
         assert_eq!(rows[0].pids, vec![1, 2, 3]);
-        assert!(rows[0].can_quit);
-    }
-
-    #[test]
-    fn aggregate_marks_rami_as_not_quittable() {
-        let rows = aggregate(vec![record(1, "/Applications/rami.app", "rami", 100)], 5);
-        assert_eq!(rows[0].name, "rami");
-        assert!(!rows[0].can_quit);
     }
 
     #[test]

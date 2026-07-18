@@ -3,7 +3,6 @@ pub mod format;
 pub mod lock;
 pub mod memory;
 pub mod model;
-pub mod sparkline;
 
 mod cpu;
 mod diagnostics;

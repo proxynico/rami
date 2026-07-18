@@ -146,7 +146,6 @@ mod tests {
             group_key: "/Applications/Cursor.app".to_string(),
             footprint_bytes: 2_254_579_918,
             pids: vec![42, 43],
-            can_quit: true,
             delta_bytes: Some(367_001_600),
         }]);
         let report = build_diagnostic_report(DiagnosticReportInput {

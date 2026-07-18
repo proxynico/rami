@@ -260,7 +260,6 @@ mod tests {
             group_key: format!("/Applications/{name}.app"),
             footprint_bytes: 1,
             pids: vec![1],
-            can_quit: true,
             delta_bytes: None,
         }
     }
@@ -312,14 +311,12 @@ impl AppState {
                     self.last_gpu_state.set(gpu);
                     let apps = self.app_memory.borrow();
                     let cpu_processes = self.cpu_processes.borrow();
-                    let history = self.trend_tracker.borrow().samples();
                     self.tray.set_menu_snapshot(
                         snapshot,
                         cpu,
                         gpu,
                         &apps,
                         &cpu_processes,
-                        &history,
                         self.launch_at_login_status.get(),
                         self.auto_refresh_enabled.get(),
                         mtm,
@@ -367,14 +364,12 @@ impl AppState {
         };
         let apps = self.app_memory.borrow();
         let cpu_processes = self.cpu_processes.borrow();
-        let history = self.trend_tracker.borrow().samples();
         self.tray.set_menu_snapshot(
             snapshot,
             self.last_cpu_state.get(),
             self.last_gpu_state.get(),
             &apps,
             &cpu_processes,
-            &history,
             self.launch_at_login_status.get(),
             self.auto_refresh_enabled.get(),
             mtm,
