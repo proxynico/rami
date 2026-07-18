@@ -46,6 +46,27 @@ RAMI_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
   ./scripts/build-app.sh
 ```
 
+## Previewing the pressure accents
+
+The dropdown inherits one accent from the current memory pressure: neutral when
+Normal, orange at Warning (>= 88%), red at Critical (>= 95%). Those last two are
+unreachable in normal use without genuinely exhausting memory, so
+`RAMI_FORCE_PRESSURE` overrides the reading:
+
+```sh
+RAMI_FORCE_PRESSURE=critical ./target/release/rami
+RAMI_FORCE_PRESSURE=warning  ./target/release/rami
+RAMI_FORCE_PRESSURE=normal   ./target/release/rami
+```
+
+Accepts those three names only, case-insensitively; anything else logs a warning
+and is ignored. Read once at startup, so changing it needs a relaunch. It affects
+the displayed pressure percent and the accent derived from it, nothing else.
+
+This is a development hook, but it is compiled into release builds deliberately —
+`build-app.sh` produces a release bundle, so gating it out would make it useless
+for checking the accents in the app people actually run.
+
 ## Notarized DMG
 
 `scripts/release.sh` builds, signs, packages, notarizes, and staples a

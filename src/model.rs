@@ -65,8 +65,8 @@ pub enum MemoryPressure {
     Critical,
 }
 
-const CRITICAL_PRESSURE_PCT: u8 = 95;
-const WARNING_PRESSURE_PCT: u8 = 88;
+pub const CRITICAL_PRESSURE_PCT: u8 = 95;
+pub const WARNING_PRESSURE_PCT: u8 = 88;
 
 pub fn classify_pressure(pressure_percent: u8) -> MemoryPressure {
     if pressure_percent >= CRITICAL_PRESSURE_PCT {
