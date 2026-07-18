@@ -69,6 +69,7 @@ struct AppState {
     /// The single in-flight menu-open drain timer. Held so a new drain can
     /// cancel the previous one instead of stacking overlapping timers.
     menu_open_drain_timer: RefCell<Option<Retained<NSTimer>>>,
+    refresh_timer: RefCell<Option<Retained<NSTimer>>>,
 }
 
 const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
@@ -77,6 +78,21 @@ const APP_BASELINE_ROW_LIMIT: usize = 25;
 const MENU_REOPEN_DELAY_SECONDS: f64 = 0.05;
 const MENU_OPEN_DRAIN_DELAY_SECONDS: f64 = 0.15;
 const CPU_PROCESS_DRAIN_DELAY_SECONDS: f64 = 0.3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoRefreshTimerAction {
+    Arm,
+    Cancel,
+    Keep,
+}
+
+fn auto_refresh_timer_action(enabled: bool, timer_active: bool) -> AutoRefreshTimerAction {
+    match (enabled, timer_active) {
+        (true, false) => AutoRefreshTimerAction::Arm,
+        (false, true) => AutoRefreshTimerAction::Cancel,
+        _ => AutoRefreshTimerAction::Keep,
+    }
+}
 
 struct AppScanResult {
     generation: u64,
@@ -214,6 +230,26 @@ mod tests {
     }
 
     #[test]
+    fn auto_refresh_timer_tracks_the_setting() {
+        assert_eq!(
+            auto_refresh_timer_action(true, false),
+            AutoRefreshTimerAction::Arm
+        );
+        assert_eq!(
+            auto_refresh_timer_action(true, true),
+            AutoRefreshTimerAction::Keep
+        );
+        assert_eq!(
+            auto_refresh_timer_action(false, true),
+            AutoRefreshTimerAction::Cancel
+        );
+        assert_eq!(
+            auto_refresh_timer_action(false, false),
+            AutoRefreshTimerAction::Keep
+        );
+    }
+
+    #[test]
     fn cpu_process_results_require_the_current_visible_generation() {
         assert!(should_accept_cpu_process_result(7, 7, true, true));
         assert!(!should_accept_cpu_process_result(6, 7, true, true));
@@ -260,7 +296,6 @@ mod tests {
             group_key: format!("/Applications/{name}.app"),
             footprint_bytes: 1,
             pids: vec![1],
-            can_quit: true,
             delta_bytes: None,
         }
     }
@@ -312,14 +347,12 @@ impl AppState {
                     self.last_gpu_state.set(gpu);
                     let apps = self.app_memory.borrow();
                     let cpu_processes = self.cpu_processes.borrow();
-                    let history = self.trend_tracker.borrow().samples();
                     self.tray.set_menu_snapshot(
                         snapshot,
                         cpu,
                         gpu,
                         &apps,
                         &cpu_processes,
-                        &history,
                         self.launch_at_login_status.get(),
                         self.auto_refresh_enabled.get(),
                         mtm,
@@ -367,14 +400,12 @@ impl AppState {
         };
         let apps = self.app_memory.borrow();
         let cpu_processes = self.cpu_processes.borrow();
-        let history = self.trend_tracker.borrow().samples();
         self.tray.set_menu_snapshot(
             snapshot,
             self.last_cpu_state.get(),
             self.last_gpu_state.get(),
             &apps,
             &cpu_processes,
-            &history,
             self.launch_at_login_status.get(),
             self.auto_refresh_enabled.get(),
             mtm,
@@ -554,7 +585,41 @@ impl AppState {
         let enabled = !self.auto_refresh_enabled.get();
         self.auto_refresh_enabled.set(enabled);
         self.settings.set_auto_refresh_enabled(enabled);
+        self.sync_auto_refresh_timer();
         self.refresh(true);
+    }
+
+    fn sync_auto_refresh_timer(&self) {
+        let mut timer = self.refresh_timer.borrow_mut();
+        match auto_refresh_timer_action(self.auto_refresh_enabled.get(), timer.is_some()) {
+            AutoRefreshTimerAction::Arm => {
+                // NSRunLoopCommonModes keeps scheduled refreshes active while the
+                // menu is tracking; the default mode would freeze the dropdown.
+                let next = unsafe {
+                    NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
+                        5.0,
+                        &self.refresh_target,
+                        sel!(refreshOnTimer:),
+                        None,
+                        true,
+                    )
+                };
+                // Let the OS coalesce this timer with other wakeups. Kept to 10%
+                // of the interval: the menu-bar gauge updates on every tick, and
+                // the tick also drives the trend window and the app/swap cadences,
+                // so a large tolerance would reintroduce the cadence drift #18
+                // fixed — from the other direction.
+                next.setTolerance(0.5);
+                unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&next, NSRunLoopCommonModes) };
+                *timer = Some(next);
+            }
+            AutoRefreshTimerAction::Cancel => {
+                if let Some(timer) = timer.take() {
+                    timer.invalidate();
+                }
+            }
+            AutoRefreshTimerAction::Keep => {}
+        }
     }
 
     fn toggle_show_app_usage(&self) {
@@ -828,7 +893,6 @@ pub struct App {
     _lock: AppLock,
     _state: Rc<AppState>,
     _refresh_target: Retained<AnyObject>,
-    _timer: Retained<NSTimer>,
 }
 
 impl App {
@@ -889,30 +953,18 @@ impl App {
             last_cpu_state: Cell::new(CpuModuleState::Loading),
             last_gpu_state: Cell::new(GpuModuleState::Unavailable),
             menu_open_drain_timer: RefCell::new(None),
+            refresh_timer: RefCell::new(None),
         });
         install_app_state(&state);
         app.finishLaunching();
         state.refresh(true);
-        // NSRunLoopCommonModes so ticks keep firing while the menu is tracking;
-        // the default mode would freeze the dropdown whenever it is open.
-        let timer = unsafe {
-            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
-                5.0,
-                &refresh_target,
-                sel!(refreshOnTimer:),
-                None,
-                true,
-            )
-        };
-        timer.setTolerance(2.0);
-        unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
+        state.sync_auto_refresh_timer();
 
         Ok(Some(Self {
             app,
             _lock: lock,
             _state: state,
             _refresh_target: refresh_target,
-            _timer: timer,
         }))
     }
 

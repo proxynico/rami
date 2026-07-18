@@ -3,11 +3,11 @@ pub mod format;
 pub mod lock;
 pub mod memory;
 pub mod model;
-pub mod sparkline;
 
 mod cpu;
 mod diagnostics;
 mod gpu;
+mod iokit;
 mod login_item;
 mod memory_view;
 mod module_title_view;

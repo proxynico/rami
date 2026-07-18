@@ -111,11 +111,16 @@ fn process_usage_between(
 
 fn read_process_records(self_pid: pid_t) -> io::Result<Vec<ProcessCpuRecord>> {
     let pids = list_all_pids()?;
-    let records: Vec<_> = pids
-        .into_iter()
-        .filter(|pid| *pid > 0 && *pid != self_pid)
-        .filter_map(read_process_record)
-        .collect();
+    let mut path_buffer = vec![0_u8; PROC_PIDPATHINFO_MAXSIZE as usize];
+    let mut records = Vec::with_capacity(pids.len());
+    for pid in pids {
+        if pid <= 0 || pid == self_pid {
+            continue;
+        }
+        if let Some(record) = read_process_record(pid, &mut path_buffer) {
+            records.push(record);
+        }
+    }
     if records.is_empty() {
         Err(io::Error::other("no readable process CPU records"))
     } else {
@@ -143,7 +148,7 @@ fn list_all_pids() -> io::Result<Vec<pid_t>> {
     Ok(pids)
 }
 
-fn read_process_record(pid: pid_t) -> Option<ProcessCpuRecord> {
+fn read_process_record(pid: pid_t, path_buffer: &mut [u8]) -> Option<ProcessCpuRecord> {
     let mut usage = MaybeUninit::<rusage_info_v4>::zeroed();
     let result = unsafe {
         proc_pid_rusage(
@@ -161,7 +166,6 @@ fn read_process_record(pid: pid_t) -> Option<ProcessCpuRecord> {
     }
     let cpu_time_ns = usage.ri_user_time.checked_add(usage.ri_system_time)?;
 
-    let mut path_buffer = vec![0_u8; PROC_PIDPATHINFO_MAXSIZE as usize];
     let path_length = unsafe {
         proc_pidpath(
             pid,
@@ -172,8 +176,7 @@ fn read_process_record(pid: pid_t) -> Option<ProcessCpuRecord> {
     if path_length <= 0 {
         return None;
     }
-    path_buffer.truncate(path_length as usize);
-    let path = std::str::from_utf8(&path_buffer).ok()?;
+    let path = std::str::from_utf8(&path_buffer[..path_length as usize]).ok()?;
     Some(ProcessCpuRecord {
         pid,
         start_time: usage.ri_proc_start_abstime,

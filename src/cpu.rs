@@ -1,55 +1,20 @@
+use crate::iokit::{
+    CFDataGetBytePtr, CFDataGetLength, CFDataGetTypeID, CFGetTypeID, CFNumberGetTypeID,
+    CFNumberGetValue, CFStringCreateWithCString, CfIndex, CfObject, IOIteratorNext,
+    IORegistryEntryCreateCFProperty, IORegistryEntryFromPath, IORegistryEntryGetChildIterator,
+    IoObject, IoObjectId, CF_STRING_ENCODING_UTF8,
+};
 use crate::model::CpuSnapshot;
 use libc::{
-    c_char, c_void, host_processor_info, integer_t, mach_msg_type_number_t, natural_t,
-    vm_address_t, vm_deallocate, vm_size_t, CPU_STATE_IDLE, CPU_STATE_MAX, CPU_STATE_NICE,
-    CPU_STATE_SYSTEM, CPU_STATE_USER, PROCESSOR_CPU_LOAD_INFO,
+    host_processor_info, integer_t, mach_msg_type_number_t, natural_t, vm_address_t, vm_deallocate,
+    vm_size_t, CPU_STATE_IDLE, CPU_STATE_MAX, CPU_STATE_NICE, CPU_STATE_SYSTEM, CPU_STATE_USER,
+    PROCESSOR_CPU_LOAD_INFO,
 };
 use std::ffi::CStr;
 use std::io;
 use std::mem::size_of;
 
-type IoObjectId = libc::mach_port_t;
-type CfTypeRef = *const c_void;
-type CfStringRef = *const c_void;
-type CfTypeId = usize;
-type CfIndex = isize;
-
-const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 const CF_NUMBER_SINT64_TYPE: CfIndex = 4;
-
-#[link(name = "IOKit", kind = "framework")]
-unsafe extern "C" {
-    fn IORegistryEntryFromPath(main_port: libc::mach_port_t, path: *const c_char) -> IoObjectId;
-    fn IORegistryEntryGetChildIterator(
-        entry: IoObjectId,
-        plane: *const c_char,
-        iterator: *mut IoObjectId,
-    ) -> libc::kern_return_t;
-    fn IORegistryEntryCreateCFProperty(
-        entry: IoObjectId,
-        key: CfStringRef,
-        allocator: *const c_void,
-        options: u32,
-    ) -> CfTypeRef;
-    fn IOIteratorNext(iterator: IoObjectId) -> IoObjectId;
-    fn IOObjectRelease(object: IoObjectId) -> libc::kern_return_t;
-}
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFStringCreateWithCString(
-        allocator: *const c_void,
-        string: *const c_char,
-        encoding: u32,
-    ) -> CfStringRef;
-    fn CFGetTypeID(value: CfTypeRef) -> CfTypeId;
-    fn CFNumberGetTypeID() -> CfTypeId;
-    fn CFNumberGetValue(number: CfTypeRef, number_type: CfIndex, value: *mut c_void) -> u8;
-    fn CFDataGetTypeID() -> CfTypeId;
-    fn CFDataGetLength(data: CfTypeRef) -> CfIndex;
-    fn CFDataGetBytePtr(data: CfTypeRef) -> *const u8;
-    fn CFRelease(value: CfTypeRef);
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProcessorTicks {
@@ -323,42 +288,6 @@ fn registry_property(entry: IoObjectId, key: &CStr) -> Option<CfObject> {
         CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), CF_STRING_ENCODING_UTF8)
     })?;
     CfObject::new(unsafe { IORegistryEntryCreateCFProperty(entry, key.get(), std::ptr::null(), 0) })
-}
-
-struct IoObject(IoObjectId);
-
-impl IoObject {
-    fn new(id: IoObjectId) -> Option<Self> {
-        (id != 0).then_some(Self(id))
-    }
-
-    fn id(&self) -> IoObjectId {
-        self.0
-    }
-}
-
-impl Drop for IoObject {
-    fn drop(&mut self) {
-        let _ = unsafe { IOObjectRelease(self.0) };
-    }
-}
-
-struct CfObject(CfTypeRef);
-
-impl CfObject {
-    fn new(value: CfTypeRef) -> Option<Self> {
-        (!value.is_null()).then_some(Self(value))
-    }
-
-    fn get(&self) -> CfTypeRef {
-        self.0
-    }
-}
-
-impl Drop for CfObject {
-    fn drop(&mut self) {
-        unsafe { CFRelease(self.0) };
-    }
 }
 
 fn snapshot_from_ticks(
