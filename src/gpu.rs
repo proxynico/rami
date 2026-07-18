@@ -1,50 +1,12 @@
+use crate::iokit::{
+    CFDictionaryGetTypeID, CFDictionaryGetValue, CFGetTypeID, CFNumberGetTypeID, CFNumberGetValue,
+    CFStringCreateWithCString, CfIndex, CfObject, IOIteratorNext, IORegistryEntryCreateCFProperty,
+    IOServiceGetMatchingServices, IOServiceMatching, IoObject, IoObjectId, CF_STRING_ENCODING_UTF8,
+};
 use crate::model::GpuSnapshot;
-use libc::{c_char, c_void};
 use std::io;
 
-type IoObjectId = libc::mach_port_t;
-type CfTypeRef = *const c_void;
-type CfStringRef = *const c_void;
-type CfDictionaryRef = *const c_void;
-type CfMutableDictionaryRef = *mut c_void;
-type CfTypeId = usize;
-type CfIndex = isize;
-
-const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 const CF_NUMBER_SINT64_TYPE: CfIndex = 4;
-
-#[link(name = "IOKit", kind = "framework")]
-unsafe extern "C" {
-    fn IOServiceMatching(name: *const c_char) -> CfMutableDictionaryRef;
-    fn IOServiceGetMatchingServices(
-        main_port: libc::mach_port_t,
-        matching: CfDictionaryRef,
-        iterator: *mut IoObjectId,
-    ) -> libc::kern_return_t;
-    fn IORegistryEntryCreateCFProperty(
-        entry: IoObjectId,
-        key: CfStringRef,
-        allocator: *const c_void,
-        options: u32,
-    ) -> CfTypeRef;
-    fn IOIteratorNext(iterator: IoObjectId) -> IoObjectId;
-    fn IOObjectRelease(object: IoObjectId) -> libc::kern_return_t;
-}
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFStringCreateWithCString(
-        allocator: *const c_void,
-        string: *const c_char,
-        encoding: u32,
-    ) -> CfStringRef;
-    fn CFGetTypeID(value: CfTypeRef) -> CfTypeId;
-    fn CFDictionaryGetTypeID() -> CfTypeId;
-    fn CFDictionaryGetValue(dictionary: CfDictionaryRef, key: *const c_void) -> *const c_void;
-    fn CFNumberGetTypeID() -> CfTypeId;
-    fn CFNumberGetValue(number: CfTypeRef, number_type: CfIndex, value: *mut c_void) -> u8;
-    fn CFRelease(value: CfTypeRef);
-}
 
 pub(crate) struct GpuSampler;
 
@@ -127,42 +89,6 @@ fn registry_property(entry: IoObjectId, key: &std::ffi::CStr) -> Option<CfObject
 
 fn normalized_utilization(raw: i64) -> Option<u8> {
     (0..=100).contains(&raw).then_some(raw as u8)
-}
-
-struct IoObject(IoObjectId);
-
-impl IoObject {
-    fn new(id: IoObjectId) -> Option<Self> {
-        (id != 0).then_some(Self(id))
-    }
-
-    fn id(&self) -> IoObjectId {
-        self.0
-    }
-}
-
-impl Drop for IoObject {
-    fn drop(&mut self) {
-        let _ = unsafe { IOObjectRelease(self.0) };
-    }
-}
-
-struct CfObject(CfTypeRef);
-
-impl CfObject {
-    fn new(value: CfTypeRef) -> Option<Self> {
-        (!value.is_null()).then_some(Self(value))
-    }
-
-    fn get(&self) -> CfTypeRef {
-        self.0
-    }
-}
-
-impl Drop for CfObject {
-    fn drop(&mut self) {
-        unsafe { CFRelease(self.0) };
-    }
 }
 
 #[cfg(test)]

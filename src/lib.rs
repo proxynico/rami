@@ -7,6 +7,7 @@ pub mod model;
 mod cpu;
 mod diagnostics;
 mod gpu;
+mod iokit;
 mod login_item;
 mod memory_view;
 mod module_title_view;
