@@ -62,6 +62,13 @@ struct AppState {
     last_app_sample_at: Cell<Option<Instant>>,
     ticks_until_app_refresh: Cell<u8>,
     menu_open: Cell<bool>,
+    /// Last sampled CPU/GPU module state, so a drain can re-render the menu
+    /// without resampling. Both are `Copy`.
+    last_cpu_state: Cell<CpuModuleState>,
+    last_gpu_state: Cell<GpuModuleState>,
+    /// The single in-flight menu-open drain timer. Held so a new drain can
+    /// cancel the previous one instead of stacking overlapping timers.
+    menu_open_drain_timer: RefCell<Option<Retained<NSTimer>>>,
 }
 
 const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
@@ -136,15 +143,20 @@ fn should_schedule_cpu_process_drain(
     show_cpu && !result_updated && scan_in_flight
 }
 
-fn merge_cpu_process_rows(
-    current: &ProcessCpuSnapshot,
-    rows: Vec<ProcessCpuUsage>,
-) -> (ProcessCpuSnapshot, bool) {
-    if rows.is_empty() {
-        (current.clone(), false)
-    } else {
-        (ProcessCpuSnapshot::Loaded(rows), true)
-    }
+/// An empty row set is a complete answer, not a failed scan.
+///
+/// `ProcessCpuSampler::sample` takes its own before/after readings inside one
+/// call, so it never needs a warm-up round: "no rows" means nothing crossed the
+/// 0% threshold during its 200 ms window. Reporting that as "not updated" made
+/// `refresh` start another scan *and* schedule another drain, which re-entered
+/// this path roughly three times a second for as long as the menu stayed open —
+/// two full process-table sweeps per cycle.
+///
+/// This previously kept the last rows on screen to avoid flicker. It no longer
+/// does: rami is a monitor, and showing a busy process list for a machine that
+/// has since gone idle is worse than showing none.
+fn merge_cpu_process_rows(rows: Vec<ProcessCpuUsage>) -> (ProcessCpuSnapshot, bool) {
+    (ProcessCpuSnapshot::Loaded(rows), true)
 }
 
 #[cfg(test)]
@@ -217,16 +229,29 @@ mod tests {
     }
 
     #[test]
-    fn empty_cpu_process_sample_keeps_last_rows_and_retries() {
-        let current = ProcessCpuSnapshot::Loaded(vec![ProcessCpuUsage {
+    fn empty_cpu_process_sample_is_a_real_answer_and_does_not_retry() {
+        // Regression: reporting an empty scan as "not updated" made refresh()
+        // start another scan and schedule another drain, looping at ~3 Hz for as
+        // long as the menu stayed open. An empty result is a complete answer.
+        let (next, updated) = merge_cpu_process_rows(Vec::new());
+
+        assert_eq!(next, ProcessCpuSnapshot::Loaded(Vec::new()));
+        assert!(updated);
+        // The drain is only rescheduled while a result is still outstanding.
+        assert!(!should_schedule_cpu_process_drain(true, updated, true));
+    }
+
+    #[test]
+    fn populated_cpu_process_sample_replaces_the_rows() {
+        let rows = vec![ProcessCpuUsage {
             name: "Editor".to_string(),
             utilization_percent: 12,
-        }]);
+        }];
 
-        let (next, updated) = merge_cpu_process_rows(&current, Vec::new());
+        let (next, updated) = merge_cpu_process_rows(rows.clone());
 
-        assert_eq!(next, current);
-        assert!(!updated);
+        assert_eq!(next, ProcessCpuSnapshot::Loaded(rows));
+        assert!(updated);
     }
 
     fn usage(name: &str) -> AppMemoryUsage {
@@ -272,6 +297,7 @@ impl AppState {
                 self.tray.set_gauge_snapshot(snapshot, trend, mtm);
                 if self.menu_open.get() {
                     let cpu = self.sample_cpu_if_visible();
+                    self.last_cpu_state.set(cpu);
                     if self.show_cpu.get() && !cpu_processes_updated {
                         self.start_cpu_process_scan();
                     }
@@ -283,6 +309,7 @@ impl AppState {
                         self.schedule_menu_open_drain(CPU_PROCESS_DRAIN_DELAY_SECONDS);
                     }
                     let gpu = self.sample_gpu_if_visible();
+                    self.last_gpu_state.set(gpu);
                     let apps = self.app_memory.borrow();
                     let cpu_processes = self.cpu_processes.borrow();
                     let history = self.trend_tracker.borrow().samples();
@@ -305,6 +332,53 @@ impl AppState {
                     .set_placeholder(self.launch_at_login_status.get(), mtm);
             }
         }
+    }
+
+    /// Pick up async scan results and re-render the dropdown from the values the
+    /// last real refresh sampled.
+    ///
+    /// This deliberately does NOT resample, record a trend sample, or advance any
+    /// cadence counter. It runs on a 150–300 ms one-shot timer, and routing it
+    /// through the full `refresh` path meant every drain aged the tick-counted
+    /// cadences: the 125 s trend window collapsed to about 7 s and the 30 s
+    /// app/swap cadences to under 2 s whenever the menu was open. Those counters
+    /// are meant to track wall-clock time, and a drain represents no elapsed time.
+    fn drain_and_rerender(&self) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        if !self.menu_open.get() {
+            return;
+        }
+
+        self.drain_app_scan_results();
+        let cpu_processes_updated = self.drain_cpu_process_scan_results();
+
+        if should_schedule_cpu_process_drain(
+            self.show_cpu.get(),
+            cpu_processes_updated,
+            self.cpu_process_scan_in_flight.get(),
+        ) {
+            self.schedule_menu_open_drain(CPU_PROCESS_DRAIN_DELAY_SECONDS);
+        }
+
+        let Some(snapshot) = *self.last_snapshot.borrow() else {
+            return;
+        };
+        let apps = self.app_memory.borrow();
+        let cpu_processes = self.cpu_processes.borrow();
+        let history = self.trend_tracker.borrow().samples();
+        self.tray.set_menu_snapshot(
+            snapshot,
+            self.last_cpu_state.get(),
+            self.last_gpu_state.get(),
+            &apps,
+            &cpu_processes,
+            &history,
+            self.launch_at_login_status.get(),
+            self.auto_refresh_enabled.get(),
+            mtm,
+        );
     }
 
     fn sync_settings_menu(&self) {
@@ -441,10 +515,7 @@ impl AppState {
             }
             self.cpu_process_scan_in_flight.set(false);
             let (next, updated) = match result.rows {
-                Ok(rows) => {
-                    let current = self.cpu_processes.borrow();
-                    merge_cpu_process_rows(&current, rows)
-                }
+                Ok(rows) => merge_cpu_process_rows(rows),
                 Err(error) => {
                     eprintln!("process CPU scan failed: {error}");
                     (ProcessCpuSnapshot::Unavailable, true)
@@ -540,22 +611,40 @@ impl AppState {
         self.ticks_until_app_refresh.set(0);
         self.cpu_sampler.borrow_mut().reset();
         self.clear_cpu_processes();
+        // Nothing to drain into once the dropdown is gone.
+        self.cancel_menu_open_drain();
     }
 
     /// One-shot timer that drains the scan started by `menuWillOpen:` while the
     /// menu is still tracking. It must live in NSRunLoopCommonModes or it would
     /// only fire after the menu closes.
+    /// Only one drain may be in flight. `menuWillOpen:` schedules a 150 ms drain
+    /// and the refresh it triggers could schedule a 300 ms one, so without
+    /// cancelling, overlapping timers stacked up and each ran independently.
     fn schedule_menu_open_drain(&self, delay_seconds: f64) {
         let timer = unsafe {
             NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
                 delay_seconds,
                 &self.refresh_target,
-                sel!(refreshNow:),
+                sel!(drainScanResults:),
                 None,
                 false,
             )
         };
         unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
+        if let Some(previous) = self
+            .menu_open_drain_timer
+            .borrow_mut()
+            .replace(timer.clone())
+        {
+            previous.invalidate();
+        }
+    }
+
+    fn cancel_menu_open_drain(&self) {
+        if let Some(timer) = self.menu_open_drain_timer.borrow_mut().take() {
+            timer.invalidate();
+        }
     }
 
     fn reopen_menu_soon(&self) {
@@ -635,6 +724,10 @@ fn timer_refresh_current_app() {
     with_app_state(|state| state.refresh(false));
 }
 
+fn drain_current_app() {
+    with_app_state(|state| state.drain_and_rerender());
+}
+
 define_class!(
     #[unsafe(super = NSObject)]
     #[thread_kind = MainThreadOnly]
@@ -649,6 +742,11 @@ define_class!(
         #[unsafe(method(refreshOnTimer:))]
         fn refresh_on_timer(&self, _sender: &AnyObject) {
             timer_refresh_current_app();
+        }
+
+        #[unsafe(method(drainScanResults:))]
+        fn drain_scan_results(&self, _sender: &AnyObject) {
+            drain_current_app();
         }
 
         #[unsafe(method(toggleLaunchAtLogin:))]
@@ -788,6 +886,9 @@ impl App {
             last_app_sample_at: Cell::new(None),
             ticks_until_app_refresh: Cell::new(0),
             menu_open: Cell::new(false),
+            last_cpu_state: Cell::new(CpuModuleState::Loading),
+            last_gpu_state: Cell::new(GpuModuleState::Unavailable),
+            menu_open_drain_timer: RefCell::new(None),
         });
         install_app_state(&state);
         app.finishLaunching();
