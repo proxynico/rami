@@ -604,7 +604,12 @@ impl AppState {
                         true,
                     )
                 };
-                next.setTolerance(2.0);
+                // Let the OS coalesce this timer with other wakeups. Kept to 10%
+                // of the interval: the menu-bar gauge updates on every tick, and
+                // the tick also drives the trend window and the app/swap cadences,
+                // so a large tolerance would reintroduce the cadence drift #18
+                // fixed — from the other direction.
+                next.setTolerance(0.5);
                 unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&next, NSRunLoopCommonModes) };
                 *timer = Some(next);
             }
