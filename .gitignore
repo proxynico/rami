@@ -1,6 +1,7 @@
 target/
 .DS_Store
 .claude/
+.worktrees/
 rami.app/
 
 # Local audit artifacts (2026-07-18 pass) — screenshots may contain unrelated windows
