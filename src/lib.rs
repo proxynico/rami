@@ -6,6 +6,7 @@ pub mod model;
 
 mod cpu;
 mod diagnostics;
+mod engine;
 mod gpu;
 mod iokit;
 mod login_item;
