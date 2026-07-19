@@ -1,4 +1,6 @@
-use super::style::{color_for_accent, row_paragraph_style, stat_font, ROW_ICON_SIZE};
+use super::style::{
+    color_for_accent, row_paragraph_style, stat_font, DEMOTED_LABEL_ALPHA, ROW_ICON_SIZE,
+};
 use crate::format::{Accent, LegendRow, StatRow};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -85,15 +87,24 @@ pub(super) fn app_row_attributed(
 
 pub(super) fn legend_row_attributed(
     row: &LegendRow,
+    accent: &NSColor,
     render_cache: &RowRenderCache,
 ) -> Retained<NSAttributedString> {
+    // Row hierarchy (#23): the total (App Memory, User) keeps full label
+    // strength; derived breakdown rows are demoted on the opacity ramp so the
+    // Accent hue survives Warning/Critical instead of flattening to gray.
+    let label_color = if row.primary {
+        accent.colorWithAlphaComponent(1.0)
+    } else {
+        accent.colorWithAlphaComponent(DEMOTED_LABEL_ALPHA)
+    };
     stat_row_attributed_colored(
         &StatRow {
             primary: row.label.clone(),
             tail: Some(row.value.clone()),
             bundle_path: None,
         },
-        NSColor::labelColor(),
+        label_color,
         NSColor::secondaryLabelColor(),
         NSColor::labelColor(),
         render_cache,
