@@ -110,6 +110,9 @@ pub struct LegendRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryModuleDisplay {
     pub rings: [RingDisplay; 2],
+    /// Trend-window samples for the history sparkline, oldest first
+    /// (ADR-0001 amendment, #26).
+    pub history: Vec<u64>,
     pub breakdown: [LegendRow; 4],
     pub swap: Option<StatRow>,
     pub apps: AppSectionDisplay,
@@ -161,13 +164,14 @@ pub fn dropdown_model_with_apps(
     snapshot: SystemSnapshot,
     apps: &AppMemorySnapshot,
 ) -> DropdownModel {
-    dropdown_model_with_sections(snapshot, apps, &ProcessCpuSnapshot::Hidden)
+    dropdown_model_with_sections(snapshot, apps, &ProcessCpuSnapshot::Hidden, &[])
 }
 
 pub(crate) fn dropdown_model_with_sections(
     snapshot: SystemSnapshot,
     apps: &AppMemorySnapshot,
     cpu_processes: &ProcessCpuSnapshot,
+    history: &[u64],
 ) -> DropdownModel {
     let memory = snapshot.memory;
     let accent = Accent::from(classify_pressure(memory.pressure_percent));
@@ -184,6 +188,7 @@ pub(crate) fn dropdown_model_with_sections(
                 detail: String::new(),
             },
         ],
+        history: history.to_vec(),
         breakdown: [
             legend_row("App Memory", memory.app_memory_bytes, 100, true),
             legend_row("Wired", memory.wired_bytes, 65, false),
@@ -595,7 +600,7 @@ mod tests {
         ]);
 
         let DropdownModel::Loaded { modules, .. } =
-            dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes)
+            dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes, &[])
         else {
             panic!("expected loaded model");
         };

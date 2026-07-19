@@ -117,6 +117,9 @@ enum MenuEntry<'a> {
         memory_percent: u8,
         pressure_percent: u8,
     },
+    History {
+        samples: usize,
+    },
     Legend {
         label: &'a str,
         value: &'a str,
@@ -159,6 +162,9 @@ fn loaded_menu_entries(model: &DropdownModel) -> Vec<MenuEntry<'_>> {
             entries.push(MenuEntry::Rings {
                 memory_percent: memory.rings[0].percent,
                 pressure_percent: memory.rings[1].percent,
+            });
+            entries.push(MenuEntry::History {
+                samples: memory.history.len(),
             });
             for row in &memory.breakdown {
                 entries.push(MenuEntry::Legend {
@@ -320,6 +326,7 @@ mod tests {
                     memory_percent: 47,
                     pressure_percent: 34,
                 },
+                MenuEntry::History { samples: 0 },
                 MenuEntry::Legend {
                     label: "App Memory",
                     value: "4.0 GB",
@@ -358,15 +365,17 @@ mod tests {
     }
 
     #[test]
-    fn compact_menu_omits_decorative_history() {
-        // ADR-0001 keeps the native dropdown bounded: memory is current state,
-        // not a decorative history dashboard.
+    fn memory_history_follows_the_rings_and_is_the_only_history() {
+        // ADR-0001 (amended, #26): one bounded memory-history row lives in the
+        // Memory module, directly under the rings and above the breakdown —
+        // no per-module histories, no second graph.
         let model = dropdown_model(snapshot());
         let entries = loaded_menu_entries(&model);
         assert!(matches!(
-            &entries[..6],
+            &entries[..7],
             [
                 MenuEntry::Rings { .. },
+                MenuEntry::History { .. },
                 MenuEntry::Legend { .. },
                 MenuEntry::Legend { .. },
                 MenuEntry::Legend { .. },
@@ -377,6 +386,13 @@ mod tests {
                 },
             ]
         ));
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(entry, MenuEntry::History { .. }))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -408,16 +424,16 @@ mod tests {
     fn loaded_with_apps_loading_renders_loading_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading);
         let entries = loaded_menu_entries(&model);
-        assert_eq!(entries[6], MenuEntry::Separator);
-        assert_eq!(entries[7], MenuEntry::AppLoading);
+        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[8], MenuEntry::AppLoading);
     }
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable);
         let entries = loaded_menu_entries(&model);
-        assert_eq!(entries[6], MenuEntry::Separator);
-        assert_eq!(entries[7], MenuEntry::AppUnavailable);
+        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[8], MenuEntry::AppUnavailable);
     }
 
     #[test]
@@ -466,36 +482,37 @@ mod tests {
         let entries = loaded_menu_entries(&model);
 
         assert!(matches!(entries[0], MenuEntry::Rings { .. }));
+        assert!(matches!(entries[1], MenuEntry::History { .. }));
         assert!(matches!(
-            entries[1],
+            entries[2],
             MenuEntry::Legend {
                 label: "App Memory",
                 ..
             }
         ));
         assert!(matches!(
-            entries[5],
+            entries[6],
             MenuEntry::Stat {
                 primary: "Swap",
                 ..
             }
         ));
-        assert_eq!(entries[6], MenuEntry::Separator);
+        assert_eq!(entries[7], MenuEntry::Separator);
         assert_eq!(
-            entries[7],
+            entries[8],
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
             }
         );
         assert_eq!(
-            entries[8],
+            entries[9],
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
             }
         );
-        assert_eq!(entries[9], MenuEntry::Separator);
+        assert_eq!(entries[10], MenuEntry::Separator);
     }
 
     #[test]
@@ -510,10 +527,10 @@ mod tests {
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model);
 
-        assert_eq!(entries[6], MenuEntry::Separator);
-        assert_eq!(entries[7], MenuEntry::ModuleTitle("CPU"));
+        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[8], MenuEntry::ModuleTitle("CPU"));
         assert_eq!(
-            entries[8],
+            entries[9],
             MenuEntry::Legend {
                 label: "User",
                 value: "42%",
@@ -521,7 +538,7 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[9],
+            entries[10],
             MenuEntry::Legend {
                 label: "System",
                 value: "9%",
@@ -529,14 +546,14 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[10],
+            entries[11],
             MenuEntry::Stat {
                 primary: "E-cores",
                 tail: Some("18%"),
             }
         );
         assert_eq!(
-            entries[11],
+            entries[12],
             MenuEntry::Stat {
                 primary: "P-cores",
                 tail: Some("74%"),
@@ -557,11 +574,12 @@ mod tests {
             name: "Video Encoder".to_string(),
             utilization_percent: 240,
         }]);
-        let model = dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes);
+        let model =
+            dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes, &[]);
         let entries = loaded_menu_entries(&model);
 
         assert_eq!(
-            entries[10],
+            entries[11],
             MenuEntry::Stat {
                 primary: "Video Encoder",
                 tail: Some("240%"),
@@ -585,10 +603,10 @@ mod tests {
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model);
 
-        assert_eq!(entries[6], MenuEntry::Separator);
-        assert_eq!(entries[7], MenuEntry::ModuleTitle("GPU"));
+        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[8], MenuEntry::ModuleTitle("GPU"));
         assert_eq!(
-            entries[8],
+            entries[9],
             MenuEntry::Stat {
                 primary: "Utilization",
                 tail: Some("76%"),

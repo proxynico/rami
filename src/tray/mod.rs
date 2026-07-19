@@ -18,6 +18,7 @@ use crate::format::{
     placeholder_dropdown_model, Accent, AppSectionDisplay, CpuDisplayState, DropdownModel,
     GpuModuleDisplay, LegendRow, ModuleDisplay, RingDisplay, StatRow,
 };
+use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_view::MemoryRingsView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
@@ -44,6 +45,8 @@ pub struct TrayController {
     menu: Retained<NSMenu>,
     rings_item: Retained<NSMenuItem>,
     rings_view: Retained<MemoryRingsView>,
+    history_item: Retained<NSMenuItem>,
+    history_view: Retained<MemoryHistoryView>,
     legend_items: Vec<Retained<NSMenuItem>>,
     swap_item: Retained<NSMenuItem>,
     loading_item: Retained<NSMenuItem>,
@@ -77,6 +80,7 @@ pub struct TrayController {
     last_pressure: Cell<MemoryPressure>,
     shape: Cell<MenuShape>,
     last_rings: RefCell<Option<[RingDisplay; 2]>>,
+    last_history: RefCell<Option<Vec<u64>>>,
     last_breakdown: RefCell<Option<[LegendRow; 4]>>,
     last_accent: Cell<Accent>,
     last_swap_row: RefCell<Option<StatRow>>,
@@ -108,6 +112,11 @@ impl TrayController {
         let rings_view = MemoryRingsView::new(mtm);
         unsafe {
             let _: () = msg_send![&rings_item, setView: &*rings_view];
+        }
+        let history_item = make_stat_item(mtm);
+        let history_view = MemoryHistoryView::new(mtm);
+        unsafe {
+            let _: () = msg_send![&history_item, setView: &*history_view];
         }
         let legend_items = (0..4).map(|_| make_stat_item(mtm)).collect();
         let swap_item = make_stat_item(mtm);
@@ -335,6 +344,8 @@ impl TrayController {
             menu,
             rings_item,
             rings_view,
+            history_item,
+            history_view,
             legend_items,
             swap_item,
             loading_item,
@@ -368,6 +379,7 @@ impl TrayController {
             last_pressure: Cell::new(MemoryPressure::Normal),
             shape: Cell::new(MenuShape::Uninitialized),
             last_rings: RefCell::new(None),
+            last_history: RefCell::new(None),
             last_breakdown: RefCell::new(None),
             last_accent: Cell::new(Accent::Neutral),
             last_swap_row: RefCell::new(None),
@@ -426,6 +438,7 @@ impl TrayController {
         gpu: crate::model::GpuModuleState,
         apps: &AppMemorySnapshot,
         cpu_processes: &ProcessCpuSnapshot,
+        history: &[u64],
         launch_at_login_status: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
@@ -439,6 +452,7 @@ impl TrayController {
                 },
                 apps,
                 cpu_processes,
+                history,
             ),
             launch_at_login_status,
             auto_refresh_enabled,
@@ -605,6 +619,7 @@ impl TrayController {
             self.rebuild_menu(new_shape, mtm);
             self.shape.set(new_shape);
             self.last_rings.borrow_mut().take();
+            self.last_history.borrow_mut().take();
             self.last_breakdown.borrow_mut().take();
             self.last_swap_row.borrow_mut().take();
             self.last_app_section.borrow_mut().take();
@@ -621,6 +636,11 @@ impl TrayController {
             if accent_changed || self.last_rings.borrow().as_ref() != Some(&memory.rings) {
                 self.rings_view.update(&memory.rings, accent_color.clone());
                 *self.last_rings.borrow_mut() = Some(memory.rings.clone());
+            }
+            if accent_changed || self.last_history.borrow().as_ref() != Some(&memory.history) {
+                self.history_view
+                    .update(&memory.history, accent_color.clone());
+                *self.last_history.borrow_mut() = Some(memory.history.clone());
             }
             if accent_changed || self.last_breakdown.borrow().as_ref() != Some(&memory.breakdown) {
                 update_legend_items(
@@ -771,6 +791,9 @@ impl TrayController {
                 gpu,
             } => {
                 self.menu.addItem(&self.rings_item);
+                // ADR-0001 amendment (#26): the single memory-history row sits
+                // inside the Memory module, under the rings, above the legend.
+                self.menu.addItem(&self.history_item);
                 for item in &self.legend_items {
                     self.menu.addItem(item);
                 }

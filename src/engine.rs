@@ -124,6 +124,9 @@ pub(crate) enum Render {
         gpu: GpuModuleState,
         apps: AppMemorySnapshot,
         cpu_processes: ProcessCpuSnapshot,
+        /// The trend window for the memory-history sparkline. Recorded every
+        /// real refresh regardless of menu state, so it is warm on open.
+        history: Vec<u64>,
         launch_at_login: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
     },
@@ -683,6 +686,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             gpu,
             apps: self.app_memory.clone(),
             cpu_processes: self.cpu_processes.clone(),
+            history: self.trend_tracker.window(),
             launch_at_login: self.launch_at_login_status,
             auto_refresh_enabled: self.auto_refresh_enabled,
         }

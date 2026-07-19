@@ -23,6 +23,13 @@ impl MemoryTrendTracker {
         Self::default()
     }
 
+    /// The raw sample window, oldest first — the memory-history sparkline
+    /// draws exactly this. Kept at [`MEMORY_WINDOW_SAMPLES`]: enlarging it
+    /// would also change what the trend classifies over.
+    pub fn window(&self) -> Vec<u64> {
+        self.samples.iter().copied().collect()
+    }
+
     pub fn record(&mut self, used_bytes: u64) -> MemoryTrend {
         self.samples.push_back(used_bytes);
         while self.samples.len() > MEMORY_WINDOW_SAMPLES {
