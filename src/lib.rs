@@ -8,6 +8,7 @@ mod cpu;
 mod diagnostics;
 mod engine;
 mod gpu;
+mod history_view;
 mod iokit;
 mod login_item;
 mod memory_view;

@@ -219,6 +219,7 @@ impl AppState {
                 gpu,
                 apps,
                 cpu_processes,
+                history,
                 launch_at_login,
                 auto_refresh_enabled,
             } => self.tray.set_menu_snapshot(
@@ -227,6 +228,7 @@ impl AppState {
                 gpu,
                 &apps,
                 &cpu_processes,
+                &history,
                 launch_at_login,
                 auto_refresh_enabled,
                 mtm,
