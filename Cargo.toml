@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/proxynico/rami"
 homepage = "https://github.com/proxynico/rami"
 readme = "README.md"
-keywords = ["macos", "menu-bar", "system-monitor", "cpu", "gpu"]
+keywords = ["macos", "system-monitor", "memory", "cpu", "gpu"]
 categories = ["command-line-utilities", "os::macos-apis"]
 
 [lib]

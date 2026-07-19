@@ -135,6 +135,10 @@ To cut a release:
 
 ```sh
 version="$(awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }' Cargo.toml)"
+if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+  echo "error: Cargo.toml did not yield a valid version" >&2
+  exit 1
+fi
 git tag "v${version}"
 git push origin "v${version}"
 ```
