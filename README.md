@@ -4,17 +4,19 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)](#install)
 
-A tiny memory monitor that lives in your Mac menu bar.
+A restrained system monitor that lives in your Mac menu bar.
 
-One little gauge tells you how full your RAM is. Click it and you'll see
-where it's going — total used, swap when there is any, and the apps hogging
-the most. The top apps tag the orange jump in real bytes, so a runaway is
-obvious at a glance without making the menu too wide. An orange arrow joins
-the gauge when RAM is climbing fast.
+One memory gauge stays in the menu bar. Click it to see Memory, CPU, and GPU
+in one compact native menu: memory pressure and breakdown, a bounded history,
+the apps using the most memory, CPU utilization and busy processes, and GPU
+utilization when macOS exposes it. A small trend marker appears when memory is
+climbing fast.
 
-That's it. No dock icon, no window, no fuss.
+CPU, GPU, and app rows can each be hidden. There is still one status item, no
+dock icon, and no window.
 
-Settings includes launch-at-login status and a local diagnostics copy action.
+Settings also includes auto-refresh, launch-at-login status, and a local
+diagnostics copy action.
 
 ## Install
 
