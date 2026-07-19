@@ -11,6 +11,12 @@ pub(super) const APP_ROW_POOL: usize = 3;
 pub(super) const ROW_ICON_SIZE: f64 = 16.0;
 pub(super) const ROW_TAIL_TAB: f64 = 180.0;
 
+/// Label alpha for demoted rows (#23): derived breakdowns render at this
+/// step of the opacity ramp so brightness tracks actionability. Matches the
+/// dark-mode weight of `secondaryLabelColor` while keeping the Accent hue in
+/// Warning and Critical states.
+pub(super) const DEMOTED_LABEL_ALPHA: f64 = 0.55;
+
 pub(super) fn color_for_accent(accent: Accent) -> Retained<NSColor> {
     match accent {
         Accent::Neutral => NSColor::labelColor(),

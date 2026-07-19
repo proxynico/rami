@@ -10,7 +10,9 @@ use self::render::{
     make_placeholder_icon, make_stat_item, set_row_icon, stat_row_attributed,
     unavailable_attributed_title, RowRenderCache,
 };
-use self::style::{color_for_accent, status_tint_for_pressure, APP_ROW_POOL, ROW_ICON_SIZE};
+use self::style::{
+    color_for_accent, status_tint_for_pressure, APP_ROW_POOL, DEMOTED_LABEL_ALPHA, ROW_ICON_SIZE,
+};
 use crate::format::{
     dropdown_model_with_sections, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
     placeholder_dropdown_model, Accent, AppSectionDisplay, CpuDisplayState, DropdownModel,
@@ -701,9 +703,11 @@ impl TrayController {
                 &self.row_render_cache,
             );
             for (item, row) in self.cpu_core_items.iter().zip(cores) {
+                // Row hierarchy (#23): per-cluster splits are derived detail,
+                // demoted below the User total and the per-process rows.
                 item.setAttributedTitle(Some(&stat_row_attributed(
                     row,
-                    accent.colorWithAlphaComponent(1.0),
+                    accent.colorWithAlphaComponent(DEMOTED_LABEL_ALPHA),
                     &self.row_render_cache,
                 )));
                 item.setImage(
@@ -894,8 +898,13 @@ fn update_legend_items(
     accent: Accent,
     render_cache: &RowRenderCache,
 ) {
+    let accent_color = color_for_accent(accent);
     for (item, row) in items.iter().zip(rows) {
-        item.setAttributedTitle(Some(&legend_row_attributed(row, render_cache)));
+        item.setAttributedTitle(Some(&legend_row_attributed(
+            row,
+            &accent_color,
+            render_cache,
+        )));
         item.setImage(
             render_cache
                 .legend_icon(accent, row.opacity_percent)

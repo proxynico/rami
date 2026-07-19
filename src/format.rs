@@ -102,6 +102,9 @@ pub struct LegendRow {
     pub label: String,
     pub value: String,
     pub opacity_percent: u8,
+    /// Row hierarchy (#23): totals render at full label strength, derived
+    /// breakdowns are demoted. Brightness tracks actionability, not position.
+    pub primary: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,10 +185,10 @@ pub(crate) fn dropdown_model_with_sections(
             },
         ],
         breakdown: [
-            legend_row("App Memory", memory.app_memory_bytes, 100),
-            legend_row("Wired", memory.wired_bytes, 65),
-            legend_row("Compressed", memory.compressed_bytes, 35),
-            legend_row("Free", memory.free_bytes, 12),
+            legend_row("App Memory", memory.app_memory_bytes, 100, true),
+            legend_row("Wired", memory.wired_bytes, 65, false),
+            legend_row("Compressed", memory.compressed_bytes, 35, false),
+            legend_row("Free", memory.free_bytes, 12, false),
         ],
         swap: (memory.swap_used_bytes > 0).then(|| StatRow {
             primary: "Swap".to_string(),
@@ -210,8 +213,8 @@ pub(crate) fn dropdown_model_with_sections(
             modules.push(ModuleDisplay::Cpu(CpuModuleDisplay {
                 state: CpuDisplayState::Available {
                     utilization: [
-                        cpu_legend_row("User", cpu.user_percent, 100),
-                        cpu_legend_row("System", cpu.system_percent, 50),
+                        cpu_legend_row("User", cpu.user_percent, 100, true),
+                        cpu_legend_row("System", cpu.system_percent, 50, false),
                     ],
                     cores,
                     processes: cpu_process_rows(cpu_processes),
@@ -252,11 +255,12 @@ fn cpu_process_row(process: &ProcessCpuUsage) -> StatRow {
     }
 }
 
-fn cpu_legend_row(label: &str, percent: u8, opacity_percent: u8) -> LegendRow {
+fn cpu_legend_row(label: &str, percent: u8, opacity_percent: u8, primary: bool) -> LegendRow {
     LegendRow {
         label: label.to_string(),
         value: format!("{}%", percent.min(100)),
         opacity_percent,
+        primary,
     }
 }
 
@@ -268,11 +272,12 @@ fn cpu_core_row(label: &str, percent: u8) -> StatRow {
     }
 }
 
-fn legend_row(label: &str, bytes: u64, opacity_percent: u8) -> LegendRow {
+fn legend_row(label: &str, bytes: u64, opacity_percent: u8, primary: bool) -> LegendRow {
     LegendRow {
         label: label.to_string(),
         value: mem_text(bytes),
         opacity_percent,
+        primary,
     }
 }
 
@@ -490,6 +495,38 @@ mod tests {
     }
 
     #[test]
+    fn row_hierarchy_promotes_totals_and_demotes_derived_breakdowns() {
+        // #23: brightness tracks actionability. The totals (App Memory, User)
+        // are primary; the derived breakdown rows are demoted.
+        let mut snapshot = snapshot(SIXTEEN_GIB);
+        snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
+            user_percent: 41,
+            system_percent: 13,
+            efficiency_percent: Some(22),
+            performance_percent: Some(71),
+        });
+
+        let breakdown = memory_module(&dropdown_model(snapshot)).breakdown.clone();
+        assert!(breakdown[0].primary, "App Memory is the total");
+        assert!(
+            breakdown[1..].iter().all(|row| !row.primary),
+            "Wired/Compressed/Free are derived"
+        );
+
+        let DropdownModel::Loaded { modules, .. } = dropdown_model(snapshot) else {
+            panic!("expected loaded model");
+        };
+        let Some(ModuleDisplay::Cpu(cpu)) = modules.get(1) else {
+            panic!("expected CPU module after Memory");
+        };
+        let CpuDisplayState::Available { utilization, .. } = &cpu.state else {
+            panic!("expected available CPU state");
+        };
+        assert!(utilization[0].primary, "User is the total");
+        assert!(!utilization[1].primary, "System is derived");
+    }
+
+    #[test]
     fn available_cpu_module_follows_memory_with_user_system_and_core_rows() {
         let mut snapshot = snapshot(SIXTEEN_GIB);
         snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
@@ -518,6 +555,7 @@ mod tests {
                 label: "User".to_string(),
                 value: "41%".to_string(),
                 opacity_percent: 100,
+                primary: true,
             }
         );
         assert_eq!(utilization[1].label, "System");
