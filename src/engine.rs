@@ -17,6 +17,11 @@
 //!   event emits a later drain after a refresh already scheduled one.
 //! - No engine borrow may be held while performing effects: `PopUpMenu`
 //!   re-enters `menuWillOpen:` synchronously, which dispatches a new event.
+//! - Port adapters must not pump the main run loop: `step` runs under the
+//!   shell's engine borrow, so a port whose call let a scheduled timer fire
+//!   would re-enter dispatch and panic on the second borrow. The current
+//!   adapters (mach/sysctl reads, channel operations, synchronous SMAppService
+//!   XPC) all block without servicing the run loop.
 //!
 //! Time enters as data, not as a clock port: the only wall-clock comparison
 //! (the app-delta baseline freshness window) uses scan-completion timestamps
@@ -32,7 +37,13 @@ use crate::trend::{app_rows_with_deltas, MemoryTrend, MemoryTrendTracker};
 use std::io;
 use std::time::{Duration, Instant};
 
-pub(crate) const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
+/// Real-world seconds per `Tick { manual: false }`. The shell's repeating
+/// timer must use this period: every tick-counted cadence below — the 6-tick
+/// app scan (~30 s), the sampler's swap cadence, and the 25-sample trend
+/// window (~125 s) — encodes wall-clock time as a multiple of it.
+pub(crate) const REFRESH_TICK_SECONDS: f64 = 5.0;
+
+const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
 const APP_DELTA_BASELINE_MAX_AGE: Duration = Duration::from_secs(90);
 const MENU_OPEN_DRAIN_DELAY: Duration = Duration::from_millis(150);
 const CPU_PROCESS_DRAIN_DELAY: Duration = Duration::from_millis(300);
@@ -1124,6 +1135,24 @@ mod tests {
         assert_eq!(scans.cpu_starts(), vec![0]);
         engine.step(Event::Tick { manual: false });
         assert_eq!(scans.cpu_starts(), vec![0, 0]);
+    }
+
+    #[test]
+    fn populated_cpu_process_result_replaces_the_rows_in_the_render() {
+        let (mut engine, _, scans) = engine_on();
+        engine.step(Event::Startup);
+        engine.step(Event::MenuWillOpen);
+        let rows = vec![cpu_row("Editor", 12)];
+        scans.push_cpu(0, rows.clone());
+
+        let effects = engine.step(Event::DrainTimerFired);
+
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Render(Render::Menu { cpu_processes: ProcessCpuSnapshot::Loaded(got), .. })
+                if *got == rows
+        )));
+        assert!(scheduled_drains(&effects).is_empty());
     }
 
     #[test]

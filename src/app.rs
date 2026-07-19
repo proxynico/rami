@@ -10,7 +10,7 @@ use crate::cpu::CpuSampler;
 use crate::diagnostics::{build_diagnostic_report, current_report_input};
 use crate::engine::{
     AppScanResult, CpuProcessScanResult, Effect, Event, LaunchAtLogin, RefreshEngine, Render,
-    Samplers, ScanRunner, Setting, SettingChange,
+    Samplers, ScanRunner, Setting, SettingChange, REFRESH_TICK_SECONDS,
 };
 use crate::gpu::GpuSampler;
 use crate::lock::AppLock;
@@ -22,7 +22,7 @@ use crate::process_memory::ProcessMemorySampler;
 use crate::settings::SettingsStore;
 use crate::tray::TrayController;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSMenu, NSMenuDelegate, NSPasteboard,
@@ -192,7 +192,7 @@ impl AppState {
                     SettingChange::ShowCpu(value) => self.settings.set_show_cpu(value),
                     SettingChange::ShowGpu(value) => self.settings.set_show_gpu(value),
                 },
-                Effect::ScheduleMenuReopen => self.schedule_menu_reopen(),
+                Effect::ScheduleMenuReopen => self.schedule_one_shot(sel!(reopenMenu:)),
                 Effect::PopUpMenu => self.tray.pop_up_menu(),
                 Effect::CopyDiagnostics {
                     launch_at_login,
@@ -255,7 +255,7 @@ impl AppState {
         // menu is tracking; the default mode would freeze the dropdown.
         let timer = unsafe {
             NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
-                5.0,
+                REFRESH_TICK_SECONDS,
                 &self.refresh_target,
                 sel!(refreshOnTimer:),
                 None,
@@ -308,24 +308,15 @@ impl AppState {
         }
     }
 
-    fn schedule_menu_reopen(&self) {
+    /// One-shot at the short reopen delay, targeting a `RefreshTarget`
+    /// selector. Used to let the current menu-tracking session end before
+    /// popping a menu back up.
+    fn schedule_one_shot(&self, selector: Sel) {
         let _timer = unsafe {
             NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
                 MENU_REOPEN_DELAY_SECONDS,
                 &self.refresh_target,
-                sel!(reopenMenu:),
-                None,
-                false,
-            )
-        };
-    }
-
-    fn open_settings_menu_soon(&self) {
-        let _timer = unsafe {
-            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                MENU_REOPEN_DELAY_SECONDS,
-                &self.refresh_target,
-                sel!(openSettingsMenu:),
+                selector,
                 None,
                 false,
             )
@@ -426,7 +417,7 @@ define_class!(
 
         #[unsafe(method(openSettings:))]
         fn open_settings(&self, _sender: &AnyObject) {
-            with_app_state(|state| state.open_settings_menu_soon());
+            with_app_state(|state| state.schedule_one_shot(sel!(openSettingsMenu:)));
         }
 
         #[unsafe(method(openSettingsMenu:))]
