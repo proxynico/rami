@@ -37,8 +37,8 @@ RAMI_INSTALL=1 ./scripts/build-app.sh    # then spot-check the rebuilt app
 All four must pass. The rebuilt-app check is not optional for anything with a
 runtime surface — see the warning below.
 
-**Baseline at time of writing:** 112 tests pass (4 ignored, local-only);
-clippy and fmt clean.
+**Baseline at time of writing:** 133 normal tests pass, plus 4 ignored
+local-only smoke tests; clippy and fmt clean.
 
 ## Rebuilt-app check: read this
 

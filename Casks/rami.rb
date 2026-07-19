@@ -7,12 +7,12 @@
 # manual fallback.
 
 cask "rami" do
-  version "0.1.1"
+  version "0.1.2"
   sha256 "REPLACE_WITH_SHA256_OF_DMG"
 
   url "https://github.com/proxynico/rami/releases/download/v#{version}/rami-#{version}.dmg"
   name "rami"
-  desc "Tiny macOS menu-bar memory monitor"
+  desc "Restrained macOS menu-bar system monitor for memory, CPU, and GPU"
   homepage "https://github.com/proxynico/rami"
 
   depends_on macos: ">= :sonoma"

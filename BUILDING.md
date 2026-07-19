@@ -67,6 +67,23 @@ This is a development hook, but it is compiled into release builds deliberately 
 `build-app.sh` produces a release bundle, so gating it out would make it useless
 for checking the accents in the app people actually run.
 
+## Runtime health check
+
+Measure the installed app instead of inferring cost from the source. With rami
+running from `/Applications`, record one sample, leave the menu closed for a
+minute, record another, then repeat around one menu open:
+
+```sh
+pid="$(pgrep -x rami | head -n 1)"
+ps -o pid=,etime=,time=,%cpu=,rss=,command= -p "$pid"
+```
+
+`TIME` is cumulative CPU time, so its change between samples captures work that
+instantaneous `%CPU` can miss. `RSS` is resident memory in KiB. Record the macOS
+version, Mac model, enabled modules, Auto-Refresh setting, interval, and action
+between samples with any result; without those conditions, exact figures are
+not comparable.
+
 ## Notarized DMG
 
 `scripts/release.sh` builds, signs, packages, notarizes, and staples a
@@ -117,9 +134,13 @@ the DMG is `arm64`-only.
 To cut a release:
 
 ```sh
-git tag v0.1.1
-git push origin v0.1.1
+version="$(awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }' Cargo.toml)"
+git tag "v${version}"
+git push origin "v${version}"
 ```
+
+Confirm the derived tag matches the intended `Cargo.toml` version before
+pushing it. A `v*` tag starts public release work immediately.
 
 ## Publishing the Homebrew Cask
 

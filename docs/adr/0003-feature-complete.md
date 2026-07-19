@@ -15,15 +15,16 @@ What this means in practice:
   memory row) and ADR-0002's visual restraint — and be accepted by Nico
   before any implementation starts. "Wouldn't it be nice" does not clear
   this bar.
-- **No slim-down either.** The measured runtime cost of the full module set
-  is negligible (about 10 ms CPU per idle minute; ~0.25 s per menu open),
-  and every module is user-hideable in Settings. Deleting shipped, tested
-  code to make the app feel smaller spends risk to buy nothing; density
-  concerns are handled with the existing toggles, then with shipped
-  defaults, never with deletions.
+- **No slim-down either.** The full module set measured as negligible during
+  the closing audit, and every module is user-hideable in Settings. Repeat the
+  repository's runtime health check in `BUILDING.md` before using performance
+  as a reason to remove behavior; exact figures without the machine, settings,
+  interval, and sampled action are not comparable. Deleting shipped, tested
+  code to make the app feel smaller spends risk to buy nothing; density concerns
+  are handled with the existing toggles, then with shipped defaults, never with
+  deletions.
 
-Context for the decision: after the audit landed, the app read as larger
-than originally intended and subjectively slower. Measurement contradicted
-the slowness (see the health check recorded on the session that closed the
-queue), and the growth was traced to deliberate, requested features rather
+Context for the decision: after the audit landed, the app read as larger than
+originally intended and subjectively slower. Measurement contradicted the
+slowness, and the growth was traced to deliberate, requested features rather
 than drift. The remedy chosen was to freeze scope, not to unwind work.
