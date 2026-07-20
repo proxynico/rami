@@ -115,7 +115,6 @@ fn launch_at_login_label(status: LaunchAtLoginStatus) -> &'static str {
     match status {
         LaunchAtLoginStatus::Disabled => "Disabled",
         LaunchAtLoginStatus::Enabled => "Enabled",
-        LaunchAtLoginStatus::EnabledExternal => "Enabled via System Settings",
         LaunchAtLoginStatus::RequiresApproval => "Needs approval",
         LaunchAtLoginStatus::Unavailable => "Unavailable",
     }
@@ -154,7 +153,7 @@ mod tests {
             bundle_path: Some("/Applications/rami.app".to_string()),
             process_path: "/Applications/rami.app/Contents/MacOS/rami".to_string(),
             architecture: "aarch64".to_string(),
-            launch_at_login: LaunchAtLoginStatus::EnabledExternal,
+            launch_at_login: LaunchAtLoginStatus::Enabled,
             memory: Some(MemorySnapshot {
                 used_bytes: 9_774_150_902,
                 total_bytes: 19_327_352_832,
@@ -177,7 +176,7 @@ mod tests {
         assert!(report.contains("Bundle path: /Applications/rami.app"));
         assert!(report.contains("Process path: /Applications/rami.app/Contents/MacOS/rami"));
         assert!(report.contains("Architecture: aarch64"));
-        assert!(report.contains("Launch at login: Enabled via System Settings"));
+        assert!(report.contains("Launch at login: Enabled"));
         assert!(report.contains("Memory: 9.1 / 18.0 GB (51%)"));
         assert!(report.contains("Pressure: 27% (kernel)"));
         assert!(report.contains("App Memory: 6.0 GB"));

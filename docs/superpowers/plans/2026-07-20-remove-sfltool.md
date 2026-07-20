@@ -21,13 +21,14 @@
 
 **Files:**
 - Modify: `src/login_item.rs`
+- Modify: `src/diagnostics.rs`
 - Create: `tests/no_diagnostic_subprocess.rs`
 
 **Interfaces:**
 - Consumes: `SMAppService::status`, `SMAppService::register_and_return_error`, and `SMAppService::unregister_and_return_error`.
 - Produces: `LaunchAtLoginController::status() -> LaunchAtLoginStatus` and `LaunchAtLoginController::toggle() -> Result<LaunchAtLoginStatus, Retained<NSError>>` without an external command.
 
-- [ ] **Step 1: Write the failing regression test**
+- [x] **Step 1: Write the failing regression test**
 
 ```rust
 #[test]
@@ -42,13 +43,13 @@ fn login_item_controller_does_not_invoke_the_btm_diagnostic() {
 }
 ```
 
-- [ ] **Step 2: Run the test and verify the current code fails it**
+- [x] **Step 2: Run the test and verify the current code fails it**
 
 Run: `cargo test --test no_diagnostic_subprocess`
 
 Expected: FAIL with `the launch-at-login adapter must not invoke the BTM diagnostic`.
 
-- [ ] **Step 3: Remove the external status path**
+- [x] **Step 3: Remove the external status path**
 
 Keep the controller limited to the supported framework API:
 
@@ -70,9 +71,14 @@ impl LaunchAtLoginController {
 }
 ```
 
-Delete `EnabledExternal`, its menu behavior, the cache, background thread, app-path and URL helpers, dump parsing, `Command::new`, and their obsolete unit tests. Keep the existing `Disabled`, `Enabled`, `RequiresApproval`, and `Unavailable` behavior.
+Delete `EnabledExternal`, its menu behavior, the cache, background thread, URL
+encoding, dump parsing, `Command::new`, and their obsolete unit tests. Preserve
+`current_app_bundle_path` and its helper because diagnostics also use them. Keep
+the existing `Disabled`, `Enabled`, `RequiresApproval`, and `Unavailable`
+behavior. Remove the obsolete external-state label from diagnostics and use the
+supported `Enabled` state in its report fixture.
 
-- [ ] **Step 4: Run focused and full verification**
+- [x] **Step 4: Run focused and full verification**
 
 Run:
 
@@ -87,9 +93,9 @@ codesign --verify --deep --strict rami.app
 
 Expected: all commands exit 0; the app bundle satisfies its designated requirement.
 
-- [ ] **Step 5: Commit the implementation**
+- [x] **Step 5: Commit the implementation**
 
 ```bash
-git add src/login_item.rs tests/no_diagnostic_subprocess.rs
+git add src/login_item.rs src/diagnostics.rs tests/no_diagnostic_subprocess.rs
 git commit -m "fix: stop invoking sfltool at runtime"
 ```
