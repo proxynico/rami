@@ -2,16 +2,17 @@ use super::style::{
     color_for_accent, row_paragraph_style, stat_font, DEMOTED_LABEL_ALPHA, ROW_ICON_SIZE,
 };
 use crate::format::{Accent, LegendRow, StatRow};
+use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
+use objc2::runtime::{AnyObject, Bool};
+use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
-    NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSImage,
+    NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSImage,
     NSImageSymbolConfiguration, NSImageSymbolScale, NSMenuItem, NSMutableParagraphStyle,
     NSParagraphStyleAttributeName,
 };
 use objc2_foundation::{
-    NSAttributedString, NSDictionary, NSMutableAttributedString, NSSize, NSString,
+    NSAttributedString, NSDictionary, NSMutableAttributedString, NSPoint, NSRect, NSSize, NSString,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -49,9 +50,10 @@ impl RowRenderCache {
         if let Some(icon) = self.legend_icons.borrow().get(&key) {
             return icon.clone();
         }
-        let color =
-            color_for_accent(accent).colorWithAlphaComponent(f64::from(opacity_percent) / 100.0);
-        let icon = make_legend_icon(&color);
+        // Pass the dynamic accent color and opacity separately. Applying alpha
+        // up front (or tinting via hierarchical SF Symbols) bakes labelColor
+        // against the creation appearance and leaves black swatches in dark menus.
+        let icon = make_legend_icon(&color_for_accent(accent), opacity_percent);
         self.legend_icons.borrow_mut().insert(key, icon.clone());
         icon
     }
@@ -146,16 +148,31 @@ pub(super) fn make_action_icon(name: &str) -> Option<Retained<NSImage>> {
     Some(image)
 }
 
-fn make_legend_icon(color: &NSColor) -> Option<Retained<NSImage>> {
-    let symbol_name = NSString::from_str("circle.fill");
-    let desc = NSString::from_str("");
-    let base =
-        NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
-    let scale = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Small);
-    let tint = NSImageSymbolConfiguration::configurationWithHierarchicalColor(color);
-    let config = scale.configurationByApplyingConfiguration(&tint);
-    let image = base.imageWithSymbolConfiguration(&config)?;
-    image.setSize(NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE));
+fn make_legend_icon(color: &NSColor, opacity_percent: u8) -> Option<Retained<NSImage>> {
+    // Draw lazily so dynamic accent colors (labelColor under Neutral) resolve
+    // against the menu's current light/dark appearance. Hierarchical SF Symbol
+    // tints bake the creation-time appearance and leave black swatches in dark
+    // menus after a light-mode create — same trap status_icon documents.
+    let color = color.retain();
+    let alpha = f64::from(opacity_percent) / 100.0;
+    let size = NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE);
+    let handler = RcBlock::new(move |rect: NSRect| -> Bool {
+        color.colorWithAlphaComponent(alpha).setFill();
+        // Keep the swatch inside the 16pt menu-item slot at roughly SF Symbol
+        // Small scale — inset leaves a quiet margin around the filled dot.
+        let inset = 4.0;
+        let dot = NSRect::new(
+            NSPoint::new(rect.origin.x + inset, rect.origin.y + inset),
+            NSSize::new(
+                rect.size.width - inset * 2.0,
+                rect.size.height - inset * 2.0,
+            ),
+        );
+        NSBezierPath::bezierPathWithOvalInRect(dot).fill();
+        Bool::YES
+    });
+    let image = NSImage::imageWithSize_flipped_drawingHandler(size, false, &handler);
+    image.setTemplate(false);
     Some(image)
 }
 
@@ -277,4 +294,92 @@ pub(super) fn unavailable_attributed_title(
         NSColor::secondaryLabelColor(),
         render_cache,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use block2::RcBlock;
+    use objc2_app_kit::{
+        NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath,
+        NSBitmapImageRep, NSCompositingOperation, NSDeviceRGBColorSpace, NSGraphicsContext,
+    };
+    use objc2_foundation::{NSInteger, NSPoint, NSRect};
+
+    fn appearance(name: &objc2_foundation::NSString) -> Retained<NSAppearance> {
+        NSAppearance::appearanceNamed(name).expect("named appearance")
+    }
+
+    fn sample_center(image: &NSImage, drawing_appearance: &NSAppearance) -> (f64, f64, f64, f64) {
+        let rep = unsafe {
+            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+                NSBitmapImageRep::alloc(),
+                std::ptr::null_mut(),
+                16,
+                16,
+                8,
+                4,
+                true,
+                false,
+                NSDeviceRGBColorSpace,
+                0,
+                0,
+            )
+        }
+        .expect("bitmap");
+        NSGraphicsContext::saveGraphicsState_class();
+        let ctx =
+            NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep).expect("graphics context");
+        NSGraphicsContext::setCurrentContext(Some(&ctx));
+        NSColor::clearColor().setFill();
+        let bounds = NSRect::new(NSPoint::ZERO, NSSize::new(16.0, 16.0));
+        NSBezierPath::bezierPathWithRect(bounds).fill();
+        let image = image.retain();
+        let draw = RcBlock::new(move || {
+            image.drawInRect_fromRect_operation_fraction(
+                bounds,
+                NSRect::ZERO,
+                NSCompositingOperation::SourceOver,
+                1.0,
+            );
+        });
+        drawing_appearance.performAsCurrentDrawingAppearance(&draw);
+        NSGraphicsContext::restoreGraphicsState_class();
+
+        let color = rep
+            .colorAtX_y(8 as NSInteger, 8 as NSInteger)
+            .expect("center pixel");
+        let mut r = 0.0;
+        let mut g = 0.0;
+        let mut b = 0.0;
+        let mut a = 0.0;
+        unsafe {
+            color.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
+        }
+        (r, g, b, a)
+    }
+
+    #[test]
+    fn legend_icon_created_in_light_mode_stays_visible_in_dark_menus() {
+        // Hierarchical SF Symbol tints bake labelColor at creation time. Icons
+        // built while the process drawing appearance is light stay black when
+        // later drawn into a dark menu — the failure mode from the dropdown.
+        let light = appearance(unsafe { NSAppearanceNameAqua });
+        let dark = appearance(unsafe { NSAppearanceNameDarkAqua });
+        let built = RefCell::new(None);
+        {
+            let build = RcBlock::new(|| {
+                *built.borrow_mut() = make_legend_icon(&NSColor::labelColor(), 100);
+            });
+            light.performAsCurrentDrawingAppearance(&build);
+        }
+        let image = built.into_inner().expect("legend icon");
+
+        let (r, g, b, a) = sample_center(&image, &dark);
+        assert!(a > 0.5, "legend swatch should be opaque, got alpha {a:.2}");
+        assert!(
+            r > 0.5 && g > 0.5 && b > 0.5,
+            "dark menu must not keep a light-baked black swatch, got rgba({r:.2},{g:.2},{b:.2},{a:.2})"
+        );
+    }
 }
