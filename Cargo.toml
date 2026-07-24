@@ -57,7 +57,6 @@ objc2-foundation = { version = "0.3", features = [
   "NSTimer",
   "NSUserDefaults",
 ] }
-mach2 = "0.4"
 libc = "0.2"
 
 [profile.release]
