@@ -82,7 +82,9 @@ pub(super) fn app_row_attributed(
     stat_row_attributed_colored(
         row,
         primary.clone(),
-        color_for_accent_alpha(accent, 0.65),
+        // Footprint tails are demoted detail: same single demotion strength
+        // as every other demoted row (#23), not a bespoke alpha.
+        color_for_accent_alpha(accent, DEMOTED_LABEL_ALPHA),
         primary,
         render_cache,
     )

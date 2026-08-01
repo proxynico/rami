@@ -1,3 +1,4 @@
+mod build;
 mod layout;
 mod render;
 mod style;
@@ -6,13 +7,11 @@ use self::layout::{
     menu_shape_for, settings_menu_projection, AppShape, CpuShape, GpuShape, MenuShape,
 };
 use self::render::{
-    app_row_attributed, legend_row_attributed, loading_attributed_title, make_action_icon,
-    make_placeholder_icon, make_stat_item, set_row_icon, stat_row_attributed,
-    unavailable_attributed_title, RowRenderCache,
+    app_row_attributed, legend_row_attributed, stat_row_attributed, RowRenderCache,
 };
 use self::style::{
-    color_for_accent, color_for_accent_alpha, status_tint_for_pressure, APP_ROW_POOL,
-    DEMOTED_LABEL_ALPHA, ROW_ICON_SIZE,
+    color_for_accent, color_for_accent_alpha, status_tint_for_pressure, DEMOTED_LABEL_ALPHA,
+    DEMOTED_SWATCH_OPACITY, INFO_ROW_SWATCH_OPACITY, ROW_ICON_SIZE,
 };
 use crate::format::{
     dropdown_model_with_sections, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
@@ -23,8 +22,7 @@ use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_view::MemoryRingsView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
-use crate::module_title_view::ModuleTitleView;
-use crate::process_cpu::{ProcessCpuSnapshot, PROCESS_CPU_ROW_LIMIT};
+use crate::process_cpu::ProcessCpuSnapshot;
 use crate::process_memory::AppMemorySnapshot;
 #[cfg(test)]
 use crate::status_icon::{badge_for_state, BadgeKind};
@@ -32,10 +30,10 @@ use crate::status_icon::{make_status_image, StatusImage};
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{msg_send, sel, MainThreadMarker, MainThreadOnly};
+use objc2::{msg_send, MainThreadMarker};
 use objc2_app_kit::{
-    NSCellImagePosition, NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSImage, NSMenu,
-    NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem, NSWorkspace,
+    NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSImage, NSMenu, NSMenuDelegate,
+    NSMenuItem, NSStatusItem, NSWorkspace,
 };
 use objc2_foundation::{NSSize, NSString};
 use std::cell::{Cell, RefCell};
@@ -102,310 +100,7 @@ pub struct TrayController {
 
 impl TrayController {
     pub fn new(mtm: MainThreadMarker, refresh_target: Retained<AnyObject>) -> Self {
-        let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
-        let menu = NSMenu::new(mtm);
-        menu.setAutoenablesItems(false);
-        let empty = NSString::from_str("");
-
-        let placeholder_icon = make_placeholder_icon();
-        let row_render_cache = RowRenderCache::new();
-        let rings_item = make_stat_item(mtm);
-        let rings_view = MemoryRingsView::new(mtm);
-        unsafe {
-            let _: () = msg_send![&rings_item, setView: &*rings_view];
-        }
-        let history_item = make_stat_item(mtm);
-        let history_view = MemoryHistoryView::new(mtm);
-        unsafe {
-            let _: () = msg_send![&history_item, setView: &*history_view];
-        }
-        let legend_items = (0..4).map(|_| make_stat_item(mtm)).collect();
-        let swap_item = make_stat_item(mtm);
-        set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
-        let loading_item = make_stat_item(mtm);
-        loading_item.setImage(Some(&placeholder_icon));
-        loading_item.setAttributedTitle(Some(&loading_attributed_title(&row_render_cache)));
-        let app_loading_item = make_stat_item(mtm);
-        app_loading_item.setImage(Some(&placeholder_icon));
-        app_loading_item.setAttributedTitle(Some(&loading_attributed_title(&row_render_cache)));
-        let app_unavailable_item = make_stat_item(mtm);
-        app_unavailable_item.setImage(Some(&placeholder_icon));
-        app_unavailable_item
-            .setAttributedTitle(Some(&unavailable_attributed_title(&row_render_cache)));
-        let app_items: Vec<Retained<NSMenuItem>> =
-            (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
-        let cpu_title_item = make_stat_item(mtm);
-        let cpu_title_view = ModuleTitleView::new(mtm, "CPU");
-        unsafe {
-            let _: () = msg_send![&cpu_title_item, setView: &*cpu_title_view];
-        }
-        let cpu_loading_item = make_stat_item(mtm);
-        cpu_loading_item.setImage(Some(&placeholder_icon));
-        cpu_loading_item.setAttributedTitle(Some(&loading_attributed_title(&row_render_cache)));
-        let cpu_unavailable_item = make_stat_item(mtm);
-        cpu_unavailable_item.setImage(Some(&placeholder_icon));
-        cpu_unavailable_item
-            .setAttributedTitle(Some(&unavailable_attributed_title(&row_render_cache)));
-        let cpu_legend_items = (0..2).map(|_| make_stat_item(mtm)).collect();
-        let cpu_core_items = (0..2).map(|_| make_stat_item(mtm)).collect();
-        let cpu_process_items = (0..PROCESS_CPU_ROW_LIMIT)
-            .map(|_| make_stat_item(mtm))
-            .collect();
-        let gpu_title_item = make_stat_item(mtm);
-        let gpu_title_view = ModuleTitleView::new(mtm, "GPU");
-        unsafe {
-            let _: () = msg_send![&gpu_title_item, setView: &*gpu_title_view];
-        }
-        let gpu_utilization_item = make_stat_item(mtm);
-
-        let refresh_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str("Refresh"),
-                Some(sel!(refreshNow:)),
-                &empty,
-            )
-        };
-        unsafe {
-            refresh_item.setTarget(Some(&refresh_target));
-        }
-        refresh_item.setEnabled(true);
-        let refresh_icon = make_action_icon("arrow.clockwise");
-        if let Some(img) = &refresh_icon {
-            refresh_item.setImage(Some(img));
-        }
-
-        let auto_refresh_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str("Auto-Refresh"),
-                Some(sel!(toggleAutoRefresh:)),
-                &empty,
-            )
-        };
-        unsafe {
-            auto_refresh_item.setTarget(Some(&refresh_target));
-        }
-        auto_refresh_item.setEnabled(true);
-        auto_refresh_item.setState(NSControlStateValueOn);
-        let pause_icon = make_action_icon("pause.fill");
-        let play_icon = make_action_icon("play.fill");
-        if let Some(img) = &pause_icon {
-            auto_refresh_item.setImage(Some(img));
-        }
-
-        let show_app_usage_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str("Show Apps"),
-                Some(sel!(toggleShowAppUsage:)),
-                &empty,
-            )
-        };
-        unsafe {
-            show_app_usage_item.setTarget(Some(&refresh_target));
-        }
-        show_app_usage_item.setEnabled(true);
-        show_app_usage_item.setState(NSControlStateValueOn);
-
-        let show_cpu_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str("Show CPU"),
-                Some(sel!(toggleShowCpu:)),
-                &empty,
-            )
-        };
-        unsafe {
-            show_cpu_item.setTarget(Some(&refresh_target));
-        }
-        show_cpu_item.setEnabled(true);
-        show_cpu_item.setState(NSControlStateValueOn);
-
-        let show_gpu_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str("Show GPU"),
-                Some(sel!(toggleShowGpu:)),
-                &empty,
-            )
-        };
-        unsafe {
-            show_gpu_item.setTarget(Some(&refresh_target));
-        }
-        show_gpu_item.setEnabled(true);
-        show_gpu_item.setState(NSControlStateValueOn);
-
-        let launch_at_login_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str(LaunchAtLoginStatus::Disabled.menu_title()),
-                Some(sel!(toggleLaunchAtLogin:)),
-                &empty,
-            )
-        };
-        unsafe {
-            launch_at_login_item.setTarget(Some(&refresh_target));
-        }
-        launch_at_login_item.setState(NSControlStateValueOff);
-        launch_at_login_item.setEnabled(false);
-
-        let diagnostics_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str("Copy Diagnostics"),
-                Some(sel!(copyDiagnostics:)),
-                &empty,
-            )
-        };
-        unsafe {
-            diagnostics_item.setTarget(Some(&refresh_target));
-        }
-        diagnostics_item.setEnabled(true);
-        if let Some(img) = make_action_icon("doc.on.doc") {
-            diagnostics_item.setImage(Some(&img));
-        }
-
-        let version = env!("CARGO_PKG_VERSION");
-        let about_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str(&format!("rami {version}")),
-                None,
-                &empty,
-            )
-        };
-        about_item.setEnabled(false);
-        if let Some(img) = make_action_icon("info.circle") {
-            about_item.setImage(Some(&img));
-        }
-
-        let check_updates_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str("Check for Updates"),
-                Some(sel!(checkForUpdates:)),
-                &empty,
-            )
-        };
-        unsafe {
-            check_updates_item.setTarget(Some(&refresh_target));
-        }
-        check_updates_item.setEnabled(true);
-        if let Some(img) = make_action_icon("arrow.up.circle") {
-            check_updates_item.setImage(Some(&img));
-        }
-
-        let settings_menu = NSMenu::new(mtm);
-        settings_menu.setAutoenablesItems(false);
-        settings_menu.addItem(&auto_refresh_item);
-        settings_menu.addItem(&show_app_usage_item);
-        settings_menu.addItem(&show_cpu_item);
-        settings_menu.addItem(&show_gpu_item);
-        settings_menu.addItem(&launch_at_login_item);
-        settings_menu.addItem(&diagnostics_item);
-        settings_menu.addItem(&NSMenuItem::separatorItem(mtm));
-        settings_menu.addItem(&check_updates_item);
-        settings_menu.addItem(&about_item);
-
-        let settings_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str("Settings"),
-                Some(sel!(openSettings:)),
-                &empty,
-            )
-        };
-        unsafe {
-            settings_item.setTarget(Some(&refresh_target));
-        }
-        settings_item.setEnabled(true);
-        if let Some(img) = make_action_icon("gearshape") {
-            settings_item.setImage(Some(&img));
-        }
-
-        let quit_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str("Quit"),
-                Some(sel!(terminate:)),
-                &empty,
-            )
-        };
-        quit_item.setEnabled(true);
-
-        status_item.setMenu(Some(&menu));
-        if let Some(button) = status_item.button(mtm) {
-            button.setTitle(&empty);
-            button.setImagePosition(NSCellImagePosition::ImageOnly);
-        }
-
-        let controller = Self {
-            status_item,
-            menu,
-            rings_item,
-            rings_view,
-            history_item,
-            history_view,
-            legend_items,
-            swap_item,
-            loading_item,
-            app_loading_item,
-            app_unavailable_item,
-            app_items,
-            cpu_title_item,
-            cpu_loading_item,
-            cpu_unavailable_item,
-            cpu_legend_items,
-            cpu_core_items,
-            cpu_process_items,
-            gpu_title_item,
-            gpu_utilization_item,
-            refresh_item,
-            auto_refresh_item,
-            show_app_usage_item,
-            show_cpu_item,
-            show_gpu_item,
-            launch_at_login_item,
-            _diagnostics_item: diagnostics_item,
-            _about_item: about_item,
-            _check_updates_item: check_updates_item,
-            settings_item,
-            settings_menu,
-            quit_item,
-            pause_icon,
-            play_icon,
-            last_image_name: RefCell::new(None),
-            last_trend: Cell::new(MemoryTrend::Stable),
-            last_pressure: Cell::new(MemoryPressure::Normal),
-            shape: Cell::new(MenuShape::Uninitialized),
-            last_rings: RefCell::new(None),
-            last_history: RefCell::new(None),
-            last_breakdown: RefCell::new(None),
-            last_accent: Cell::new(Accent::Neutral),
-            last_swap_row: RefCell::new(None),
-            last_app_section: RefCell::new(None),
-            last_cpu_state: RefCell::new(None),
-            last_gpu: RefCell::new(None),
-            last_auto_refresh_enabled: Cell::new(true),
-            last_tooltip: RefCell::new(String::new()),
-            last_launch_title: RefCell::new(String::new()),
-            last_launch_checked: Cell::new(false),
-            last_launch_enabled: Cell::new(false),
-            last_show_app_usage: Cell::new(true),
-            last_show_cpu: Cell::new(true),
-            last_show_gpu: Cell::new(true),
-            app_icon_cache: RefCell::new(HashMap::new()),
-            row_render_cache,
-        };
-        controller.set_gauge(0, MemoryTrend::Stable, MemoryPressure::Normal, mtm);
-        controller.apply_model(
-            &placeholder_dropdown_model(),
-            LaunchAtLoginStatus::Disabled,
-            true,
-            mtm,
-        );
-        controller
+        build::build_controller(mtm, refresh_target)
     }
 
     pub fn set_gauge_snapshot(
@@ -727,7 +422,7 @@ impl TrayController {
                 )));
                 item.setImage(
                     self.row_render_cache
-                        .legend_icon(accent_kind, 65)
+                        .legend_icon(accent_kind, DEMOTED_SWATCH_OPACITY)
                         .as_deref(),
                 );
             }
@@ -739,7 +434,7 @@ impl TrayController {
                 )));
                 item.setImage(
                     self.row_render_cache
-                        .legend_icon(accent_kind, 35)
+                        .legend_icon(accent_kind, INFO_ROW_SWATCH_OPACITY)
                         .as_deref(),
                 );
             }
