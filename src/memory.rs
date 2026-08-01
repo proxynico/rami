@@ -392,7 +392,9 @@ mod tests {
 
     #[test]
     fn stats_count_still_rejects_replies_missing_fields_rami_reads() {
-        assert!(REQUIRED_STATS_COUNT <= 62, "must fit the classic struct");
+        const {
+            assert!(REQUIRED_STATS_COUNT <= 62, "must fit the classic struct");
+        }
         assert!(validate_stats_count(REQUIRED_STATS_COUNT - 1).is_err());
         assert!(validate_stats_count(REQUIRED_STATS_COUNT).is_ok());
     }
