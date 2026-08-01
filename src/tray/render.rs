@@ -1,5 +1,6 @@
 use super::style::{
-    color_for_accent, row_paragraph_style, stat_font, DEMOTED_LABEL_ALPHA, ROW_ICON_SIZE,
+    color_for_accent, color_for_accent_alpha, row_paragraph_style, stat_font, DEMOTED_LABEL_ALPHA,
+    ROW_ICON_SIZE,
 };
 use crate::format::{Accent, LegendRow, StatRow};
 use block2::RcBlock;
@@ -74,14 +75,14 @@ pub(super) fn make_stat_item(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
 
 pub(super) fn app_row_attributed(
     row: &StatRow,
-    accent: &NSColor,
+    accent: Accent,
     render_cache: &RowRenderCache,
 ) -> Retained<NSAttributedString> {
-    let primary = accent.colorWithAlphaComponent(1.0);
+    let primary = color_for_accent_alpha(accent, 1.0);
     stat_row_attributed_colored(
         row,
         primary.clone(),
-        accent.colorWithAlphaComponent(0.65),
+        color_for_accent_alpha(accent, 0.65),
         primary,
         render_cache,
     )
@@ -89,16 +90,16 @@ pub(super) fn app_row_attributed(
 
 pub(super) fn legend_row_attributed(
     row: &LegendRow,
-    accent: &NSColor,
+    accent: Accent,
     render_cache: &RowRenderCache,
 ) -> Retained<NSAttributedString> {
     // Row hierarchy (#23): the total (App Memory, User) keeps full label
     // strength; derived breakdown rows are demoted on the opacity ramp so the
     // Accent hue survives Warning/Critical instead of flattening to gray.
     let label_color = if row.primary {
-        accent.colorWithAlphaComponent(1.0)
+        color_for_accent_alpha(accent, 1.0)
     } else {
-        accent.colorWithAlphaComponent(DEMOTED_LABEL_ALPHA)
+        color_for_accent_alpha(accent, DEMOTED_LABEL_ALPHA)
     };
     stat_row_attributed_colored(
         &StatRow {
@@ -357,6 +358,90 @@ mod tests {
             color.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
         }
         (r, g, b, a)
+    }
+
+    fn sample_fill(color: &NSColor, drawing_appearance: &NSAppearance) -> (f64, f64, f64, f64) {
+        let rep = unsafe {
+            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+                NSBitmapImageRep::alloc(),
+                std::ptr::null_mut(),
+                4,
+                4,
+                8,
+                4,
+                true,
+                false,
+                NSDeviceRGBColorSpace,
+                0,
+                0,
+            )
+        }
+        .expect("bitmap");
+        NSGraphicsContext::saveGraphicsState_class();
+        let ctx =
+            NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep).expect("graphics context");
+        NSGraphicsContext::setCurrentContext(Some(&ctx));
+        let color = color.retain();
+        let draw = RcBlock::new(move || {
+            color.setFill();
+            let bounds = NSRect::new(NSPoint::ZERO, NSSize::new(4.0, 4.0));
+            NSBezierPath::bezierPathWithRect(bounds).fill();
+        });
+        drawing_appearance.performAsCurrentDrawingAppearance(&draw);
+        NSGraphicsContext::restoreGraphicsState_class();
+        let sampled = rep
+            .colorAtX_y(1 as NSInteger, 1 as NSInteger)
+            .expect("pixel");
+        let mut r = 0.0;
+        let mut g = 0.0;
+        let mut b = 0.0;
+        let mut a = 0.0;
+        unsafe {
+            sampled.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
+        }
+        (r, g, b, a)
+    }
+
+    #[test]
+    fn accent_alpha_created_in_dark_mode_stays_readable_in_light_menus() {
+        // colorWithAlphaComponent on labelColor freezes the creation appearance
+        // (white from dark stays white in light). color_for_accent_alpha must
+        // keep Neutral adaptive so attributed titles stay readable.
+        use super::super::style::color_for_accent_alpha;
+        use crate::format::Accent;
+
+        let light = appearance(unsafe { NSAppearanceNameAqua });
+        let dark = appearance(unsafe { NSAppearanceNameDarkAqua });
+
+        let built = RefCell::new(None);
+        {
+            let build = RcBlock::new(|| {
+                *built.borrow_mut() = Some(color_for_accent_alpha(Accent::Neutral, 1.0));
+            });
+            dark.performAsCurrentDrawingAppearance(&build);
+        }
+        let color = built.into_inner().expect("color");
+
+        let (r, g, b, _) = sample_fill(&color, &light);
+        assert!(
+            r < 0.5 && g < 0.5 && b < 0.5,
+            "Neutral accent built in dark must draw dark-on-light, got rgba({r:.2},{g:.2},{b:.2})"
+        );
+
+        let demoted = RefCell::new(None);
+        {
+            let build = RcBlock::new(|| {
+                *demoted.borrow_mut() =
+                    Some(color_for_accent_alpha(Accent::Neutral, DEMOTED_LABEL_ALPHA));
+            });
+            dark.performAsCurrentDrawingAppearance(&build);
+        }
+        let demoted = demoted.into_inner().expect("demoted color");
+        let (r, g, b, a) = sample_fill(&demoted, &light);
+        assert!(
+            a > 0.2 && r < 0.6 && g < 0.6 && b < 0.6,
+            "demoted Neutral built in dark must stay dark-on-light, got rgba({r:.2},{g:.2},{b:.2},{a:.2})"
+        );
     }
 
     #[test]
