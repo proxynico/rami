@@ -10,6 +10,17 @@ use std::sync::OnceLock;
 
 const FORCE_PRESSURE_ENV: &str = "RAMI_FORCE_PRESSURE";
 
+/// Minimum `host_statistics64` word count covering every field
+/// [`MemorySampler`] reads (`internal_page_count` is the last).
+///
+/// libc 0.2.187+ grew `vm_statistics64` (and thus `HOST_VM_INFO64_COUNT`) with
+/// tagged-page fields the running kernel does not report. Darwin 25 answers 62
+/// words against the SDK's 104; requiring the full SDK count rejected every
+/// sample and left the dropdown on the placeholder forever.
+const REQUIRED_STATS_COUNT: mach_msg_type_number_t =
+    (std::mem::offset_of!(vm_statistics64, total_uncompressed_pages_in_compressor)
+        / size_of::<libc::integer_t>()) as mach_msg_type_number_t;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct XswUsage {
@@ -181,12 +192,12 @@ fn forced_pressure() -> Option<u8> {
 }
 
 pub fn validate_stats_count(count: u32) -> io::Result<()> {
-    if count < HOST_VM_INFO64_COUNT {
+    if count < REQUIRED_STATS_COUNT {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             format!(
                 "insufficient host statistics count: expected at least {}, got {}",
-                HOST_VM_INFO64_COUNT, count
+                REQUIRED_STATS_COUNT, count
             ),
         ));
     }
@@ -355,7 +366,8 @@ fn page_size_bytes() -> io::Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_sysctl_size;
+    use super::{validate_stats_count, validate_sysctl_size, REQUIRED_STATS_COUNT};
+    use libc::HOST_VM_INFO64_COUNT;
 
     #[test]
     fn validate_sysctl_size_rejects_mismatched_byte_count() {
@@ -366,5 +378,22 @@ mod tests {
         assert!(error.to_string().contains("vm.swapusage"));
         assert!(error.to_string().contains("expected 8 bytes"));
         assert!(error.to_string().contains("got 4"));
+    }
+
+    #[test]
+    fn stats_count_accepts_the_classic_kernel_reply() {
+        // libc 0.2.187+ extended vm_statistics64 with tagged-page fields the
+        // running kernel does not report: Darwin 25 answers 62 words against
+        // the SDK's HOST_VM_INFO64_COUNT of 104. Requiring the full SDK count
+        // rejected every sample and left the dropdown on the placeholder.
+        assert!(validate_stats_count(62).is_ok());
+        assert!(validate_stats_count(HOST_VM_INFO64_COUNT).is_ok());
+    }
+
+    #[test]
+    fn stats_count_still_rejects_replies_missing_fields_rami_reads() {
+        assert!(REQUIRED_STATS_COUNT <= 62, "must fit the classic struct");
+        assert!(validate_stats_count(REQUIRED_STATS_COUNT - 1).is_err());
+        assert!(validate_stats_count(REQUIRED_STATS_COUNT).is_ok());
     }
 }
