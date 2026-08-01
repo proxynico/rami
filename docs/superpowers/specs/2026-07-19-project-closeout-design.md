@@ -1,5 +1,9 @@
 # Project Closeout Design
 
+> **Status: repository closeout shipped (PR #36); public release still gated.**
+> Docs, Dependabot, ruleset, and tap scaffolding are done. Tagging `v0.1.2`
+> waits on purpose-specific Apple signing/notary secrets. Kept for history.
+
 ## Goal
 
 Close the gap between rami's healthy, feature-complete implementation and its

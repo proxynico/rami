@@ -1,5 +1,10 @@
 # Project Closeout Implementation Plan
 
+> **Status: Tasks 1–4 shipped (PR #36 + ruleset/tap). Tasks 5–6 remain** —
+> configure purpose-specific Apple/Homebrew secrets, dry-run Release, then tag
+> `v0.1.2`. Do not re-run Tasks 1–4. Checkboxes below were not backfilled;
+> treat this banner as the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Align rami's public project surface with the shipped app, establish low-noise maintenance automation, protect `main`, and publish a verified `v0.1.2` release when purpose-specific Apple credentials are available.

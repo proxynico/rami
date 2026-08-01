@@ -1,5 +1,8 @@
 # Remove Runtime `sfltool` Use Implementation Plan
 
+> **Status: shipped (2026-07).** Landed as `fix: stop invoking sfltool at runtime`
+> on `main`. Kept for history; do not re-execute.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop Rami from invoking `sfltool` during normal app use while preserving launch-at-login control through `SMAppService`.

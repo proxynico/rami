@@ -1,7 +1,6 @@
 # Merge Flow
 
-How work moves from a triaged issue to `main` in this repo. Agreed 2026-07-18
-during the codebase-audit pass that produced issues #17–#25.
+How work moves from a triaged issue to `main` in this repo.
 
 ## One PR per issue
 
@@ -37,8 +36,8 @@ RAMI_INSTALL=1 ./scripts/build-app.sh    # then spot-check the rebuilt app
 All four must pass. The rebuilt-app check is not optional for anything with a
 runtime surface — see the warning below.
 
-**Baseline at time of writing:** 133 normal tests pass, plus 4 ignored
-local-only smoke tests; clippy and fmt clean.
+**Baseline (2026-08-01):** 130 normal tests pass, plus 4 ignored local-only
+smoke tests; clippy and fmt clean.
 
 ## Rebuilt-app check: read this
 
@@ -73,16 +72,13 @@ the blocker "looks nearly done".
 
 ## Process routing
 
-This repo follows the engineering-process skill set. For the audit queue
-specifically:
+This repo follows the engineering-process skill set. New issues from outside
+reporters go through triage (`needs-triage` → `needs-info` / `ready-for-agent` /
+`ready-for-human` / `wontfix`). Issues you author yourself that are already
+ticket-shaped skip `/triage` and go straight to implementation. Design-heavy
+tickets run codebase design on the seam before coding.
 
-- Issues #17–#25 were authored from an audit, not filed by outside reporters —
-  **do not run `/triage` on them**. Triage is for issues you didn't create.
-- They are already ticket-shaped with acceptance criteria, so `/to-spec` and
-  `/to-tickets` do not apply. Go straight to `/implement`, fresh context per
-  ticket.
-- Exception: #24 (extract `RefreshEngine`) is design work, not a specified
-  defect. Run `/codebase-design` on the seam before implementing it.
+Feature proposals must clear ADR-0003 before any implementation starts.
 
 ## macOS / tooling notes
 
@@ -97,6 +93,6 @@ Session-specific knowledge that cost time to discover:
   the blocking AppleScript click on
   `menu bar item 1 of menu bar 1 of process "rami"`.
 - Warning and Critical accent states are unreachable without exhausting real
-  memory. Issue #22 adds `RAMI_FORCE_PRESSURE` for this; use it once merged.
+  memory. Use `RAMI_FORCE_PRESSURE=warning|critical|normal` (see BUILDING.md).
 - Screenshots taken during UI runs may capture unrelated windows. Check a capture
   before attaching it anywhere outside the repo.

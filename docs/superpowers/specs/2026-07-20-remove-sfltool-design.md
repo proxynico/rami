@@ -1,5 +1,8 @@
 # Remove Runtime `sfltool` Use
 
+> **Status: shipped (2026-07).** Design accepted and implemented on `main`.
+> Kept for history; do not reopen without a new ADR-level reason.
+
 ## Problem
 
 Rami runs `sfltool dumpbtm` when `SMAppService` reports launch at login as
