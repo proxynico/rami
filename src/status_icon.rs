@@ -120,3 +120,125 @@ fn compose_with_badge(
         size, false, &handler,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use objc2::{AnyThread, Message};
+    use objc2_app_kit::{
+        NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath,
+        NSBitmapImageRep, NSDeviceRGBColorSpace, NSGraphicsContext,
+    };
+    use objc2_foundation::NSInteger;
+    use std::cell::RefCell;
+
+    fn appearance(name: &objc2_foundation::NSString) -> Retained<NSAppearance> {
+        NSAppearance::appearanceNamed(name).expect("named appearance")
+    }
+
+    /// Rasterize the image under the given appearance and return the average
+    /// color of its opaque pixels (alpha > 0.5), plus how many there were.
+    fn sample_opaque_average(
+        image: &NSImage,
+        drawing_appearance: &NSAppearance,
+    ) -> (f64, f64, f64, usize) {
+        let side: NSInteger = 24;
+        let rep = unsafe {
+            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+                NSBitmapImageRep::alloc(),
+                std::ptr::null_mut(),
+                side,
+                side,
+                8,
+                4,
+                true,
+                false,
+                NSDeviceRGBColorSpace,
+                0,
+                0,
+            )
+        }
+        .expect("bitmap");
+        NSGraphicsContext::saveGraphicsState_class();
+        let ctx =
+            NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep).expect("graphics context");
+        NSGraphicsContext::setCurrentContext(Some(&ctx));
+        NSColor::clearColor().setFill();
+        let bounds = NSRect::new(NSPoint::ZERO, NSSize::new(side as f64, side as f64));
+        NSBezierPath::bezierPathWithRect(bounds).fill();
+        let image = image.retain();
+        let draw = RcBlock::new(move || {
+            image.drawInRect_fromRect_operation_fraction(
+                bounds,
+                NSRect::ZERO,
+                NSCompositingOperation::SourceOver,
+                1.0,
+            );
+        });
+        drawing_appearance.performAsCurrentDrawingAppearance(&draw);
+        NSGraphicsContext::restoreGraphicsState_class();
+
+        let (mut sum_r, mut sum_g, mut sum_b) = (0.0, 0.0, 0.0);
+        let mut count = 0usize;
+        for x in 0..side {
+            for y in 0..side {
+                let Some(color) = rep.colorAtX_y(x, y) else {
+                    continue;
+                };
+                let (mut r, mut g, mut b, mut a) = (0.0, 0.0, 0.0, 0.0);
+                unsafe {
+                    color.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
+                }
+                if a > 0.5 {
+                    sum_r += r;
+                    sum_g += g;
+                    sum_b += b;
+                    count += 1;
+                }
+            }
+        }
+        if count == 0 {
+            return (0.0, 0.0, 0.0, 0);
+        }
+        let n = count as f64;
+        (sum_r / n, sum_g / n, sum_b / n, count)
+    }
+
+    #[test]
+    fn rising_fast_icon_created_in_light_mode_stays_visible_in_dark_menu_bars() {
+        // The RisingFast composite carries the Neutral accent (labelColor).
+        // Hierarchical SF Symbol tints bake the creation-time appearance, so
+        // the tinted symbols must be built inside the drawing handler — an
+        // icon created under a light appearance must still draw light glyphs
+        // when the menu bar is dark.
+        let light = appearance(unsafe { NSAppearanceNameAqua });
+        let dark = appearance(unsafe { NSAppearanceNameDarkAqua });
+
+        let built = RefCell::new(None);
+        {
+            let build = RcBlock::new(|| {
+                *built.borrow_mut() = make_status_image(
+                    "gauge.with.dots.needle.50percent",
+                    MemoryTrend::RisingFast,
+                    &NSColor::labelColor(),
+                );
+            });
+            light.performAsCurrentDrawingAppearance(&build);
+        }
+        let status = built.into_inner().expect("status image");
+        assert!(!status.template, "RisingFast icon is a colored composite");
+
+        // Rasterize under light first — the real-world sequence is "drawn in
+        // a light menu bar, then the appearance flips" — so a cached
+        // light-baked rendering would be reused by the dark draw below.
+        let (_, _, _, light_count) = sample_opaque_average(&status.image, &light);
+        assert!(light_count > 0, "composite drew nothing under light");
+
+        let (r, g, b, count) = sample_opaque_average(&status.image, &dark);
+        assert!(count > 0, "composite drew no opaque pixels");
+        assert!(
+            r > 0.5 && g > 0.5 && b > 0.5,
+            "dark menu bar must not keep a light-baked black glyph, got avg rgba({r:.2},{g:.2},{b:.2}) over {count} px"
+        );
+    }
+}

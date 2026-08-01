@@ -37,6 +37,13 @@ color or an opacity ramp, rather than a template glyph. Any attributed
   `src/tray/style.rs` (`color_for_accent_alpha`)
 - Regression: `legend_icon_created_in_light_mode_stays_visible_in_dark_menus`,
   `accent_alpha_created_in_dark_mode_stays_readable_in_light_menus`
+- Boundary (2026-08 audit): hierarchical-tinted symbol images drawn via
+  `drawInRect` from *inside* a drawing-handler image do re-resolve per
+  appearance — the RisingFast composite in `src/status_icon.rs` is safe as
+  written. Attempted repro (create under light, rasterize under light, then
+  sample under dark) stayed correct. The trap is eager rasterization
+  (`lockFocus`) or setting a tinted image directly on a menu item; pinned by
+  `rising_fast_icon_created_in_light_mode_stays_visible_in_dark_menu_bars`.
 
 ## Related Lessons
 
