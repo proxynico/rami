@@ -13,6 +13,7 @@ mod iokit;
 mod login_item;
 mod memory_view;
 mod module_title_view;
+mod proc_list;
 mod process_cpu;
 mod process_memory;
 mod settings;

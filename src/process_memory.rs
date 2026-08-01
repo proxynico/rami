@@ -1,6 +1,7 @@
+use crate::proc_list::list_all_pids;
 use libc::{
-    c_int, c_void, getpid, pid_t, proc_listallpids, proc_pid_rusage, proc_pidpath, rusage_info_t,
-    rusage_info_v4, PROC_PIDPATHINFO_MAXSIZE, RUSAGE_INFO_V4,
+    c_void, getpid, pid_t, proc_pid_rusage, proc_pidpath, rusage_info_t, rusage_info_v4,
+    PROC_PIDPATHINFO_MAXSIZE, RUSAGE_INFO_V4,
 };
 use std::collections::HashMap;
 use std::io;
@@ -96,30 +97,6 @@ impl ProcessMemorySampler {
         }
         Ok(rows)
     }
-}
-
-fn list_all_pids() -> io::Result<Vec<pid_t>> {
-    // `proc_listallpids` returns a *count of pids* (it divides the underlying
-    // byte count by sizeof(pid_t) itself); only the buffer size argument is in
-    // bytes. Treating the return value as bytes silently truncates the scan
-    // to a quarter of the process list.
-    let pid_count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-    if pid_count <= 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    // Headroom for processes spawned between the two calls.
-    let cap = pid_count as usize + 32;
-    let mut buf: Vec<pid_t> = vec![0; cap];
-    let buf_bytes = (cap * std::mem::size_of::<pid_t>()) as c_int;
-
-    let written = unsafe { proc_listallpids(buf.as_mut_ptr() as *mut c_void, buf_bytes) };
-    if written <= 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    buf.truncate(written as usize);
-    Ok(buf)
 }
 
 fn should_skip_pid(pid: pid_t, self_pid: pid_t) -> bool {
