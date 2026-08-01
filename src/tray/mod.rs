@@ -11,7 +11,8 @@ use self::render::{
     unavailable_attributed_title, RowRenderCache,
 };
 use self::style::{
-    color_for_accent, status_tint_for_pressure, APP_ROW_POOL, DEMOTED_LABEL_ALPHA, ROW_ICON_SIZE,
+    color_for_accent, color_for_accent_alpha, status_tint_for_pressure, APP_ROW_POOL,
+    DEMOTED_LABEL_ALPHA, ROW_ICON_SIZE,
 };
 use crate::format::{
     dropdown_model_with_sections, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
@@ -33,8 +34,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSImage,
-    NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem, NSWorkspace,
+    NSCellImagePosition, NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSImage, NSMenu,
+    NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem, NSWorkspace,
 };
 use objc2_foundation::{NSSize, NSString};
 use std::cell::{Cell, RefCell};
@@ -651,7 +652,7 @@ impl TrayController {
                 );
                 *self.last_breakdown.borrow_mut() = Some(memory.breakdown.clone());
             }
-            self.update_app_section(&memory.apps, &accent_color, accent_changed);
+            self.update_app_section(&memory.apps, *accent, accent_changed);
             if accent_changed || self.last_swap_row.borrow().as_ref() != memory.swap.as_ref() {
                 if let Some(swap_row) = &memory.swap {
                     self.swap_item.setAttributedTitle(Some(&stat_row_attributed(
@@ -666,13 +667,13 @@ impl TrayController {
                 ModuleDisplay::Cpu(cpu) => Some(cpu),
                 ModuleDisplay::Memory(_) | ModuleDisplay::Gpu(_) => None,
             }) {
-                self.update_cpu_module(&cpu.state, &accent_color, *accent, accent_changed);
+                self.update_cpu_module(&cpu.state, *accent, accent_changed);
             }
             if let Some(gpu) = modules.iter().find_map(|module| match module {
                 ModuleDisplay::Gpu(gpu) => Some(gpu),
                 ModuleDisplay::Memory(_) | ModuleDisplay::Cpu(_) => None,
             }) {
-                self.update_gpu_module(gpu, &accent_color, *accent, accent_changed);
+                self.update_gpu_module(gpu, *accent, accent_changed);
             }
             self.last_accent.set(*accent);
         }
@@ -681,7 +682,7 @@ impl TrayController {
         self.update_launch_at_login(launch_at_login_status);
     }
 
-    fn update_app_section(&self, apps: &AppSectionDisplay, accent: &NSColor, accent_changed: bool) {
+    fn update_app_section(&self, apps: &AppSectionDisplay, accent: Accent, accent_changed: bool) {
         if !accent_changed && self.last_app_section.borrow().as_ref() == Some(apps) {
             return;
         }
@@ -699,13 +700,7 @@ impl TrayController {
         *self.last_app_section.borrow_mut() = Some(apps.clone());
     }
 
-    fn update_cpu_module(
-        &self,
-        cpu: &CpuDisplayState,
-        accent: &NSColor,
-        accent_kind: Accent,
-        accent_changed: bool,
-    ) {
+    fn update_cpu_module(&self, cpu: &CpuDisplayState, accent_kind: Accent, accent_changed: bool) {
         if !accent_changed && self.last_cpu_state.borrow().as_ref() == Some(cpu) {
             return;
         }
@@ -727,7 +722,7 @@ impl TrayController {
                 // demoted below the User total and the per-process rows.
                 item.setAttributedTitle(Some(&stat_row_attributed(
                     row,
-                    accent.colorWithAlphaComponent(DEMOTED_LABEL_ALPHA),
+                    color_for_accent_alpha(accent_kind, DEMOTED_LABEL_ALPHA),
                     &self.row_render_cache,
                 )));
                 item.setImage(
@@ -739,7 +734,7 @@ impl TrayController {
             for (item, row) in self.cpu_process_items.iter().zip(processes) {
                 item.setAttributedTitle(Some(&stat_row_attributed(
                     row,
-                    accent.colorWithAlphaComponent(1.0),
+                    color_for_accent_alpha(accent_kind, 1.0),
                     &self.row_render_cache,
                 )));
                 item.setImage(
@@ -752,13 +747,7 @@ impl TrayController {
         *self.last_cpu_state.borrow_mut() = Some(cpu.clone());
     }
 
-    fn update_gpu_module(
-        &self,
-        gpu: &GpuModuleDisplay,
-        accent: &NSColor,
-        accent_kind: Accent,
-        accent_changed: bool,
-    ) {
+    fn update_gpu_module(&self, gpu: &GpuModuleDisplay, accent_kind: Accent, accent_changed: bool) {
         if !accent_changed && self.last_gpu.borrow().as_ref() == Some(gpu) {
             return;
         }
@@ -766,7 +755,7 @@ impl TrayController {
         self.gpu_utilization_item
             .setAttributedTitle(Some(&stat_row_attributed(
                 &gpu.utilization,
-                accent.colorWithAlphaComponent(1.0),
+                color_for_accent_alpha(accent_kind, 1.0),
                 &self.row_render_cache,
             )));
         self.gpu_utilization_item.setImage(
@@ -921,13 +910,8 @@ fn update_legend_items(
     accent: Accent,
     render_cache: &RowRenderCache,
 ) {
-    let accent_color = color_for_accent(accent);
     for (item, row) in items.iter().zip(rows) {
-        item.setAttributedTitle(Some(&legend_row_attributed(
-            row,
-            &accent_color,
-            render_cache,
-        )));
+        item.setAttributedTitle(Some(&legend_row_attributed(row, accent, render_cache)));
         item.setImage(
             render_cache
                 .legend_icon(accent, row.opacity_percent)

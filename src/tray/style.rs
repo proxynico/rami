@@ -25,6 +25,37 @@ pub(super) fn color_for_accent(accent: Accent) -> Retained<NSColor> {
     }
 }
 
+/// Accent color at `alpha`, still adaptive across light/dark.
+///
+/// `colorWithAlphaComponent` on catalog colors (especially `labelColor`)
+/// resolves against the *creation* appearance and freezes that RGB — so a
+/// title built in dark mode stays white after switching to light. Full
+/// opacity returns the catalog color as-is; partial opacity maps Neutral onto
+/// adaptive secondary/tertiary labels and only alpha-ramps Warning/Critical.
+pub(super) fn color_for_accent_alpha(accent: Accent, alpha: f64) -> Retained<NSColor> {
+    match accent {
+        Accent::Neutral => {
+            if alpha >= 0.99 {
+                NSColor::labelColor()
+            } else if alpha >= 0.45 {
+                NSColor::secondaryLabelColor()
+            } else {
+                NSColor::tertiaryLabelColor()
+            }
+        }
+        Accent::Warning | Accent::Critical => {
+            let base = color_for_accent(accent);
+            if alpha >= 0.99 {
+                base
+            } else {
+                // Semantic oranges/reds stay visible if baked; Neutral is the
+                // white-on-light failure mode this helper exists to prevent.
+                base.colorWithAlphaComponent(alpha)
+            }
+        }
+    }
+}
+
 pub(super) fn status_tint_for_pressure(pressure: MemoryPressure) -> Option<Accent> {
     match pressure {
         MemoryPressure::Normal => None,
