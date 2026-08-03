@@ -33,7 +33,8 @@ pub(super) enum AccentPaint {
     AlertRed,
 }
 
-// Ring stroke palette — wired into tray ring rendering in the next task.
+// Ring stroke palette — resolved by `color_for_rings` and wired into
+// `MemoryRingsView::update` from `tray/mod.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RingStroke {
     CalmOrange,
