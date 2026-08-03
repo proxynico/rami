@@ -10,11 +10,13 @@ reserved for calm rings — Warning no longer uses orange for accent chrome.
 
 The accent itself is semantic, not a brand color: under normal memory pressure
 it is the adaptive neutral label color for chrome and legend; under Warning and
-Critical it is system red (including ring strokes). The normal status gauge
-stays an untinted template image so macOS chooses black or white for the menu
-bar appearance. Warning and Critical tint the gauge red; Critical still uses
-the RisingFast badge when trend says so. This keeps routine telemetry quiet
-and reserves color for pressure that needs attention.
+Critical it is system red (including ring strokes). The normal status gauge stays an untinted template image so macOS chooses black
+or white for the menu bar appearance. Warning and Critical tint the gauge red;
+severity between them is carried numerically (pressure ring %, tooltip,
+VoiceOver), not by hue. RisingFast is trend-driven at any pressure: when memory
+is climbing fast, the status icon adds an upward badge composite
+(`status_icon.rs`). This keeps routine telemetry quiet and reserves color for
+pressure that needs attention.
 
 Rejected: multi-hue category palettes (Activity Monitor colors — familiar but
 visually noisy and off-identity), the user's macOS accent color, and a fixed

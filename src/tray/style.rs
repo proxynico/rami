@@ -170,13 +170,13 @@ mod tests {
 
     #[test]
     fn warning_and_critical_share_the_alert_red_accent_path() {
-        // Palette contract: Warning no longer uses orange — orange is calm rings only.
-        // Both map through color_for_accent to systemRedColor (cannot assert CGColor
-        // equality portably); lock the rings stroke enum instead and document the
-        // shared AlertRed path here.
         assert_eq!(
-            ring_stroke_for_accent(crate::format::Accent::Warning),
-            ring_stroke_for_accent(crate::format::Accent::Critical)
+            accent_paint(crate::format::Accent::Warning),
+            AccentPaint::AlertRed
+        );
+        assert_eq!(
+            accent_paint(crate::format::Accent::Critical),
+            AccentPaint::AlertRed
         );
     }
 

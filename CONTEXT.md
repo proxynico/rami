@@ -86,6 +86,8 @@ accounts for where RAM is going.
 **Status gauge**:
 The single menu-bar icon (SF Symbol gauge). In normal pressure it remains a
 template image so macOS renders it black or white for the current menu bar;
-Warning and Critical pressure tint it red. Critical still uses the RisingFast
-badge when trend says so. There is exactly one status item regardless of how
+Warning and Critical pressure tint it red; severity between them is carried
+numerically (pressure ring %, tooltip, VoiceOver), not by hue. RisingFast is
+trend-driven at any pressure — when memory is climbing fast, the icon adds an
+upward badge composite. There is exactly one status item regardless of how
 many modules the dropdown shows.
