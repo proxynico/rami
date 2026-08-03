@@ -10,8 +10,8 @@ use self::render::{
     app_row_attributed, legend_row_attributed, stat_row_attributed, RowRenderCache,
 };
 use self::style::{
-    color_for_accent, color_for_accent_alpha, status_tint_for_pressure, DEMOTED_LABEL_ALPHA,
-    DEMOTED_SWATCH_OPACITY, INFO_ROW_SWATCH_OPACITY, ROW_ICON_SIZE,
+    color_for_accent, color_for_accent_alpha, color_for_rings, status_tint_for_pressure,
+    DEMOTED_LABEL_ALPHA, DEMOTED_SWATCH_OPACITY, INFO_ROW_SWATCH_OPACITY, ROW_ICON_SIZE,
 };
 use crate::format::{
     dropdown_model_with_sections, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
@@ -329,8 +329,9 @@ impl TrayController {
             };
             let accent_changed = self.last_accent.get() != *accent;
             let accent_color = color_for_accent(*accent);
+            let rings_color = color_for_rings(*accent);
             if accent_changed || self.last_rings.borrow().as_ref() != Some(&memory.rings) {
-                self.rings_view.update(&memory.rings, accent_color.clone());
+                self.rings_view.update(&memory.rings, rings_color);
                 *self.last_rings.borrow_mut() = Some(memory.rings.clone());
             }
             if accent_changed || self.last_history.borrow().as_ref() != Some(&memory.history) {

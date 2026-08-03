@@ -61,7 +61,6 @@ pub(super) fn color_for_accent(accent: Accent) -> Retained<NSColor> {
     }
 }
 
-#[expect(dead_code)] // Task 2 wires this into ring rendering.
 pub(super) fn color_for_rings(accent: Accent) -> Retained<NSColor> {
     match ring_stroke_for_accent(accent) {
         RingStroke::CalmOrange => NSColor::systemOrangeColor(),
