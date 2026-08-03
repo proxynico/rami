@@ -27,11 +27,45 @@ pub(super) const DEMOTED_SWATCH_OPACITY: u8 = 55;
 /// demoted step and never competes with the row's full-strength text.
 pub(super) const INFO_ROW_SWATCH_OPACITY: u8 = 35;
 
-pub(super) fn color_for_accent(accent: Accent) -> Retained<NSColor> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AccentPaint {
+    Label,
+    AlertRed,
+}
+
+// Ring stroke palette — wired into tray ring rendering in the next task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RingStroke {
+    CalmOrange,
+    AlertRed,
+}
+
+pub(super) fn accent_paint(accent: Accent) -> AccentPaint {
     match accent {
-        Accent::Neutral => NSColor::labelColor(),
-        Accent::Warning => NSColor::systemOrangeColor(),
-        Accent::Critical => NSColor::systemRedColor(),
+        Accent::Neutral => AccentPaint::Label,
+        Accent::Warning | Accent::Critical => AccentPaint::AlertRed,
+    }
+}
+
+pub(super) fn ring_stroke_for_accent(accent: Accent) -> RingStroke {
+    match accent {
+        Accent::Neutral => RingStroke::CalmOrange,
+        Accent::Warning | Accent::Critical => RingStroke::AlertRed,
+    }
+}
+
+pub(super) fn color_for_accent(accent: Accent) -> Retained<NSColor> {
+    match accent_paint(accent) {
+        AccentPaint::Label => NSColor::labelColor(),
+        AccentPaint::AlertRed => NSColor::systemRedColor(),
+    }
+}
+
+#[expect(dead_code)] // Task 2 wires this into ring rendering.
+pub(super) fn color_for_rings(accent: Accent) -> Retained<NSColor> {
+    match ring_stroke_for_accent(accent) {
+        RingStroke::CalmOrange => NSColor::systemOrangeColor(),
+        RingStroke::AlertRed => NSColor::systemRedColor(),
     }
 }
 
@@ -96,7 +130,9 @@ pub(super) fn stat_font() -> Retained<NSFont> {
 
 #[cfg(test)]
 mod tests {
-    use super::status_tint_for_pressure;
+    use super::{
+        accent_paint, ring_stroke_for_accent, status_tint_for_pressure, AccentPaint, RingStroke,
+    };
     use crate::model::MemoryPressure;
 
     #[test]
@@ -109,6 +145,54 @@ mod tests {
         assert_eq!(
             status_tint_for_pressure(MemoryPressure::Critical),
             Some(crate::format::Accent::Critical)
+        );
+    }
+
+    #[test]
+    fn ring_stroke_is_calm_orange_under_neutral() {
+        assert_eq!(
+            ring_stroke_for_accent(crate::format::Accent::Neutral),
+            RingStroke::CalmOrange
+        );
+    }
+
+    #[test]
+    fn ring_stroke_is_alert_red_under_warning_and_critical() {
+        assert_eq!(
+            ring_stroke_for_accent(crate::format::Accent::Warning),
+            RingStroke::AlertRed
+        );
+        assert_eq!(
+            ring_stroke_for_accent(crate::format::Accent::Critical),
+            RingStroke::AlertRed
+        );
+    }
+
+    #[test]
+    fn warning_and_critical_share_the_alert_red_accent_path() {
+        // Palette contract: Warning no longer uses orange — orange is calm rings only.
+        // Both map through color_for_accent to systemRedColor (cannot assert CGColor
+        // equality portably); lock the rings stroke enum instead and document the
+        // shared AlertRed path here.
+        assert_eq!(
+            ring_stroke_for_accent(crate::format::Accent::Warning),
+            ring_stroke_for_accent(crate::format::Accent::Critical)
+        );
+    }
+
+    #[test]
+    fn accent_paint_warning_matches_critical_alert_red() {
+        assert_eq!(
+            accent_paint(crate::format::Accent::Warning),
+            AccentPaint::AlertRed
+        );
+        assert_eq!(
+            accent_paint(crate::format::Accent::Critical),
+            AccentPaint::AlertRed
+        );
+        assert_eq!(
+            accent_paint(crate::format::Accent::Neutral),
+            AccentPaint::Label
         );
     }
 }
