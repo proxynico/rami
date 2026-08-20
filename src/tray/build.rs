@@ -156,7 +156,7 @@ pub(super) fn build_controller(
 
     let show_gpu_item =
         make_command_item(mtm, "Show GPU", Some(sel!(toggleShowGpu:)), target, None);
-    show_gpu_item.setState(NSControlStateValueOn);
+    show_gpu_item.setState(NSControlStateValueOff);
 
     let launch_at_login_item = make_command_item(
         mtm,
@@ -276,7 +276,7 @@ pub(super) fn build_controller(
         last_launch_enabled: Cell::new(false),
         last_show_app_usage: Cell::new(true),
         last_show_cpu: Cell::new(true),
-        last_show_gpu: Cell::new(true),
+        last_show_gpu: Cell::new(false),
         app_icon_cache: RefCell::new(HashMap::new()),
         row_render_cache,
     };

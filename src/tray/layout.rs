@@ -329,22 +329,22 @@ mod tests {
                 MenuEntry::History { samples: 0 },
                 MenuEntry::Legend {
                     label: "App Memory",
-                    value: "4.0 GB",
+                    value: "4.0 GB · 25%",
                     opacity_percent: 100,
                 },
                 MenuEntry::Legend {
                     label: "Wired",
-                    value: "1.0 GB",
+                    value: "1.0 GB · 6%",
                     opacity_percent: 65,
                 },
                 MenuEntry::Legend {
                     label: "Compressed",
-                    value: "717 MB",
+                    value: "717 MB · 4%",
                     opacity_percent: 35,
                 },
                 MenuEntry::Legend {
                     label: "Free",
-                    value: "2.0 GB",
+                    value: "2.0 GB · 13%",
                     opacity_percent: 12,
                 },
                 MenuEntry::Stat {

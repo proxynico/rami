@@ -21,7 +21,9 @@ impl Default for Settings {
             auto_refresh_enabled: true,
             show_app_usage: true,
             show_cpu: true,
-            show_gpu: true,
+            // GPU is a single utilization row; keep it opt-in so the default
+            // dropdown stays memory/CPU-dense without an extra section header.
+            show_gpu: false,
         }
     }
 }
@@ -119,12 +121,12 @@ mod tests {
     }
 
     #[test]
-    fn module_visibility_defaults_on_and_persists_independently() {
+    fn module_visibility_defaults_and_persists_independently() {
         let defaults = resolve_settings(None, None, None, None);
         assert!(defaults.auto_refresh_enabled);
         assert!(defaults.show_app_usage);
         assert!(defaults.show_cpu);
-        assert!(defaults.show_gpu);
+        assert!(!defaults.show_gpu);
 
         let persisted = resolve_settings(Some(false), Some(true), Some(false), Some(true));
         assert!(!persisted.auto_refresh_enabled);

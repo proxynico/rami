@@ -372,7 +372,7 @@ fn menu_open_samples_modules_and_schedules_the_menu_drain_last() {
 
     assert_eq!(counts.memory.get(), 2);
     assert_eq!(counts.cpu.get(), 1);
-    assert_eq!(counts.gpu.get(), 1);
+    assert_eq!(counts.gpu.get(), 0);
     assert_eq!(scans.app_starts(), vec![0]);
     assert_eq!(scans.cpu_starts(), vec![0]);
     assert_eq!(menu_renders(&effects), 1);
@@ -426,7 +426,7 @@ fn drains_never_resample_and_never_advance_cadences() {
     // resample on the first drain; once the split is Available, further
     // drains render from cache.
     assert_eq!(counts.cpu.get(), 2);
-    assert_eq!(counts.gpu.get(), 1);
+    assert_eq!(counts.gpu.get(), 0);
     assert_eq!(scans.app_starts().len(), app_starts_before);
 }
 
