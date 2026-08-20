@@ -486,6 +486,7 @@ mod tests {
     #[test]
     #[ignore = "requires live macOS processor counters"]
     fn smoke_samples_live_processor_ticks() {
+        let started = std::time::Instant::now();
         let mut sampler = CpuSampler::new();
         assert_eq!(sampler.sample().unwrap(), None);
         assert!(sampler.tracker.topology.is_some());
@@ -494,6 +495,14 @@ mod tests {
             .sample()
             .expect("live processor tick read should succeed")
             .expect("second live sample should produce a delta");
+        let elapsed = started.elapsed();
+        eprintln!(
+            "CPU tick sample took {elapsed:?}: user {}% system {}% e-cores {:?} p-cores {:?}",
+            snapshot.user_percent,
+            snapshot.system_percent,
+            snapshot.efficiency_percent,
+            snapshot.performance_percent
+        );
         assert!(snapshot.user_percent <= 100);
         assert!(snapshot.system_percent <= 100);
         assert!(snapshot.efficiency_percent.is_some());

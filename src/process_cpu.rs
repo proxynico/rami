@@ -253,9 +253,18 @@ mod tests {
     #[test]
     #[ignore = "requires live macOS processes"]
     fn smoke_samples_live_process_cpu_activity() {
+        let started = Instant::now();
         let rows = ProcessCpuSampler::new()
             .sample(5)
             .expect("live process CPU sample should succeed");
+        let elapsed = started.elapsed();
+        eprintln!(
+            "process CPU scan took {elapsed:?}, returned {} rows:",
+            rows.len()
+        );
+        for row in &rows {
+            eprintln!("  {:30} {:>3}%", row.name, row.utilization_percent);
+        }
 
         assert!(rows.len() <= 5);
         assert!(rows.iter().all(|row| !row.name.is_empty()));

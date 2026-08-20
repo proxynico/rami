@@ -124,10 +124,16 @@ mod tests {
     #[test]
     #[ignore = "requires a live macOS IOAccelerator"]
     fn smoke_reads_live_gpu_utilization() {
+        let started = std::time::Instant::now();
         let snapshot = GpuSampler::new()
             .sample()
             .expect("IOAccelerator lookup should succeed")
             .expect("this Mac should expose Device Utilization %");
+        let elapsed = started.elapsed();
+        eprintln!(
+            "GPU sample took {elapsed:?}: {}% utilization",
+            snapshot.utilization_percent
+        );
 
         assert!(snapshot.utilization_percent <= 100);
     }

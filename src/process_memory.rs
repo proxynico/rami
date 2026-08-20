@@ -494,7 +494,10 @@ mod tests {
         let started = std::time::Instant::now();
         let rows = sampler.sample(5).expect("sample");
         let elapsed = started.elapsed();
-        eprintln!("scan took {elapsed:?}, returned {} rows:", rows.len());
+        eprintln!(
+            "app memory scan took {elapsed:?}, returned {} rows:",
+            rows.len()
+        );
         for row in &rows {
             eprintln!(
                 "  {:30} {:>8} MB",
