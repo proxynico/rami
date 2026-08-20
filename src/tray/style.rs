@@ -9,7 +9,7 @@ use objc2_foundation::{NSArray, NSDictionary};
 
 pub(super) const APP_ROW_POOL: usize = 3;
 pub(super) const ROW_ICON_SIZE: f64 = 16.0;
-pub(super) const ROW_TAIL_TAB: f64 = 180.0;
+pub(super) const ROW_TAIL_TAB: f64 = 200.0;
 
 /// Label alpha for demoted rows (#23): derived breakdowns render at this
 /// step of the opacity ramp so brightness tracks actionability. Matches the

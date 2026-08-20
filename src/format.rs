@@ -58,6 +58,33 @@ pub fn delta_bytes_text(delta_bytes: u64) -> String {
     format!("+{}", mem_text(delta_bytes))
 }
 
+/// Share of physical RAM, rounded to the nearest percent and capped at 100.
+pub fn share_of_total(bytes: u64, total_bytes: u64) -> u8 {
+    if total_bytes == 0 {
+        return 0;
+    }
+    let percent = (u128::from(bytes) * 100 + u128::from(total_bytes) / 2) / u128::from(total_bytes);
+    percent.min(100) as u8
+}
+
+/// Caption for the memory-history row: current used and signed window delta
+/// (newest − oldest). `None` while fewer than two samples are available.
+pub fn history_caption(samples: &[u64]) -> Option<(String, String)> {
+    let first = *samples.first()?;
+    let last = *samples.last()?;
+    if samples.len() < 2 {
+        return None;
+    }
+    let delta = if last == first {
+        "—".to_string()
+    } else if last > first {
+        format!("+{}", mem_text(last - first))
+    } else {
+        format!("-{}", mem_text(first - last))
+    };
+    Some((mem_text(last), delta))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatRow {
     pub primary: String,
@@ -190,10 +217,22 @@ pub(crate) fn dropdown_model_with_sections(
         ],
         history: history.to_vec(),
         breakdown: [
-            legend_row("App Memory", memory.app_memory_bytes, 100, true),
-            legend_row("Wired", memory.wired_bytes, 65, false),
-            legend_row("Compressed", memory.compressed_bytes, 35, false),
-            legend_row("Free", memory.free_bytes, 12, false),
+            legend_row(
+                "App Memory",
+                memory.app_memory_bytes,
+                memory.total_bytes,
+                100,
+                true,
+            ),
+            legend_row("Wired", memory.wired_bytes, memory.total_bytes, 65, false),
+            legend_row(
+                "Compressed",
+                memory.compressed_bytes,
+                memory.total_bytes,
+                35,
+                false,
+            ),
+            legend_row("Free", memory.free_bytes, memory.total_bytes, 12, false),
         ],
         swap: (memory.swap_used_bytes > 0).then(|| StatRow {
             primary: "Swap".to_string(),
@@ -277,10 +316,20 @@ fn cpu_core_row(label: &str, percent: u8) -> StatRow {
     }
 }
 
-fn legend_row(label: &str, bytes: u64, opacity_percent: u8, primary: bool) -> LegendRow {
+fn legend_row(
+    label: &str,
+    bytes: u64,
+    total_bytes: u64,
+    opacity_percent: u8,
+    primary: bool,
+) -> LegendRow {
     LegendRow {
         label: label.to_string(),
-        value: mem_text(bytes),
+        value: format!(
+            "{} · {}%",
+            mem_text(bytes),
+            share_of_total(bytes, total_bytes)
+        ),
         opacity_percent,
         primary,
     }
@@ -403,6 +452,34 @@ mod tests {
         assert_eq!(
             gauge_accessibility_label(47, 7_729_084_723, 17_179_869_184),
             "Memory 47 percent, 7.2 of 16.0 GB used"
+        );
+    }
+
+    #[test]
+    fn share_of_total_rounds_to_nearest_percent() {
+        assert_eq!(share_of_total(0, SIXTEEN_GIB), 0);
+        assert_eq!(share_of_total(SIXTEEN_GIB / 4, SIXTEEN_GIB), 25);
+        assert_eq!(share_of_total(SIXTEEN_GIB / 2, SIXTEEN_GIB), 50);
+        // 6/16 = 37.5 → 38
+        assert_eq!(share_of_total(6 * (SIXTEEN_GIB / 16), SIXTEEN_GIB), 38);
+        assert_eq!(share_of_total(1, 0), 0);
+    }
+
+    #[test]
+    fn history_caption_reports_current_and_signed_window_delta() {
+        assert_eq!(history_caption(&[]), None);
+        assert_eq!(history_caption(&[ONE_GIB_BYTES]), None);
+        assert_eq!(
+            history_caption(&[ONE_GIB_BYTES, 2 * ONE_GIB_BYTES]),
+            Some(("2.0 GB".into(), "+1.0 GB".into()))
+        );
+        assert_eq!(
+            history_caption(&[2 * ONE_GIB_BYTES, ONE_GIB_BYTES]),
+            Some(("1.0 GB".into(), "-1.0 GB".into()))
+        );
+        assert_eq!(
+            history_caption(&[ONE_GIB_BYTES, ONE_GIB_BYTES]),
+            Some(("1.0 GB".into(), "—".into()))
         );
     }
 

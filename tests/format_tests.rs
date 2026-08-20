@@ -80,13 +80,16 @@ fn dropdown_model_splits_memory_and_swap_rows() {
     assert_eq!(memory.rings[1].label, "Pressure");
     assert_eq!(memory.rings[1].percent, 96);
     assert_eq!(memory.breakdown[0].label, "App Memory");
-    assert_eq!(memory.breakdown[0].value, "6.0 GB");
+    assert_eq!(memory.breakdown[0].value, "6.0 GB · 38%");
     assert_eq!(memory.breakdown[0].opacity_percent, 100);
     assert_eq!(memory.breakdown[1].label, "Wired");
+    assert_eq!(memory.breakdown[1].value, "2.0 GB · 13%");
     assert_eq!(memory.breakdown[1].opacity_percent, 65);
     assert_eq!(memory.breakdown[2].label, "Compressed");
+    assert_eq!(memory.breakdown[2].value, "1.0 GB · 6%");
     assert_eq!(memory.breakdown[2].opacity_percent, 35);
     assert_eq!(memory.breakdown[3].label, "Free");
+    assert_eq!(memory.breakdown[3].value, "3.0 GB · 19%");
     assert_eq!(memory.breakdown[3].opacity_percent, 12);
     let swap = memory.swap.as_ref().expect("swap row present when nonzero");
     assert_eq!(swap.primary, "Swap");

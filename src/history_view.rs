@@ -1,25 +1,33 @@
 //! The memory-history row: a filled-area sparkline of the trend window,
 //! restored by the ADR-0001 amendment (#26). One row, memory-only — the
-//! amended bound allows exactly this view and nothing more.
+//! amended bound allows exactly this view and nothing more. Captions under
+//! the mark show current used and the signed window delta.
 
-use crate::format::mem_text;
+use crate::format::history_caption;
 use objc2::rc::Retained;
-use objc2::runtime::NSObjectProtocol;
+use objc2::runtime::{AnyObject, NSObjectProtocol};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSBezierPath, NSColor, NSView};
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_app_kit::{
+    NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular,
+    NSForegroundColorAttributeName, NSStringDrawing, NSView,
+};
+use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
 use std::cell::RefCell;
 
 const VIEW_WIDTH: f64 = 240.0;
-const VIEW_HEIGHT: f64 = 28.0;
+/// One menu row: sparkline band above, caption (current · delta) below.
+const VIEW_HEIGHT: f64 = 36.0;
 const BAND_LEFT: f64 = 16.0;
 const BAND_RIGHT: f64 = VIEW_WIDTH - 16.0;
-const BAND_BOTTOM: f64 = 6.0;
-const BAND_TOP: f64 = VIEW_HEIGHT - 6.0;
-/// Windows whose byte span stays under this render as a flat midline, so idle
-/// jitter reads as flat. Mirrors the trend classifier's Rising threshold —
-/// the sparkline must not dramatize what the trend badge calls Stable.
-const SPAN_FLOOR_BYTES: u64 = 300_000_000;
+const BAND_BOTTOM: f64 = 14.0;
+const BAND_TOP: f64 = VIEW_HEIGHT - 4.0;
+const CAPTION_Y: f64 = 1.0;
+const CAPTION_SIZE: f64 = 10.0;
+/// Below this byte span the sparkline collapses to a midline so tiny page
+/// jitter does not fill the band. Deliberately lower than the trend
+/// classifier's Rising threshold (300 MB): the mark is allowed to swing
+/// while the badge still reads Stable.
+const SPAN_FLOOR_BYTES: u64 = 32_000_000;
 /// Opacity-ramp stops for the mark (CONTEXT.md): faint fill, mid line,
 /// full-strength "now" dot.
 const FILL_ALPHA: f64 = 0.12;
@@ -101,13 +109,9 @@ impl MemoryHistoryView {
     }
 
     pub fn update(&self, samples: &[u64], accent: Retained<NSColor>) {
-        let value = match (samples.iter().min(), samples.iter().max()) {
-            (Some(&min), Some(&max)) if samples.len() >= 2 => format!(
-                "{} to {} used over the last two minutes",
-                mem_text(min),
-                mem_text(max)
-            ),
-            _ => "collecting samples".to_string(),
+        let value = match history_caption(samples) {
+            Some((current, delta)) => format!("{current} used, {delta} over the last two minutes"),
+            None => "collecting samples".to_string(),
         };
         *self.ivars().state.borrow_mut() = HistoryState {
             samples: samples.to_vec(),
@@ -122,6 +126,8 @@ impl MemoryHistoryView {
 
     fn render(&self) {
         let state = self.ivars().state.borrow();
+        self.draw_caption(&state.samples);
+
         let Some(points) = normalized_points(&state.samples, SPAN_FLOOR_BYTES) else {
             // Warming up: a faint baseline so the row reads as an empty graph,
             // never a blank slot.
@@ -170,6 +176,49 @@ impl MemoryHistoryView {
         state.accent.setFill();
         dot.fill();
     }
+
+    fn draw_caption(&self, samples: &[u64]) {
+        let Some((current, delta)) = history_caption(samples) else {
+            draw_caption_text("…", BAND_LEFT, CAPTION_Y, NSColor::tertiaryLabelColor());
+            return;
+        };
+        draw_caption_text(
+            &current,
+            BAND_LEFT,
+            CAPTION_Y,
+            NSColor::secondaryLabelColor(),
+        );
+        let delta_attrs = caption_attrs(NSColor::secondaryLabelColor());
+        let delta_str = NSString::from_str(&delta);
+        let measured = unsafe { delta_str.sizeWithAttributes(Some(&delta_attrs)) };
+        draw_caption_text(
+            &delta,
+            BAND_RIGHT - measured.width,
+            CAPTION_Y,
+            NSColor::secondaryLabelColor(),
+        );
+    }
+}
+
+fn caption_attrs(color: Retained<NSColor>) -> Retained<NSDictionary<NSString, AnyObject>> {
+    let weight = unsafe { NSFontWeightRegular };
+    let font = NSFont::monospacedDigitSystemFontOfSize_weight(CAPTION_SIZE, weight);
+    unsafe {
+        let color_obj = Retained::cast_unchecked::<AnyObject>(color);
+        let font_obj = Retained::cast_unchecked::<AnyObject>(font);
+        NSDictionary::from_retained_objects(
+            &[NSForegroundColorAttributeName, NSFontAttributeName],
+            &[color_obj, font_obj],
+        )
+    }
+}
+
+fn draw_caption_text(text: &str, x: f64, y: f64, color: Retained<NSColor>) {
+    let attrs = caption_attrs(color);
+    let text = NSString::from_str(text);
+    unsafe {
+        text.drawAtPoint_withAttributes(NSPoint::new(x, y), Some(&attrs));
+    }
 }
 
 #[cfg(test)]
@@ -194,8 +243,8 @@ mod tests {
 
     #[test]
     fn idle_jitter_below_the_span_floor_reads_flat() {
-        // A few MB of wobble is Stable to the trend classifier; the sparkline
-        // must agree instead of stretching noise across the full band.
+        // A few MB of page wobble should stay flat; meaningful window moves
+        // above SPAN_FLOOR_BYTES get the full band even when trend is Stable.
         let points = normalized_points(
             &[1_000_000_000, 1_003_000_000, 999_000_000],
             SPAN_FLOOR_BYTES,
