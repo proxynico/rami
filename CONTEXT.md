@@ -42,9 +42,12 @@ Bytes of swap in use. Shown conditionally, only when non-zero.
 
 ### CPU
 
-**User / System**:
-The two-way CPU split (per `host_processor_info` ticks). Rendered with the
-same legend component as the memory breakdown.
+**User / System / Idle**:
+The three-way CPU split (per `host_processor_info` ticks). Nice ticks fold
+into User. Rendered with the same legend component as the memory breakdown.
+User is the primary row; System and Idle are derived.
+_Avoid_: load average, per-core rings, a combined "CPU %" that restates
+100 − Idle
 
 **E-cores / P-cores**:
 Aggregate utilization per Apple Silicon core cluster (efficiency /
@@ -53,9 +56,15 @@ performance), shown as two rows — never per-core rings.
 ### GPU
 
 **GPU Utilization**:
-`Device Utilization %` from the IORegistry `IOAccelerator` node. The GPU
-section hides itself entirely if this read fails.
-_Avoid_: GPU memory (meaningless on unified memory)
+`Device Utilization %` from the IORegistry `IOAccelerator` `PerformanceStatistics`
+dictionary. The GPU section hides itself entirely if this read fails.
+
+**Renderer / Tiler**:
+`Renderer Utilization %` and `Tiler Utilization %` from the same dictionary.
+Optional legend rows under GPU Utilization; omit a row when that key is
+absent. Same opacity ramp as the memory breakdown.
+_Avoid_: GPU memory (`Alloc system memory`, `In use system memory`). Unified
+memory makes those figures misleading.
 
 ### Presentation
 

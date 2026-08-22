@@ -152,17 +152,20 @@ pub struct CpuModuleDisplay {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GpuModuleDisplay {
-    pub utilization: StatRow,
+    pub rows: Vec<LegendRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CpuAvailableDisplay {
+    pub utilization: [LegendRow; 3],
+    pub cores: Vec<StatRow>,
+    pub processes: Vec<StatRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CpuDisplayState {
     Loading,
-    Available {
-        utilization: [LegendRow; 2],
-        cores: Vec<StatRow>,
-        processes: Vec<StatRow>,
-    },
+    Available(Box<CpuAvailableDisplay>),
     Unavailable,
 }
 
@@ -255,14 +258,15 @@ pub(crate) fn dropdown_model_with_sections(
                 cores.push(cpu_core_row("P-cores", percent));
             }
             modules.push(ModuleDisplay::Cpu(CpuModuleDisplay {
-                state: CpuDisplayState::Available {
+                state: CpuDisplayState::Available(Box::new(CpuAvailableDisplay {
                     utilization: [
-                        cpu_legend_row("User", cpu.user_percent, 100, true),
-                        cpu_legend_row("System", cpu.system_percent, 50, false),
+                        percent_legend_row("User", cpu.user_percent, 100, true),
+                        percent_legend_row("System", cpu.system_percent, 50, false),
+                        percent_legend_row("Idle", cpu.idle_percent, 12, false),
                     ],
                     cores,
                     processes: cpu_process_rows(cpu_processes),
-                },
+                })),
             }));
         }
         CpuModuleState::Unavailable => modules.push(ModuleDisplay::Cpu(CpuModuleDisplay {
@@ -270,13 +274,20 @@ pub(crate) fn dropdown_model_with_sections(
         })),
     }
     if let GpuModuleState::Available(gpu) = snapshot.gpu {
-        modules.push(ModuleDisplay::Gpu(GpuModuleDisplay {
-            utilization: StatRow {
-                primary: "Utilization".to_string(),
-                tail: Some(format!("{}%", gpu.utilization_percent.min(100))),
-                bundle_path: None,
-            },
-        }));
+        let mut rows = Vec::with_capacity(3);
+        rows.push(percent_legend_row(
+            "Utilization",
+            gpu.utilization_percent,
+            100,
+            true,
+        ));
+        if let Some(percent) = gpu.renderer_percent {
+            rows.push(percent_legend_row("Renderer", percent, 65, false));
+        }
+        if let Some(percent) = gpu.tiler_percent {
+            rows.push(percent_legend_row("Tiler", percent, 35, false));
+        }
+        modules.push(ModuleDisplay::Gpu(GpuModuleDisplay { rows }));
     }
     DropdownModel::Loaded { accent, modules }
 }
@@ -299,7 +310,7 @@ fn cpu_process_row(process: &ProcessCpuUsage) -> StatRow {
     }
 }
 
-fn cpu_legend_row(label: &str, percent: u8, opacity_percent: u8, primary: bool) -> LegendRow {
+fn percent_legend_row(label: &str, percent: u8, opacity_percent: u8, primary: bool) -> LegendRow {
     LegendRow {
         label: label.to_string(),
         value: format!("{}%", percent.min(100)),
@@ -584,6 +595,7 @@ mod tests {
         snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
             user_percent: 41,
             system_percent: 13,
+            idle_percent: 46,
             efficiency_percent: Some(22),
             performance_percent: Some(71),
         });
@@ -601,11 +613,13 @@ mod tests {
         let Some(ModuleDisplay::Cpu(cpu)) = modules.get(1) else {
             panic!("expected CPU module after Memory");
         };
-        let CpuDisplayState::Available { utilization, .. } = &cpu.state else {
+        let CpuDisplayState::Available(available) = &cpu.state else {
             panic!("expected available CPU state");
         };
-        assert!(utilization[0].primary, "User is the total");
-        assert!(!utilization[1].primary, "System is derived");
+        assert_eq!(available.utilization.len(), 3);
+        assert!(available.utilization[0].primary, "User is the total");
+        assert!(!available.utilization[1].primary, "System is derived");
+        assert!(!available.utilization[2].primary, "Idle is derived");
     }
 
     #[test]
@@ -614,6 +628,7 @@ mod tests {
         snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
             user_percent: 41,
             system_percent: 13,
+            idle_percent: 46,
             efficiency_percent: Some(22),
             performance_percent: Some(71),
         });
@@ -625,14 +640,12 @@ mod tests {
         let Some(ModuleDisplay::Cpu(cpu)) = modules.get(1) else {
             panic!("expected CPU module after Memory");
         };
-        let CpuDisplayState::Available {
-            utilization, cores, ..
-        } = &cpu.state
-        else {
+        let CpuDisplayState::Available(available) = &cpu.state else {
             panic!("expected available CPU state");
         };
+        assert_eq!(available.utilization.len(), 3);
         assert_eq!(
-            utilization[0],
+            available.utilization[0],
             LegendRow {
                 label: "User".to_string(),
                 value: "41%".to_string(),
@@ -640,12 +653,15 @@ mod tests {
                 primary: true,
             }
         );
-        assert_eq!(utilization[1].label, "System");
-        assert_eq!(utilization[1].value, "13%");
-        assert_eq!(cores[0].primary, "E-cores");
-        assert_eq!(cores[0].tail.as_deref(), Some("22%"));
-        assert_eq!(cores[1].primary, "P-cores");
-        assert_eq!(cores[1].tail.as_deref(), Some("71%"));
+        assert_eq!(available.utilization[1].label, "System");
+        assert_eq!(available.utilization[1].value, "13%");
+        assert_eq!(available.utilization[2].label, "Idle");
+        assert_eq!(available.utilization[2].value, "46%");
+        assert_eq!(available.utilization[2].opacity_percent, 12);
+        assert_eq!(available.cores[0].primary, "E-cores");
+        assert_eq!(available.cores[0].tail.as_deref(), Some("22%"));
+        assert_eq!(available.cores[1].primary, "P-cores");
+        assert_eq!(available.cores[1].tail.as_deref(), Some("71%"));
     }
 
     #[test]
@@ -654,6 +670,7 @@ mod tests {
         snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
             user_percent: 52,
             system_percent: 13,
+            idle_percent: 35,
             efficiency_percent: None,
             performance_percent: None,
         });
@@ -682,16 +699,19 @@ mod tests {
             panic!("expected loaded model");
         };
         let Some(ModuleDisplay::Cpu(CpuModuleDisplay {
-            state: CpuDisplayState::Available { processes, .. },
+            state: CpuDisplayState::Available(available),
         })) = modules.get(1)
         else {
             panic!("expected available CPU module");
         };
-        assert_eq!(processes.len(), 3);
-        assert_eq!(processes[0].primary, "Video Encoder");
-        assert_eq!(processes[0].tail.as_deref(), Some("240%"));
-        assert_eq!(processes[2].primary, "Renderer");
-        assert!(processes.iter().all(|row| row.bundle_path.is_none()));
+        assert_eq!(available.processes.len(), 3);
+        assert_eq!(available.processes[0].primary, "Video Encoder");
+        assert_eq!(available.processes[0].tail.as_deref(), Some("240%"));
+        assert_eq!(available.processes[2].primary, "Renderer");
+        assert!(available
+            .processes
+            .iter()
+            .all(|row| row.bundle_path.is_none()));
     }
 
     #[test]
@@ -734,6 +754,8 @@ mod tests {
         let mut available = snapshot(SIXTEEN_GIB);
         available.gpu = GpuModuleState::Available(GpuSnapshot {
             utilization_percent: 76,
+            renderer_percent: Some(54),
+            tiler_percent: Some(12),
         });
 
         let DropdownModel::Loaded { modules, .. } = dropdown_model(available) else {
@@ -742,8 +764,45 @@ mod tests {
         let Some(ModuleDisplay::Gpu(gpu)) = modules.get(1) else {
             panic!("expected GPU module after Memory");
         };
-        assert_eq!(gpu.utilization.primary, "Utilization");
-        assert_eq!(gpu.utilization.tail.as_deref(), Some("76%"));
+        assert_eq!(
+            gpu.rows,
+            vec![
+                LegendRow {
+                    label: "Utilization".to_string(),
+                    value: "76%".to_string(),
+                    opacity_percent: 100,
+                    primary: true,
+                },
+                LegendRow {
+                    label: "Renderer".to_string(),
+                    value: "54%".to_string(),
+                    opacity_percent: 65,
+                    primary: false,
+                },
+                LegendRow {
+                    label: "Tiler".to_string(),
+                    value: "12%".to_string(),
+                    opacity_percent: 35,
+                    primary: false,
+                },
+            ]
+        );
+
+        let mut device_only = snapshot(SIXTEEN_GIB);
+        device_only.gpu = GpuModuleState::Available(GpuSnapshot {
+            utilization_percent: 40,
+            renderer_percent: None,
+            tiler_percent: None,
+        });
+        let DropdownModel::Loaded { modules, .. } = dropdown_model(device_only) else {
+            panic!("expected loaded model");
+        };
+        let Some(ModuleDisplay::Gpu(gpu)) = modules.get(1) else {
+            panic!("expected GPU module after Memory");
+        };
+        assert_eq!(gpu.rows.len(), 1);
+        assert_eq!(gpu.rows[0].label, "Utilization");
+        assert_eq!(gpu.rows[0].value, "40%");
 
         let mut unavailable = snapshot(SIXTEEN_GIB);
         unavailable.gpu = GpuModuleState::Unavailable;

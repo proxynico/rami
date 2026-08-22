@@ -59,7 +59,7 @@ pub struct TrayController {
     cpu_core_items: Vec<Retained<NSMenuItem>>,
     cpu_process_items: Vec<Retained<NSMenuItem>>,
     gpu_title_item: Retained<NSMenuItem>,
-    gpu_utilization_item: Retained<NSMenuItem>,
+    gpu_legend_items: Vec<Retained<NSMenuItem>>,
     refresh_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
     show_app_usage_item: Retained<NSMenuItem>,
@@ -401,19 +401,14 @@ impl TrayController {
             return;
         }
 
-        if let CpuDisplayState::Available {
-            utilization,
-            cores,
-            processes,
-        } = cpu
-        {
+        if let CpuDisplayState::Available(available) = cpu {
             update_legend_items(
                 &self.cpu_legend_items,
-                utilization,
+                &available.utilization,
                 accent_kind,
                 &self.row_render_cache,
             );
-            for (item, row) in self.cpu_core_items.iter().zip(cores) {
+            for (item, row) in self.cpu_core_items.iter().zip(&available.cores) {
                 // Row hierarchy (#23): per-cluster splits are derived detail,
                 // demoted below the User total and the per-process rows.
                 item.setAttributedTitle(Some(&stat_row_attributed(
@@ -427,7 +422,7 @@ impl TrayController {
                         .as_deref(),
                 );
             }
-            for (item, row) in self.cpu_process_items.iter().zip(processes) {
+            for (item, row) in self.cpu_process_items.iter().zip(&available.processes) {
                 item.setAttributedTitle(Some(&stat_row_attributed(
                     row,
                     color_for_accent_alpha(accent_kind, 1.0),
@@ -448,16 +443,11 @@ impl TrayController {
             return;
         }
 
-        self.gpu_utilization_item
-            .setAttributedTitle(Some(&stat_row_attributed(
-                &gpu.utilization,
-                color_for_accent_alpha(accent_kind, 1.0),
-                &self.row_render_cache,
-            )));
-        self.gpu_utilization_item.setImage(
-            self.row_render_cache
-                .legend_icon(accent_kind, 100)
-                .as_deref(),
+        update_legend_items(
+            &self.gpu_legend_items,
+            &gpu.rows,
+            accent_kind,
+            &self.row_render_cache,
         );
         *self.last_gpu.borrow_mut() = Some(gpu.clone());
     }
@@ -528,10 +518,15 @@ impl TrayController {
                         }
                     }
                 }
-                if gpu == GpuShape::Available {
-                    self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                    self.menu.addItem(&self.gpu_title_item);
-                    self.menu.addItem(&self.gpu_utilization_item);
+                match gpu {
+                    GpuShape::Hidden => {}
+                    GpuShape::Available { rows } => {
+                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
+                        self.menu.addItem(&self.gpu_title_item);
+                        for item in self.gpu_legend_items.iter().take(rows) {
+                            self.menu.addItem(item);
+                        }
+                    }
                 }
             }
         }
