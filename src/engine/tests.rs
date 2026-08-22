@@ -159,6 +159,7 @@ impl Samplers for FakeSamplers {
         Ok(Some(CpuSnapshot {
             user_percent: 10,
             system_percent: 5,
+            idle_percent: 85,
             efficiency_percent: None,
             performance_percent: None,
         }))
@@ -168,6 +169,8 @@ impl Samplers for FakeSamplers {
         self.counts.gpu.set(self.counts.gpu.get() + 1);
         Ok(Some(GpuSnapshot {
             utilization_percent: 20,
+            renderer_percent: None,
+            tiler_percent: None,
         }))
     }
 

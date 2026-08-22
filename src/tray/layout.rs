@@ -22,7 +22,7 @@ pub(super) enum CpuShape {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GpuShape {
     Hidden,
-    Available,
+    Available { rows: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,24 +86,23 @@ pub(super) fn menu_shape_for(model: &DropdownModel) -> MenuShape {
                         ModuleDisplay::Cpu(cpu) => Some(match &cpu.state {
                             CpuDisplayState::Loading => CpuShape::Loading,
                             CpuDisplayState::Unavailable => CpuShape::Unavailable,
-                            CpuDisplayState::Available {
-                                cores, processes, ..
-                            } => CpuShape::Available {
-                                cores: cores.len().min(2),
-                                processes: processes.len().min(PROCESS_CPU_ROW_LIMIT),
+                            CpuDisplayState::Available(available) => CpuShape::Available {
+                                cores: available.cores.len().min(2),
+                                processes: available.processes.len().min(PROCESS_CPU_ROW_LIMIT),
                             },
                         }),
                         ModuleDisplay::Memory(_) | ModuleDisplay::Gpu(_) => None,
                     })
                     .unwrap_or(CpuShape::Hidden),
-                gpu: if modules
+                gpu: modules
                     .iter()
-                    .any(|module| matches!(module, ModuleDisplay::Gpu(_)))
-                {
-                    GpuShape::Available
-                } else {
-                    GpuShape::Hidden
-                },
+                    .find_map(|module| match module {
+                        ModuleDisplay::Gpu(gpu) => Some(GpuShape::Available {
+                            rows: gpu.rows.len().min(3),
+                        }),
+                        ModuleDisplay::Memory(_) | ModuleDisplay::Cpu(_) => None,
+                    })
+                    .unwrap_or(GpuShape::Hidden),
             }
         }
     }
@@ -208,25 +207,21 @@ fn loaded_menu_entries(model: &DropdownModel) -> Vec<MenuEntry<'_>> {
                         match &cpu.state {
                             CpuDisplayState::Loading => entries.push(MenuEntry::CpuLoading),
                             CpuDisplayState::Unavailable => entries.push(MenuEntry::CpuUnavailable),
-                            CpuDisplayState::Available {
-                                utilization,
-                                cores,
-                                processes,
-                            } => {
-                                for row in utilization {
+                            CpuDisplayState::Available(available) => {
+                                for row in &available.utilization {
                                     entries.push(MenuEntry::Legend {
                                         label: &row.label,
                                         value: &row.value,
                                         opacity_percent: row.opacity_percent,
                                     });
                                 }
-                                for row in cores {
+                                for row in &available.cores {
                                     entries.push(MenuEntry::Stat {
                                         primary: &row.primary,
                                         tail: row.tail.as_deref(),
                                     });
                                 }
-                                for row in processes {
+                                for row in &available.processes {
                                     entries.push(MenuEntry::Stat {
                                         primary: &row.primary,
                                         tail: row.tail.as_deref(),
@@ -238,10 +233,13 @@ fn loaded_menu_entries(model: &DropdownModel) -> Vec<MenuEntry<'_>> {
                     ModuleDisplay::Gpu(gpu) => {
                         entries.push(MenuEntry::Separator);
                         entries.push(MenuEntry::ModuleTitle("GPU"));
-                        entries.push(MenuEntry::Stat {
-                            primary: &gpu.utilization.primary,
-                            tail: gpu.utilization.tail.as_deref(),
-                        });
+                        for row in &gpu.rows {
+                            entries.push(MenuEntry::Legend {
+                                label: &row.label,
+                                value: &row.value,
+                                opacity_percent: row.opacity_percent,
+                            });
+                        }
                     }
                 }
             }
@@ -521,6 +519,7 @@ mod tests {
         snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
             user_percent: 42,
             system_percent: 9,
+            idle_percent: 49,
             efficiency_percent: Some(18),
             performance_percent: Some(74),
         });
@@ -547,13 +546,21 @@ mod tests {
         );
         assert_eq!(
             entries[11],
+            MenuEntry::Legend {
+                label: "Idle",
+                value: "49%",
+                opacity_percent: 12,
+            }
+        );
+        assert_eq!(
+            entries[12],
             MenuEntry::Stat {
                 primary: "E-cores",
                 tail: Some("18%"),
             }
         );
         assert_eq!(
-            entries[12],
+            entries[13],
             MenuEntry::Stat {
                 primary: "P-cores",
                 tail: Some("74%"),
@@ -567,6 +574,7 @@ mod tests {
         snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
             user_percent: 42,
             system_percent: 9,
+            idle_percent: 49,
             efficiency_percent: None,
             performance_percent: None,
         });
@@ -579,7 +587,7 @@ mod tests {
         let entries = loaded_menu_entries(&model);
 
         assert_eq!(
-            entries[11],
+            entries[12],
             MenuEntry::Stat {
                 primary: "Video Encoder",
                 tail: Some("240%"),
@@ -595,21 +603,64 @@ mod tests {
     }
 
     #[test]
-    fn loaded_gpu_module_follows_existing_modules_with_one_utilization_row() {
+    fn loaded_gpu_module_follows_existing_modules_with_legend_rows() {
         let mut snapshot = snapshot();
         snapshot.gpu = GpuModuleState::Available(GpuSnapshot {
             utilization_percent: 76,
+            renderer_percent: None,
+            tiler_percent: None,
+        });
+        let device_only_model = dropdown_model(snapshot);
+        let device_only = loaded_menu_entries(&device_only_model);
+
+        assert_eq!(device_only[7], MenuEntry::Separator);
+        assert_eq!(device_only[8], MenuEntry::ModuleTitle("GPU"));
+        assert_eq!(
+            device_only[9],
+            MenuEntry::Legend {
+                label: "Utilization",
+                value: "76%",
+                opacity_percent: 100,
+            }
+        );
+        assert!(!device_only.iter().any(|entry| matches!(
+            entry,
+            MenuEntry::Legend {
+                label: "Renderer" | "Tiler",
+                ..
+            }
+        )));
+
+        snapshot.gpu = GpuModuleState::Available(GpuSnapshot {
+            utilization_percent: 76,
+            renderer_percent: Some(54),
+            tiler_percent: Some(12),
         });
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model);
 
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::ModuleTitle("GPU"));
         assert_eq!(
             entries[9],
-            MenuEntry::Stat {
-                primary: "Utilization",
-                tail: Some("76%"),
+            MenuEntry::Legend {
+                label: "Utilization",
+                value: "76%",
+                opacity_percent: 100,
+            }
+        );
+        assert_eq!(
+            entries[10],
+            MenuEntry::Legend {
+                label: "Renderer",
+                value: "54%",
+                opacity_percent: 65,
+            }
+        );
+        assert_eq!(
+            entries[11],
+            MenuEntry::Legend {
+                label: "Tiler",
+                value: "12%",
+                opacity_percent: 35,
             }
         );
     }

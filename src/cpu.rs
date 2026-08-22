@@ -310,6 +310,7 @@ fn snapshot_from_ticks(
     Some(CpuSnapshot {
         user_percent: percent(totals.user, totals.total()),
         system_percent: percent(totals.system, totals.total()),
+        idle_percent: percent(totals.idle, totals.total()),
         efficiency_percent,
         performance_percent,
     })
@@ -391,6 +392,7 @@ mod tests {
 
         assert_eq!(snapshot.user_percent, 50);
         assert_eq!(snapshot.system_percent, 17);
+        assert_eq!(snapshot.idle_percent, 33);
         assert_eq!(snapshot.efficiency_percent, None);
         assert_eq!(snapshot.performance_percent, None);
     }

@@ -107,7 +107,7 @@ pub(super) fn build_controller(
     let cpu_unavailable_item = make_stat_item(mtm);
     cpu_unavailable_item.setImage(Some(&placeholder_icon));
     cpu_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title(&row_render_cache)));
-    let cpu_legend_items = (0..2).map(|_| make_stat_item(mtm)).collect();
+    let cpu_legend_items = (0..3).map(|_| make_stat_item(mtm)).collect();
     let cpu_core_items = (0..2).map(|_| make_stat_item(mtm)).collect();
     let cpu_process_items = (0..PROCESS_CPU_ROW_LIMIT)
         .map(|_| make_stat_item(mtm))
@@ -117,7 +117,7 @@ pub(super) fn build_controller(
     unsafe {
         let _: () = msg_send![&gpu_title_item, setView: &*gpu_title_view];
     }
-    let gpu_utilization_item = make_stat_item(mtm);
+    let gpu_legend_items = (0..3).map(|_| make_stat_item(mtm)).collect();
 
     let refresh_item = make_command_item(
         mtm,
@@ -242,7 +242,7 @@ pub(super) fn build_controller(
         cpu_core_items,
         cpu_process_items,
         gpu_title_item,
-        gpu_utilization_item,
+        gpu_legend_items,
         refresh_item,
         auto_refresh_item,
         show_app_usage_item,
