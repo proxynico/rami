@@ -1,3 +1,4 @@
+use crate::presentation::MenuMetrics;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
@@ -5,12 +6,10 @@ use objc2_app_kit::{
     NSColor, NSFont, NSFontAttributeName, NSFontWeightMedium, NSForegroundColorAttributeName,
     NSStringDrawing, NSView,
 };
-use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
-
-const VIEW_WIDTH: f64 = 240.0;
-const VIEW_HEIGHT: f64 = 24.0;
+use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSString};
 
 pub struct ModuleTitleIvars {
+    metrics: MenuMetrics,
     label: String,
 }
 
@@ -31,9 +30,10 @@ define_class!(
 );
 
 impl ModuleTitleView {
-    pub fn new(mtm: MainThreadMarker, label: &str) -> Retained<Self> {
-        let frame = NSRect::new(NSPoint::ZERO, NSSize::new(VIEW_WIDTH, VIEW_HEIGHT));
+    pub fn new(mtm: MainThreadMarker, metrics: MenuMetrics, label: &str) -> Retained<Self> {
+        let frame = NSRect::new(NSPoint::ZERO, metrics.title_layout().view_size());
         let this = Self::alloc(mtm).set_ivars(ModuleTitleIvars {
+            metrics,
             label: label.to_string(),
         });
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
@@ -48,8 +48,9 @@ impl ModuleTitleView {
     }
 
     fn render(&self) {
+        let layout = self.ivars().metrics.title_layout();
         let label = NSString::from_str(&self.ivars().label);
-        let font = NSFont::systemFontOfSize_weight(13.0, unsafe { NSFontWeightMedium });
+        let font = NSFont::systemFontOfSize_weight(layout.font_size, unsafe { NSFontWeightMedium });
         let attrs = unsafe {
             let color = Retained::cast_unchecked::<AnyObject>(NSColor::labelColor());
             let font = Retained::cast_unchecked::<AnyObject>(font);
@@ -61,7 +62,7 @@ impl ModuleTitleView {
         let measured = unsafe { label.sizeWithAttributes(Some(&attrs)) };
         let bounds = self.bounds();
         let origin = NSPoint::new(
-            (bounds.size.width - measured.width) / 2.0,
+            layout.origin_x,
             (bounds.size.height - measured.height) / 2.0,
         );
         unsafe {

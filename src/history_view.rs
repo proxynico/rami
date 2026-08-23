@@ -3,7 +3,8 @@
 //! amended bound allows exactly this view and nothing more. Captions under
 //! the mark show current used and the signed window delta.
 
-use crate::format::history_caption;
+use crate::format::{history_caption, Accent};
+use crate::presentation::{ChromeColor, HistoryLayout, MenuMetrics};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
@@ -13,16 +14,6 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
 use std::cell::RefCell;
-
-const VIEW_WIDTH: f64 = 240.0;
-/// One menu row: sparkline band above, caption (current · delta) below.
-const VIEW_HEIGHT: f64 = 36.0;
-const BAND_LEFT: f64 = 16.0;
-const BAND_RIGHT: f64 = VIEW_WIDTH - 16.0;
-const BAND_BOTTOM: f64 = 14.0;
-const BAND_TOP: f64 = VIEW_HEIGHT - 4.0;
-const CAPTION_Y: f64 = 1.0;
-const CAPTION_SIZE: f64 = 10.0;
 /// Below this byte span the sparkline collapses to a midline so tiny page
 /// jitter does not fill the band. Deliberately lower than the trend
 /// classifier's Rising threshold (300 MB): the mark is allowed to swing
@@ -65,10 +56,11 @@ fn normalized_points(samples: &[u64], span_floor: u64) -> Option<Vec<(f64, f64)>
 
 struct HistoryState {
     samples: Vec<u64>,
-    accent: Retained<NSColor>,
+    chrome: ChromeColor,
 }
 
 pub struct MemoryHistoryIvars {
+    metrics: MenuMetrics,
     state: RefCell<HistoryState>,
 }
 
@@ -89,12 +81,13 @@ define_class!(
 );
 
 impl MemoryHistoryView {
-    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let frame = NSRect::new(NSPoint::ZERO, NSSize::new(VIEW_WIDTH, VIEW_HEIGHT));
+    pub fn new(mtm: MainThreadMarker, metrics: MenuMetrics) -> Retained<Self> {
+        let frame = NSRect::new(NSPoint::ZERO, metrics.history_layout().view_size());
         let this = Self::alloc(mtm).set_ivars(MemoryHistoryIvars {
+            metrics,
             state: RefCell::new(HistoryState {
                 samples: Vec::new(),
-                accent: NSColor::labelColor(),
+                chrome: ChromeColor::resolve(Accent::Neutral),
             }),
         });
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
@@ -108,14 +101,14 @@ impl MemoryHistoryView {
         view
     }
 
-    pub fn update(&self, samples: &[u64], accent: Retained<NSColor>) {
+    pub fn update(&self, samples: &[u64], chrome: ChromeColor) {
         let value = match history_caption(samples) {
             Some((current, delta)) => format!("{current} used, {delta} over the last two minutes"),
             None => "collecting samples".to_string(),
         };
         *self.ivars().state.borrow_mut() = HistoryState {
             samples: samples.to_vec(),
-            accent,
+            chrome,
         };
         let value = NSString::from_str(&value);
         unsafe {
@@ -126,14 +119,13 @@ impl MemoryHistoryView {
 
     fn render(&self) {
         let state = self.ivars().state.borrow();
-        self.draw_caption(&state.samples);
+        let layout = self.ivars().metrics.history_layout();
+        self.draw_caption(&state.samples, &layout);
 
         let Some(points) = normalized_points(&state.samples, SPAN_FLOOR_BYTES) else {
-            // Warming up: a faint baseline so the row reads as an empty graph,
-            // never a blank slot.
             let baseline = NSBezierPath::bezierPath();
-            baseline.moveToPoint(NSPoint::new(BAND_LEFT, BAND_BOTTOM));
-            baseline.lineToPoint(NSPoint::new(BAND_RIGHT, BAND_BOTTOM));
+            baseline.moveToPoint(NSPoint::new(layout.band_left, layout.band_bottom));
+            baseline.lineToPoint(NSPoint::new(layout.band_right, layout.band_bottom));
             baseline.setLineWidth(1.0);
             NSColor::quaternaryLabelColor().setStroke();
             baseline.stroke();
@@ -142,21 +134,24 @@ impl MemoryHistoryView {
 
         let to_view = |&(x, y): &(f64, f64)| {
             NSPoint::new(
-                BAND_LEFT + x * (BAND_RIGHT - BAND_LEFT),
-                BAND_BOTTOM + y * (BAND_TOP - BAND_BOTTOM),
+                layout.band_left + x * layout.band_width(),
+                layout.band_bottom + y * (layout.band_top - layout.band_bottom),
             )
         };
 
-        // Area fill first, then the line over it, then the "now" dot.
         let area = NSBezierPath::bezierPath();
         area.moveToPoint(to_view(&points[0]));
         for point in &points[1..] {
             area.lineToPoint(to_view(point));
         }
-        area.lineToPoint(NSPoint::new(BAND_RIGHT, BAND_BOTTOM));
-        area.lineToPoint(NSPoint::new(BAND_LEFT, BAND_BOTTOM));
+        area.lineToPoint(NSPoint::new(layout.band_right, layout.band_bottom));
+        area.lineToPoint(NSPoint::new(layout.band_left, layout.band_bottom));
         area.closePath();
-        state.accent.colorWithAlphaComponent(FILL_ALPHA).setFill();
+        state
+            .chrome
+            .as_nscolor()
+            .colorWithAlphaComponent(FILL_ALPHA)
+            .setFill();
         area.fill();
 
         let line = NSBezierPath::bezierPath();
@@ -165,7 +160,11 @@ impl MemoryHistoryView {
             line.lineToPoint(to_view(point));
         }
         line.setLineWidth(LINE_WIDTH);
-        state.accent.colorWithAlphaComponent(LINE_ALPHA).setStroke();
+        state
+            .chrome
+            .as_nscolor()
+            .colorWithAlphaComponent(LINE_ALPHA)
+            .setStroke();
         line.stroke();
 
         let newest = to_view(points.last().expect("normalized_points is non-empty"));
@@ -173,36 +172,47 @@ impl MemoryHistoryView {
             NSPoint::new(newest.x - NOW_DOT_RADIUS, newest.y - NOW_DOT_RADIUS),
             NSSize::new(NOW_DOT_RADIUS * 2.0, NOW_DOT_RADIUS * 2.0),
         ));
-        state.accent.setFill();
+        state.chrome.as_nscolor().setFill();
         dot.fill();
     }
 
-    fn draw_caption(&self, samples: &[u64]) {
+    fn draw_caption(&self, samples: &[u64], layout: &HistoryLayout) {
         let Some((current, delta)) = history_caption(samples) else {
-            draw_caption_text("…", BAND_LEFT, CAPTION_Y, NSColor::tertiaryLabelColor());
+            draw_caption_text(
+                "…",
+                layout.band_left,
+                layout.caption_y,
+                layout.caption_size,
+                NSColor::tertiaryLabelColor(),
+            );
             return;
         };
         draw_caption_text(
             &current,
-            BAND_LEFT,
-            CAPTION_Y,
+            layout.band_left,
+            layout.caption_y,
+            layout.caption_size,
             NSColor::secondaryLabelColor(),
         );
-        let delta_attrs = caption_attrs(NSColor::secondaryLabelColor());
+        let delta_attrs = caption_attrs(NSColor::secondaryLabelColor(), layout.caption_size);
         let delta_str = NSString::from_str(&delta);
         let measured = unsafe { delta_str.sizeWithAttributes(Some(&delta_attrs)) };
         draw_caption_text(
             &delta,
-            BAND_RIGHT - measured.width,
-            CAPTION_Y,
+            layout.band_right - measured.width,
+            layout.caption_y,
+            layout.caption_size,
             NSColor::secondaryLabelColor(),
         );
     }
 }
 
-fn caption_attrs(color: Retained<NSColor>) -> Retained<NSDictionary<NSString, AnyObject>> {
+fn caption_attrs(
+    color: Retained<NSColor>,
+    size: f64,
+) -> Retained<NSDictionary<NSString, AnyObject>> {
     let weight = unsafe { NSFontWeightRegular };
-    let font = NSFont::monospacedDigitSystemFontOfSize_weight(CAPTION_SIZE, weight);
+    let font = NSFont::monospacedDigitSystemFontOfSize_weight(size, weight);
     unsafe {
         let color_obj = Retained::cast_unchecked::<AnyObject>(color);
         let font_obj = Retained::cast_unchecked::<AnyObject>(font);
@@ -213,8 +223,8 @@ fn caption_attrs(color: Retained<NSColor>) -> Retained<NSDictionary<NSString, An
     }
 }
 
-fn draw_caption_text(text: &str, x: f64, y: f64, color: Retained<NSColor>) {
-    let attrs = caption_attrs(color);
+fn draw_caption_text(text: &str, x: f64, y: f64, size: f64, color: Retained<NSColor>) {
+    let attrs = caption_attrs(color, size);
     let text = NSString::from_str(text);
     unsafe {
         text.drawAtPoint_withAttributes(NSPoint::new(x, y), Some(&attrs));

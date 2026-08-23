@@ -13,6 +13,7 @@ mod iokit;
 mod login_item;
 mod memory_view;
 mod module_title_view;
+pub(crate) mod presentation;
 mod proc_list;
 mod process_cpu;
 mod process_memory;
