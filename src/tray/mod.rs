@@ -10,8 +10,8 @@ use self::render::{
     app_row_attributed, legend_row_attributed, stat_row_attributed, RowRenderCache,
 };
 use self::style::{
-    color_for_accent, color_for_accent_alpha, color_for_rings, status_tint_for_pressure,
-    DEMOTED_LABEL_ALPHA, DEMOTED_SWATCH_OPACITY, INFO_ROW_SWATCH_OPACITY, ROW_ICON_SIZE,
+    color_for_accent, color_for_accent_alpha, status_tint_for_pressure, DEMOTED_LABEL_ALPHA,
+    DEMOTED_SWATCH_OPACITY, INFO_ROW_SWATCH_OPACITY, ROW_ICON_SIZE,
 };
 use crate::format::{
     dropdown_model_with_sections, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
@@ -22,6 +22,7 @@ use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_view::MemoryRingsView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
+use crate::presentation::{ChromeColor, RingStrokeColor};
 use crate::process_cpu::ProcessCpuSnapshot;
 use crate::process_memory::AppMemorySnapshot;
 #[cfg(test)]
@@ -281,8 +282,7 @@ impl TrayController {
         }
 
         if let Some(button) = self.status_item.button(mtm) {
-            let accent = color_for_accent(Accent::from(pressure));
-            match make_status_image(name, trend, &accent) {
+            match make_status_image(name, trend, Accent::from(pressure)) {
                 Some(StatusImage { image, template }) => {
                     image.setTemplate(template);
                     button.setImage(Some(&image));
@@ -329,14 +329,14 @@ impl TrayController {
             };
             let accent_changed = self.last_accent.get() != *accent;
             let accent_color = color_for_accent(*accent);
-            let rings_color = color_for_rings(*accent);
+            let chrome = ChromeColor::resolve(*accent);
+            let stroke = RingStrokeColor::resolve(*accent);
             if accent_changed || self.last_rings.borrow().as_ref() != Some(&memory.rings) {
-                self.rings_view.update(&memory.rings, rings_color);
+                self.rings_view.update(&memory.rings, stroke);
                 *self.last_rings.borrow_mut() = Some(memory.rings.clone());
             }
             if accent_changed || self.last_history.borrow().as_ref() != Some(&memory.history) {
-                self.history_view
-                    .update(&memory.history, accent_color.clone());
+                self.history_view.update(&memory.history, chrome);
                 *self.last_history.borrow_mut() = Some(memory.history.clone());
             }
             if accent_changed || self.last_breakdown.borrow().as_ref() != Some(&memory.breakdown) {

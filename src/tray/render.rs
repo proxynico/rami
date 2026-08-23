@@ -3,6 +3,7 @@ use super::style::{
     ROW_ICON_SIZE,
 };
 use crate::format::{Accent, LegendRow, StatRow};
+use crate::presentation::MenuMetrics;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
@@ -31,10 +32,10 @@ pub(super) struct RowRenderCache {
 }
 
 impl RowRenderCache {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(metrics: MenuMetrics) -> Self {
         Self {
-            font: stat_font(),
-            paragraph_style: row_paragraph_style(),
+            font: stat_font(metrics.type_scale.stat_row),
+            paragraph_style: row_paragraph_style(metrics.row_tail_tab()),
             legend_icons: RefCell::new(HashMap::new()),
         }
     }

@@ -1,3 +1,5 @@
+use crate::format::Accent;
+use crate::presentation::{color_for_accent, rising_fast_badge_color};
 use crate::trend::MemoryTrend;
 use block2::RcBlock;
 use objc2::rc::Retained;
@@ -28,7 +30,7 @@ pub(crate) struct StatusImage {
 pub(crate) fn make_status_image(
     gauge_name: &'static str,
     trend: MemoryTrend,
-    accent: &NSColor,
+    accent: Accent,
 ) -> Option<StatusImage> {
     let badge = badge_for_state(trend);
     let base_template = render_template_symbol(gauge_name, NSImageSymbolScale::Large)?;
@@ -38,16 +40,7 @@ pub(crate) fn make_status_image(
             template: true,
         }),
         BadgeKind::RisingFast => {
-            // Preserve the trend badge shape without introducing a second hue.
-            let climb = accent.colorWithAlphaComponent(0.65);
-            let base_colored =
-                render_colored_symbol(gauge_name, NSImageSymbolScale::Large, accent)?;
-            let badge_image = render_colored_symbol(
-                "arrow.up.right.circle.fill",
-                NSImageSymbolScale::Small,
-                &climb,
-            )?;
-            let composite = compose_with_badge(base_colored, badge_image)?;
+            let composite = compose_rising_fast(gauge_name, accent, base_template.size())?;
             Some(StatusImage {
                 image: composite,
                 template: false,
@@ -80,19 +73,30 @@ fn render_colored_symbol(
     base.imageWithSymbolConfiguration(&combined)
 }
 
-fn compose_with_badge(
-    base: Retained<NSImage>,
-    badge: Retained<NSImage>,
+fn compose_rising_fast(
+    gauge_name: &'static str,
+    accent: Accent,
+    size: NSSize,
 ) -> Option<Retained<NSImage>> {
-    let size = base.size();
     if size.width <= 0.0 || size.height <= 0.0 {
         return None;
     }
-    // Draw lazily via a drawing handler instead of rasterizing with lockFocus:
-    // the handler re-runs whenever the menu bar redraws the icon, so dynamic
-    // colors (labelColor) resolve against the menu bar's current light/dark
-    // appearance rather than being baked in at creation time.
+    // Hierarchical SF Symbol tints and Neutral alpha resolve here, against
+    // the menu bar's current appearance, not at image-create time.
     let handler = RcBlock::new(move |dest_rect: NSRect| -> Bool {
+        let chrome = color_for_accent(accent);
+        let climb = rising_fast_badge_color(accent);
+        let Some(base) = render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &chrome)
+        else {
+            return Bool::NO;
+        };
+        let Some(badge) = render_colored_symbol(
+            "arrow.up.right.circle.fill",
+            NSImageSymbolScale::Small,
+            &climb,
+        ) else {
+            return Bool::NO;
+        };
         let zero_rect = NSRect::ZERO;
         base.drawInRect_fromRect_operation_fraction(
             dest_rect,
@@ -124,6 +128,7 @@ fn compose_with_badge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::Accent;
     use objc2::{AnyThread, Message};
     use objc2_app_kit::{
         NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath,
@@ -220,7 +225,7 @@ mod tests {
                 *built.borrow_mut() = make_status_image(
                     "gauge.with.dots.needle.50percent",
                     MemoryTrend::RisingFast,
-                    &NSColor::labelColor(),
+                    Accent::Neutral,
                 );
             });
             light.performAsCurrentDrawingAppearance(&build);

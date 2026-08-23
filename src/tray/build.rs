@@ -15,6 +15,7 @@ use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_view::MemoryRingsView;
 use crate::model::MemoryPressure;
 use crate::module_title_view::ModuleTitleView;
+use crate::presentation::MenuMetrics;
 use crate::process_cpu::PROCESS_CPU_ROW_LIMIT;
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
@@ -71,14 +72,15 @@ pub(super) fn build_controller(
     let target = Some(&*refresh_target);
 
     let placeholder_icon = make_placeholder_icon();
-    let row_render_cache = RowRenderCache::new();
+    let metrics = MenuMetrics::STANDARD;
+    let row_render_cache = RowRenderCache::new(metrics);
     let rings_item = make_stat_item(mtm);
-    let rings_view = MemoryRingsView::new(mtm);
+    let rings_view = MemoryRingsView::new(mtm, metrics);
     unsafe {
         let _: () = msg_send![&rings_item, setView: &*rings_view];
     }
     let history_item = make_stat_item(mtm);
-    let history_view = MemoryHistoryView::new(mtm);
+    let history_view = MemoryHistoryView::new(mtm, metrics);
     unsafe {
         let _: () = msg_send![&history_item, setView: &*history_view];
     }
@@ -97,7 +99,7 @@ pub(super) fn build_controller(
     let app_items: Vec<Retained<NSMenuItem>> =
         (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
     let cpu_title_item = make_stat_item(mtm);
-    let cpu_title_view = ModuleTitleView::new(mtm, "CPU");
+    let cpu_title_view = ModuleTitleView::new(mtm, metrics, "CPU");
     unsafe {
         let _: () = msg_send![&cpu_title_item, setView: &*cpu_title_view];
     }
@@ -113,7 +115,7 @@ pub(super) fn build_controller(
         .map(|_| make_stat_item(mtm))
         .collect();
     let gpu_title_item = make_stat_item(mtm);
-    let gpu_title_view = ModuleTitleView::new(mtm, "GPU");
+    let gpu_title_view = ModuleTitleView::new(mtm, metrics, "GPU");
     unsafe {
         let _: () = msg_send![&gpu_title_item, setView: &*gpu_title_view];
     }
