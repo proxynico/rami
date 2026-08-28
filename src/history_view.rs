@@ -7,7 +7,7 @@ use crate::format::{history_caption, Accent};
 use crate::presentation::{ChromeColor, HistoryLayout, MenuMetrics};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol};
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSStringDrawing, NSView,
@@ -120,7 +120,7 @@ impl MemoryHistoryView {
     fn render(&self) {
         let state = self.ivars().state.borrow();
         let layout = self.ivars().metrics.history_layout();
-        self.draw_caption(&state.samples, &layout);
+        self.draw_caption(&state.samples, &layout, &state.chrome);
 
         let Some(points) = normalized_points(&state.samples, SPAN_FLOOR_BYTES) else {
             let baseline = NSBezierPath::bezierPath();
@@ -176,14 +176,17 @@ impl MemoryHistoryView {
         dot.fill();
     }
 
-    fn draw_caption(&self, samples: &[u64], layout: &HistoryLayout) {
+    fn draw_caption(&self, samples: &[u64], layout: &HistoryLayout, chrome: &ChromeColor) {
+        // drawRect: alpha on the resolved chrome tracks appearance. Same
+        // 0.65 stop as the sparkline stroke so captions stay secondary to the mark.
+        let color = chrome.as_nscolor().colorWithAlphaComponent(LINE_ALPHA);
         let Some((current, delta)) = history_caption(samples) else {
             draw_caption_text(
                 "…",
                 layout.band_left,
                 layout.caption_y,
                 layout.caption_size,
-                NSColor::tertiaryLabelColor(),
+                &color,
             );
             return;
         };
@@ -192,9 +195,9 @@ impl MemoryHistoryView {
             layout.band_left,
             layout.caption_y,
             layout.caption_size,
-            NSColor::secondaryLabelColor(),
+            &color,
         );
-        let delta_attrs = caption_attrs(NSColor::secondaryLabelColor(), layout.caption_size);
+        let delta_attrs = caption_attrs(&color, layout.caption_size);
         let delta_str = NSString::from_str(&delta);
         let measured = unsafe { delta_str.sizeWithAttributes(Some(&delta_attrs)) };
         draw_caption_text(
@@ -202,19 +205,16 @@ impl MemoryHistoryView {
             layout.band_right - measured.width,
             layout.caption_y,
             layout.caption_size,
-            NSColor::secondaryLabelColor(),
+            &color,
         );
     }
 }
 
-fn caption_attrs(
-    color: Retained<NSColor>,
-    size: f64,
-) -> Retained<NSDictionary<NSString, AnyObject>> {
+fn caption_attrs(color: &NSColor, size: f64) -> Retained<NSDictionary<NSString, AnyObject>> {
     let weight = unsafe { NSFontWeightRegular };
     let font = NSFont::monospacedDigitSystemFontOfSize_weight(size, weight);
     unsafe {
-        let color_obj = Retained::cast_unchecked::<AnyObject>(color);
+        let color_obj = Retained::cast_unchecked::<AnyObject>(color.retain());
         let font_obj = Retained::cast_unchecked::<AnyObject>(font);
         NSDictionary::from_retained_objects(
             &[NSForegroundColorAttributeName, NSFontAttributeName],
@@ -223,7 +223,7 @@ fn caption_attrs(
     }
 }
 
-fn draw_caption_text(text: &str, x: f64, y: f64, size: f64, color: Retained<NSColor>) {
+fn draw_caption_text(text: &str, x: f64, y: f64, size: f64, color: &NSColor) {
     let attrs = caption_attrs(color, size);
     let text = NSString::from_str(text);
     unsafe {

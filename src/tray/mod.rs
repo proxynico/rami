@@ -332,7 +332,8 @@ impl TrayController {
             let chrome = ChromeColor::resolve(*accent);
             let stroke = RingStrokeColor::resolve(*accent);
             if accent_changed || self.last_rings.borrow().as_ref() != Some(&memory.rings) {
-                self.rings_view.update(&memory.rings, stroke);
+                self.rings_view
+                    .update(&memory.rings, stroke, chrome.clone());
                 *self.last_rings.borrow_mut() = Some(memory.rings.clone());
             }
             if accent_changed || self.last_history.borrow().as_ref() != Some(&memory.history) {

@@ -114,7 +114,7 @@ impl MenuMetrics {
     }
 
     pub(crate) fn content_right(&self) -> f64 {
-        self.canvas_width - self.content_inset
+        self.canvas_width - self.content_left()
     }
 
     pub(crate) fn content_width(&self) -> f64 {
@@ -156,7 +156,7 @@ impl MenuMetrics {
         HistoryLayout {
             view_width: self.canvas_width,
             view_height: self.history.view_height,
-            band_left: self.content_left(),
+            band_left: self.row_label_origin_x(),
             band_right: self.content_right(),
             band_bottom: self.history.band_bottom,
             band_top: self.history.view_height - self.history.band_top_inset,
@@ -311,8 +311,8 @@ mod tests {
         assert_eq!(m.row_tail_tab(), 200.0);
 
         let hist = m.history_layout();
-        assert_eq!(hist.band_left, 16.0);
-        assert_eq!(hist.band_right, 224.0);
+        assert_eq!(hist.band_left, m.row_label_origin_x());
+        assert_eq!(hist.band_left, 24.0);
         assert_eq!(hist.band_right, m.value_column_x());
         assert_eq!(hist.view_height, 36.0);
 
