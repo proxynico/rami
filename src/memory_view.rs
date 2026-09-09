@@ -1,8 +1,8 @@
 use crate::format::{Accent, RingDisplay};
-use crate::presentation::{MenuMetrics, RingLayout, RingStrokeColor};
+use crate::presentation::{ChromeColor, MenuMetrics, RingLayout, RingStrokeColor};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol};
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSFontWeightMedium, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSLineCapStyle, NSStringDrawing, NSView,
@@ -14,6 +14,7 @@ use std::cell::RefCell;
 struct RingsState {
     rings: Option<[RingDisplay; 2]>,
     stroke: RingStrokeColor,
+    chrome: ChromeColor,
 }
 
 pub struct MemoryRingsIvars {
@@ -45,6 +46,7 @@ impl MemoryRingsView {
             state: RefCell::new(RingsState {
                 rings: None,
                 stroke: RingStrokeColor::resolve(Accent::Neutral),
+                chrome: ChromeColor::resolve(Accent::Neutral),
             }),
         });
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
@@ -56,10 +58,11 @@ impl MemoryRingsView {
         view
     }
 
-    pub fn update(&self, rings: &[RingDisplay; 2], stroke: RingStrokeColor) {
+    pub fn update(&self, rings: &[RingDisplay; 2], stroke: RingStrokeColor, chrome: ChromeColor) {
         *self.ivars().state.borrow_mut() = RingsState {
             rings: Some(rings.clone()),
             stroke,
+            chrome,
         };
         let label = NSString::from_str("Memory");
         let value = NSString::from_str(&format!(
@@ -89,7 +92,7 @@ impl MemoryRingsView {
                 center.y - layout.percent_baseline_offset,
                 scale.ring_percent,
                 true,
-                NSColor::labelColor(),
+                state.chrome.as_nscolor(),
             );
             draw_centered(
                 &ring.label,
@@ -97,7 +100,7 @@ impl MemoryRingsView {
                 layout.label_y,
                 scale.ring_label,
                 false,
-                NSColor::labelColor(),
+                state.chrome.as_nscolor(),
             );
             if !ring.detail.is_empty() {
                 draw_centered(
@@ -106,7 +109,7 @@ impl MemoryRingsView {
                     layout.detail_y,
                     scale.ring_detail,
                     false,
-                    NSColor::secondaryLabelColor(),
+                    &NSColor::secondaryLabelColor(),
                 );
             }
         }
@@ -140,14 +143,7 @@ fn draw_ring(center: NSPoint, percent: u8, layout: RingLayout, stroke: &NSColor)
     progress.stroke();
 }
 
-fn draw_centered(
-    text: &str,
-    center_x: f64,
-    y: f64,
-    size: f64,
-    emphasized: bool,
-    color: Retained<NSColor>,
-) {
+fn draw_centered(text: &str, center_x: f64, y: f64, size: f64, emphasized: bool, color: &NSColor) {
     let weight = unsafe {
         if emphasized {
             NSFontWeightMedium
@@ -155,9 +151,13 @@ fn draw_centered(
             NSFontWeightRegular
         }
     };
-    let font = NSFont::systemFontOfSize_weight(size, weight);
+    let font = if emphasized {
+        NSFont::monospacedDigitSystemFontOfSize_weight(size, weight)
+    } else {
+        NSFont::systemFontOfSize_weight(size, weight)
+    };
     let attrs = unsafe {
-        let color_obj = Retained::cast_unchecked::<AnyObject>(color);
+        let color_obj = Retained::cast_unchecked::<AnyObject>(color.retain());
         let font_obj = Retained::cast_unchecked::<AnyObject>(font);
         NSDictionary::from_retained_objects(
             &[NSForegroundColorAttributeName, NSFontAttributeName],
