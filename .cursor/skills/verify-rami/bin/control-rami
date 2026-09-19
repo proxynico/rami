@@ -1,0 +1,513 @@
+#!/usr/bin/env bash
+# Drive the repo-local rami.app the way a user does: one status item, NSMenu dropdown.
+# Invocation examples live in ../SKILL.md. Do not kill a rami this script did not start.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+STATE_DIR="${RAMI_VERIFY_STATE_DIR:-/tmp/rami-verify}"
+ARTIFACT_DIR="${RAMI_VERIFY_ARTIFACTS:-$ROOT_DIR/.cursor/skills/verify-rami/artifacts}"
+BUNDLE_DIR="$ROOT_DIR/rami.app"
+BINARY="$BUNDLE_DIR/Contents/MacOS/rami"
+DEFAULTS_DOMAIN="com.nicomontero.rami"
+PID_FILE="$STATE_DIR/pid"
+BIN_FILE="$STATE_DIR/binary"
+PRESSURE_FILE="$STATE_DIR/force-pressure"
+DEFAULTS_FILE="$STATE_DIR/defaults.plist"
+DEFAULTS_EXISTED_FILE="$STATE_DIR/defaults-existed"
+PASTEBOARD_FILE="$STATE_DIR/pasteboard.txt"
+PASTEBOARD_SAVED_FILE="$STATE_DIR/pasteboard-saved"
+
+usage() {
+  cat <<'EOF'
+Usage: control-rami <command> [args]
+
+  launch [--skip-build] [--force-pressure normal|warning|critical]
+  doctor
+  status-label
+  open-menu
+  dismiss-menu
+  dump-menu [--path FILE]
+  capture-open-menu --dump FILE --screenshot FILE
+  click --item NAME
+  click-settings --item NAME
+  screenshot --path FILE
+  snapshot-defaults
+  restore-defaults
+  snapshot-pasteboard
+  restore-pasteboard
+  cleanup
+EOF
+}
+
+die() {
+  printf 'control-rami: %s\n' "$*" >&2
+  exit 1
+}
+
+ensure_state_dir() {
+  mkdir -p "$STATE_DIR" "$ARTIFACT_DIR"
+}
+
+recorded_pid() {
+  if [ -f "$PID_FILE" ]; then
+    tr -d '[:space:]' <"$PID_FILE"
+  fi
+}
+
+pid_is_alive() {
+  local pid="$1"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+process_command() {
+  ps -o command= -p "$1" 2>/dev/null | awk 'NR == 1 { sub(/^[[:space:]]+/, ""); print; exit }'
+}
+
+running_rami_pids() {
+  pgrep -x rami 2>/dev/null || true
+}
+
+cargo_version() {
+  awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }' "$ROOT_DIR/Cargo.toml"
+}
+
+bundle_version() {
+  if [ -f "$BUNDLE_DIR/Contents/Info.plist" ]; then
+    plutil -extract CFBundleShortVersionString raw "$BUNDLE_DIR/Contents/Info.plist" 2>/dev/null || true
+  fi
+}
+
+ascript() {
+  local pid="$1"
+  local body="$2"
+  osascript - "$pid" <<EOF
+on run argv
+  set targetPid to item 1 of argv as integer
+  tell application "System Events"
+    tell (first process whose unix id is targetPid)
+      $body
+    end tell
+  end tell
+end run
+EOF
+}
+
+status_label() {
+  ascript "$1" 'return description of menu bar item 1 of menu bar 1'
+}
+
+click_status() {
+  ascript "$1" 'click menu bar item 1 of menu bar 1'
+}
+
+dump_open_menu() {
+  ascript "$1" '
+      set mb to menu bar item 1 of menu bar 1
+      if (count of menus of mb) is 0 then error "status menu is not open"
+      set out to "role	name	description	value" & linefeed
+      set els to entire contents of menu 1 of mb
+      repeat with el in els
+        set r to ""
+        set n to ""
+        set d to ""
+        set v to ""
+        try
+          set r to role of el as string
+        end try
+        try
+          set n to name of el as string
+        end try
+        try
+          set d to description of el as string
+        end try
+        try
+          set v to value of el as string
+        end try
+        if n is "missing value" then set n to ""
+        if d is "missing value" then set d to ""
+        if v is "missing value" then set v to ""
+        set out to out & r & tab & n & tab & d & tab & v & linefeed
+      end repeat
+      return out
+'
+}
+
+click_named() {
+  ascript "$1" "
+      click menu bar item 1 of menu bar 1
+      delay 0.45
+      click menu item \"$2\" of menu 1 of menu bar item 1 of menu bar 1
+"
+}
+
+click_settings_item() {
+  ascript "$1" "
+      click menu bar item 1 of menu bar 1
+      delay 0.45
+      click menu item \"Settings\" of menu 1 of menu bar item 1 of menu bar 1
+      delay 0.35
+      click menu item \"$2\" of menu 1 of menu item \"Settings\" of menu 1 of menu bar item 1 of menu bar 1
+"
+}
+
+require_our_instance() {
+  local pid
+  pid="$(recorded_pid)"
+  [ -n "$pid" ] || die "no verification instance (missing $PID_FILE). Run: control-rami launch"
+  pid_is_alive "$pid" || die "recorded pid $pid is not running. Run: control-rami cleanup && control-rami launch"
+  local cmd
+  cmd="$(process_command "$pid")"
+  case "$cmd" in
+    "$BINARY"|"$BINARY "*) ;;
+    *) die "pid $pid is not the repo-local bundle ($cmd). Refusing to drive a foreign rami." ;;
+  esac
+  printf '%s' "$pid"
+}
+
+cmd_snapshot_defaults() {
+  ensure_state_dir
+  if defaults export "$DEFAULTS_DOMAIN" "$DEFAULTS_FILE" 2>/dev/null; then
+    printf 'yes\n' >"$DEFAULTS_EXISTED_FILE"
+  else
+    rm -f "$DEFAULTS_FILE"
+    printf 'no\n' >"$DEFAULTS_EXISTED_FILE"
+  fi
+}
+
+cmd_restore_defaults() {
+  [ -f "$DEFAULTS_EXISTED_FILE" ] || return 0
+  local existed
+  existed="$(tr -d '[:space:]' <"$DEFAULTS_EXISTED_FILE")"
+  if [ "$existed" = "yes" ] && [ -f "$DEFAULTS_FILE" ]; then
+    defaults import "$DEFAULTS_DOMAIN" "$DEFAULTS_FILE"
+  elif [ "$existed" = "no" ]; then
+    defaults delete "$DEFAULTS_DOMAIN" 2>/dev/null || true
+  fi
+}
+
+cmd_snapshot_pasteboard() {
+  ensure_state_dir
+  if pbpaste >"$PASTEBOARD_FILE" 2>/dev/null; then
+    printf 'yes\n' >"$PASTEBOARD_SAVED_FILE"
+  else
+    rm -f "$PASTEBOARD_FILE"
+    printf 'no\n' >"$PASTEBOARD_SAVED_FILE"
+  fi
+}
+
+cmd_restore_pasteboard() {
+  [ -f "$PASTEBOARD_SAVED_FILE" ] || return 0
+  if [ "$(tr -d '[:space:]' <"$PASTEBOARD_SAVED_FILE")" = "yes" ] && [ -f "$PASTEBOARD_FILE" ]; then
+    pbcopy <"$PASTEBOARD_FILE"
+  fi
+}
+
+cmd_launch() {
+  local skip_build=0
+  local force_pressure=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --skip-build) skip_build=1 ;;
+      --force-pressure)
+        shift
+        [ $# -gt 0 ] || die "--force-pressure needs normal|warning|critical"
+        force_pressure="$1"
+        case "$force_pressure" in
+          normal|warning|critical) ;;
+          *) die "unknown force-pressure: $force_pressure" ;;
+        esac
+        ;;
+      *) die "unknown launch argument: $1" ;;
+    esac
+    shift
+  done
+
+  ensure_state_dir
+  local ours
+  ours="$(recorded_pid)"
+  if [ -n "$ours" ] && pid_is_alive "$ours"; then
+    die "verification instance already running (pid $ours). Run cleanup first."
+  fi
+  rm -f "$PID_FILE" "$BIN_FILE" "$PRESSURE_FILE"
+
+  local foreign=""
+  local pid
+  for pid in $(running_rami_pids); do
+    foreign="$foreign $pid"
+  done
+  if [ -n "${foreign// /}" ]; then
+    die "a rami we did not start is already running (pid(s):$foreign). Quit that instance before verification. One lock, one menu-bar gauge, one defaults domain — do not double-drive."
+  fi
+
+  if [ "$skip_build" -eq 0 ]; then
+    (cd "$ROOT_DIR" && ./scripts/build-app.sh)
+  fi
+  [ -x "$BINARY" ] || die "missing $BINARY — run without --skip-build"
+
+  cmd_snapshot_defaults
+
+  mkdir -p "$STATE_DIR"
+  local stdout_log="$STATE_DIR/rami.stdout" stderr_log="$STATE_DIR/rami.stderr"
+  : >"$stdout_log"
+  : >"$stderr_log"
+  if [ -n "$force_pressure" ]; then
+    printf '%s\n' "$force_pressure" >"$PRESSURE_FILE"
+    open -g --env "RAMI_FORCE_PRESSURE=$force_pressure" --stdout "$stdout_log" --stderr "$stderr_log" "$BUNDLE_DIR"
+  else
+    rm -f "$PRESSURE_FILE"
+    open -g --stdout "$stdout_log" --stderr "$stderr_log" "$BUNDLE_DIR"
+  fi
+
+  local i launched="" cmd label=""
+  for i in $(seq 1 40); do
+    launched=""
+    for pid in $(running_rami_pids); do
+      cmd="$(process_command "$pid")"
+      if [ "$cmd" = "$BINARY" ]; then
+        launched="$pid"
+        break
+      fi
+    done
+    if [ -n "$launched" ]; then
+      printf '%s\n' "$launched" >"$PID_FILE"
+      printf '%s\n' "$BINARY" >"$BIN_FILE"
+      if label="$(status_label "$launched" 2>/dev/null)" && printf '%s' "$label" | grep -Eq 'Memory [0-9]+ percent|memory unavailable'; then
+        printf 'launched pid=%s binary=%s label=%s\n' "$launched" "$BINARY" "$label"
+        return 0
+      fi
+    fi
+    sleep 0.25
+  done
+  if [ -n "$launched" ]; then
+    kill -TERM "$launched" 2>/dev/null || true
+  fi
+  rm -f "$PID_FILE"
+  die "status item never became scriptable. Grant Accessibility to the terminal running this helper, then retry. stderr: $(tr '\n' ' ' <"$stderr_log")"
+}
+
+cmd_doctor() {
+  ensure_state_dir
+  local pid
+  pid="$(require_our_instance)"
+  local cmd version_cargo version_bundle label lock
+  cmd="$(process_command "$pid")"
+  version_cargo="$(cargo_version)"
+  version_bundle="$(bundle_version)"
+  label="$(status_label "$pid")"
+  lock="$HOME/Library/Application Support/rami/rami.lock"
+
+  printf 'pid=%s\n' "$pid"
+  printf 'binary=%s\n' "$cmd"
+  printf 'expected_binary=%s\n' "$BINARY"
+  printf 'cargo_version=%s\n' "$version_cargo"
+  printf 'bundle_version=%s\n' "$version_bundle"
+  printf 'status_label=%s\n' "$label"
+  printf 'lock=%s\n' "$lock"
+  if [ -f "$PRESSURE_FILE" ]; then
+    printf 'force_pressure=%s\n' "$(tr -d '[:space:]' <"$PRESSURE_FILE")"
+  else
+    printf 'force_pressure=\n'
+  fi
+  if [ -f "$DEFAULTS_EXISTED_FILE" ]; then
+    printf 'defaults_snapshot=%s\n' "$(tr -d '[:space:]' <"$DEFAULTS_EXISTED_FILE")"
+  else
+    printf 'defaults_snapshot=missing\n'
+  fi
+
+  [ "$cmd" = "$BINARY" ] || die "doctor: binary path mismatch"
+  [ "$version_bundle" = "$version_cargo" ] || die "doctor: bundle version $version_bundle != Cargo.toml $version_cargo"
+  printf '%s' "$label" | grep -Eq 'Memory [0-9]+ percent|memory unavailable' || die "doctor: status item label not live ($label)"
+  [ -e "$lock" ] || die "doctor: lock file missing"
+  printf 'ok=yes\n'
+}
+
+cmd_status_label() {
+  local pid
+  pid="$(require_our_instance)"
+  status_label "$pid"
+  printf '\n'
+}
+
+cmd_open_menu() {
+  local pid
+  pid="$(require_our_instance)"
+  click_status "$pid"
+}
+
+cmd_dismiss_menu() {
+  osascript -e 'tell application "System Events" to key code 53' >/dev/null
+}
+
+cmd_dump_menu() {
+  local path=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --path) shift; path="$1" ;;
+      *) die "unknown dump-menu argument: $1" ;;
+    esac
+    shift
+  done
+  local pid
+  pid="$(require_our_instance)"
+  local dump
+  dump="$(dump_open_menu "$pid")"
+  if [ -n "$path" ]; then
+    mkdir -p "$(dirname "$path")"
+    printf '%s\n' "$dump" >"$path"
+  fi
+  printf '%s\n' "$dump"
+}
+
+cmd_click() {
+  local name=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --item) shift; name="$1" ;;
+      *) die "unknown click argument: $1" ;;
+    esac
+    shift
+  done
+  [ -n "$name" ] || die "click needs --item NAME"
+  case "$name" in
+    "Launch at Login"|"Launch at Login (Needs Approval)"|"Launch at Login (App Bundle Only)"|"Check for Updates")
+      die "refusing to click $name (mutates login items or the network)"
+      ;;
+  esac
+  local pid
+  pid="$(require_our_instance)"
+  click_named "$pid" "$name"
+}
+
+cmd_click_settings() {
+  local name=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --item) shift; name="$1" ;;
+      *) die "unknown click-settings argument: $1" ;;
+    esac
+    shift
+  done
+  [ -n "$name" ] || die "click-settings needs --item NAME"
+  case "$name" in
+    "Launch at Login"|"Launch at Login (Needs Approval)"|"Launch at Login (App Bundle Only)"|"Check for Updates")
+      die "refusing to click Settings item $name"
+      ;;
+  esac
+  local pid
+  pid="$(require_our_instance)"
+  click_settings_item "$pid" "$name"
+}
+
+cmd_capture_open_menu() {
+  local dump_path="" shot_path=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dump) shift; dump_path="$1" ;;
+      --screenshot) shift; shot_path="$1" ;;
+      *) die "unknown capture-open-menu argument: $1" ;;
+    esac
+    shift
+  done
+  [ -n "$dump_path" ] || die "capture-open-menu needs --dump FILE"
+  [ -n "$shot_path" ] || die "capture-open-menu needs --screenshot FILE"
+  require_our_instance >/dev/null
+  mkdir -p "$(dirname "$dump_path")" "$(dirname "$shot_path")"
+  (
+    local i
+    for i in $(seq 1 30); do
+      if dump="$(dump_open_menu "$(recorded_pid)" 2>/dev/null)" \
+        && printf '%s' "$dump" | grep -q $'\tMemory\t' \
+        && printf '%s' "$dump" | grep -q $'\tRefresh\t'; then
+        printf '%s\n' "$dump" >"$dump_path"
+        screencapture -x "$shot_path"
+        cmd_dismiss_menu || true
+        exit 0
+      fi
+      sleep 0.2
+    done
+    cmd_dismiss_menu || true
+    die "menu never became dumpable after open"
+  ) &
+  local watcher="$!"
+  click_status "$(recorded_pid)" || true
+  wait "$watcher"
+  [ -s "$dump_path" ] || die "capture-open-menu wrote no dump"
+  grep -q $'\tMemory\t' "$dump_path" || die "capture-open-menu dump missing Memory rings"
+  grep -q $'\tRefresh\t' "$dump_path" || die "capture-open-menu dump missing Refresh"
+  [ -f "$shot_path" ] || die "capture-open-menu wrote no screenshot"
+  printf 'dump=%s screenshot=%s\n' "$dump_path" "$shot_path"
+}
+
+cmd_screenshot() {
+  local path=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --path) shift; path="$1" ;;
+      *) die "unknown screenshot argument: $1" ;;
+    esac
+    shift
+  done
+  [ -n "$path" ] || die "screenshot needs --path FILE"
+  mkdir -p "$(dirname "$path")"
+  screencapture -x "$path"
+  [ -f "$path" ] || die "screencapture failed"
+}
+
+cmd_cleanup() {
+  ensure_state_dir
+  cmd_dismiss_menu || true
+  cmd_restore_pasteboard || true
+  local pid
+  pid="$(recorded_pid)"
+  if [ -n "$pid" ]; then
+    if pid_is_alive "$pid"; then
+      local cmd
+      cmd="$(process_command "$pid")"
+      if [ "$cmd" = "$BINARY" ]; then
+        kill -TERM "$pid" 2>/dev/null || true
+        local i
+        for i in $(seq 1 50); do
+          pid_is_alive "$pid" || break
+          sleep 0.1
+        done
+        if pid_is_alive "$pid"; then
+          kill -KILL "$pid" 2>/dev/null || true
+        fi
+      else
+        printf 'control-rami: leaving pid %s alone (not %s)\n' "$pid" "$BINARY" >&2
+      fi
+    fi
+  fi
+  cmd_restore_defaults || true
+  rm -f "$PID_FILE" "$BIN_FILE" "$PRESSURE_FILE" "$DEFAULTS_FILE" "$DEFAULTS_EXISTED_FILE" "$PASTEBOARD_FILE" "$PASTEBOARD_SAVED_FILE"
+  printf 'cleanup ok (artifacts kept under %s)\n' "$ARTIFACT_DIR"
+}
+
+main() {
+  [ $# -gt 0 ] || { usage; exit 1; }
+  local cmd="$1"
+  shift
+  case "$cmd" in
+    launch) cmd_launch "$@" ;;
+    doctor) cmd_doctor "$@" ;;
+    status-label) cmd_status_label "$@" ;;
+    open-menu) cmd_open_menu "$@" ;;
+    dismiss-menu) cmd_dismiss_menu "$@" ;;
+    dump-menu) cmd_dump_menu "$@" ;;
+    capture-open-menu) cmd_capture_open_menu "$@" ;;
+    click) cmd_click "$@" ;;
+    click-settings) cmd_click_settings "$@" ;;
+    screenshot) cmd_screenshot "$@" ;;
+    snapshot-defaults) cmd_snapshot_defaults "$@" ;;
+    restore-defaults) cmd_restore_defaults "$@" ;;
+    snapshot-pasteboard) cmd_snapshot_pasteboard "$@" ;;
+    restore-pasteboard) cmd_restore_pasteboard "$@" ;;
+    cleanup) cmd_cleanup "$@" ;;
+    -h|--help|help) usage ;;
+    *) die "unknown command: $cmd" ;;
+  esac
+}
+
+main "$@"

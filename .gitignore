@@ -6,3 +6,4 @@ rami.app/
 
 # Local audit artifacts (2026-07-18 pass) — screenshots may contain unrelated windows
 .audit-archive/
+.cursor/skills/verify-rami/artifacts/
