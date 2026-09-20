@@ -1,7 +1,7 @@
-# rami
+# Concepts
 
-A macOS menu bar system monitor (memory, CPU, GPU) with a single status item:
-a memory gauge in the menu bar, everything else in the dropdown.
+rami is a macOS menu bar system monitor for memory, CPU, and GPU.
+One memory gauge stays in the menu bar. The rest lives in the dropdown.
 
 ## Language
 
@@ -14,7 +14,7 @@ _Avoid_: usage, load
 **Pressure**:
 The kernel's view of memory scarcity: 100 − `kern.memorystatus_level`
 (the jetsam "percent available" stat). The second memory ring. Distinct from
-Memory % — pressure can spike while Memory % is flat, and vice versa.
+Memory %. Pressure can spike while Memory % is flat, and vice versa.
 _Avoid_: computing pressure from available/total (that proxy is only a fallback)
 
 **App Memory**:
@@ -51,7 +51,7 @@ _Avoid_: load average, per-core rings, a combined "CPU %" that restates
 
 **E-cores / P-cores**:
 Aggregate utilization per Apple Silicon core cluster (efficiency /
-performance), shown as two rows — never per-core rings.
+performance), shown as two rows, never per-core rings.
 
 ### GPU
 
@@ -97,6 +97,6 @@ The single menu-bar icon (SF Symbol gauge). In normal pressure it remains a
 template image so macOS renders it black or white for the current menu bar;
 Warning and Critical pressure tint it red; severity between them is carried
 numerically (pressure ring %, tooltip, VoiceOver), not by hue. RisingFast is
-trend-driven at any pressure — when memory is climbing fast, the icon adds an
+trend-driven at any pressure. When memory is climbing fast, the icon adds an
 upward badge composite. There is exactly one status item regardless of how
 many modules the dropdown shows.

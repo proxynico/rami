@@ -137,8 +137,7 @@ pub struct LegendRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryModuleDisplay {
     pub rings: [RingDisplay; 2],
-    /// Trend-window samples for the history sparkline, oldest first
-    /// (ADR-0001 amendment, #26).
+    /// Trend-window samples for the one memory-history row, oldest first.
     pub history: Vec<u64>,
     pub breakdown: [LegendRow; 4],
     pub swap: Option<StatRow>,

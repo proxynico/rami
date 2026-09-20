@@ -7,7 +7,7 @@ description: Drive rami, the macOS menu-bar memory/CPU/GPU monitor, through its 
 
 rami is an accessory (`LSUIElement`) menu-bar app. The user touches one status-item gauge and the `NSMenu` it opens. There is no window, dock icon, browser, or HTTP port. Unit tests do not prove this surface.
 
-Read `CONTEXT.md` before naming what you see. Memory % and Pressure are different rings. CPU and GPU are hideable modules.
+Read `CONCEPTS.md` before naming what you see. Memory % and Pressure are different rings. CPU and GPU are hideable modules.
 
 ## Isolation (read this first)
 
