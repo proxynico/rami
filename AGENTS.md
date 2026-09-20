@@ -126,13 +126,13 @@ returns to the sources.
 
 Issues live on `proxynico/rami`. Use the `gh` CLI.
 
-- Create: `gh issue create --title "..." --body "..."`
-- Read: `gh issue view <number> --comments`
-- List: `gh issue list --state open`
-- Comment: `gh issue comment <number> --body "..."`
-- Add a label: `gh issue edit <number> --add-label "..."`
-- Remove a label: `gh issue edit <number> --remove-label "..."`
-- Close: `gh issue close <number> --comment "..."`
+- `gh issue create --title "..." --body "..."`
+- `gh issue view <number> --comments`
+- `gh issue list --state open`
+- `gh issue comment <number> --body "..."`
+- `gh issue edit <number> --add-label "..."`
+- `gh issue edit <number> --remove-label "..."`
+- `gh issue close <number> --comment "..."`
 
 Pull requests are not a request surface.
 
