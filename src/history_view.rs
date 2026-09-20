@@ -1,7 +1,7 @@
-//! The memory-history row: a filled-area sparkline of the trend window,
-//! restored by the ADR-0001 amendment (#26). One row, memory-only — the
-//! amended bound allows exactly this view and nothing more. Captions under
-//! the mark show current used and the signed window delta.
+//! The memory-history row: a filled-area sparkline of the trend window.
+//! One row, memory-only. The bound allows exactly this view and nothing
+//! more. Captions under the mark show current used and the signed
+//! window delta.
 
 use crate::format::{history_caption, Accent};
 use crate::presentation::{ChromeColor, HistoryLayout, MenuMetrics};
@@ -19,7 +19,7 @@ use std::cell::RefCell;
 /// classifier's Rising threshold (300 MB): the mark is allowed to swing
 /// while the badge still reads Stable.
 const SPAN_FLOOR_BYTES: u64 = 32_000_000;
-/// Opacity-ramp stops for the mark (CONTEXT.md): faint fill, mid line,
+/// Opacity-ramp stops for the mark: faint fill, mid line,
 /// full-strength "now" dot.
 const FILL_ALPHA: f64 = 0.12;
 const LINE_ALPHA: f64 = 0.65;

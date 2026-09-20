@@ -364,9 +364,9 @@ mod tests {
 
     #[test]
     fn memory_history_follows_the_rings_and_is_the_only_history() {
-        // ADR-0001 (amended, #26): one bounded memory-history row lives in the
-        // Memory module, directly under the rings and above the breakdown —
-        // no per-module histories, no second graph.
+        // One bounded memory-history row lives in the Memory module, directly
+        // under the rings and above the breakdown. No per-module histories,
+        // no second graph.
         let model = dropdown_model(snapshot());
         let entries = loaded_menu_entries(&model);
         assert!(matches!(

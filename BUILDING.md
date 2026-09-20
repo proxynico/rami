@@ -3,6 +3,14 @@
 End-user install lives in [README.md](README.md). This is for contributors
 and the maintainer.
 
+Public install is still gated. `Cargo.toml` is already `0.1.2`. The
+Homebrew Cask template and notarized DMG flow are prepared. Tag `v0.1.2`
+waits on purpose-specific Apple Developer signing and notary secrets, a
+public `proxynico/homebrew-tap` repository, and a Release workflow dry-run
+that produces a notarized artifact. Do not create or move that tag before
+those are in place. Do not reuse a broad local `gh` token as
+`HOMEBREW_TAP_TOKEN`.
+
 ## Prereqs
 
 - macOS 14+ (Apple Silicon)
@@ -145,7 +153,9 @@ git push origin "v${version}"
 ```
 
 Confirm the derived tag matches the intended `Cargo.toml` version before
-pushing it. A `v*` tag starts public release work immediately.
+pushing it. A `v*` tag starts public release work immediately. For the
+current `0.1.2` line, wait until the public-release gate at the top of
+this file is cleared.
 
 ## Publishing the Homebrew Cask
 
@@ -154,9 +164,10 @@ pushing it. A `v*` tag starts public release work immediately.
 published DMG's `sha256` — and pushes it to `proxynico/homebrew-tap`, **if**
 the `HOMEBREW_TAP_TOKEN` secret is set. One-time setup:
 
-1. Create a `proxynico/homebrew-tap` repo on GitHub.
-2. Add a `HOMEBREW_TAP_TOKEN` repo secret (fine-grained PAT with contents
-   read/write on `homebrew-tap`).
+1. Create a `proxynico/homebrew-tap` repo on GitHub. It does not exist yet.
+2. Add a `HOMEBREW_TAP_TOKEN` repo secret. Use a fine-grained PAT with
+   contents read/write on `homebrew-tap` only. Do not reuse a broad local
+   `gh` token.
 
 Users then run:
 

@@ -1,4 +1,4 @@
 # Learnings
 
-- [dynamic-menu-image-colors.md](dynamic-menu-image-colors.md) — Hierarchical SF Symbol tints and `labelColor.colorWithAlphaComponent` bake appearance; draw/resolve dynamic colors lazily.
-- [pressure-accent-docs-triple.md](pressure-accent-docs-triple.md) — Accent palette changes must update CONTEXT, ADR-0002, and BUILDING.md preview; RisingFast is trend-driven, not Critical-only.
+- [dynamic-menu-image-colors.md](dynamic-menu-image-colors.md). Hierarchical SF Symbol tints and `labelColor.colorWithAlphaComponent` bake appearance. Draw or resolve dynamic colors lazily.
+- [pressure-accent-docs.md](pressure-accent-docs.md). Accent palette changes must update `CONCEPTS.md`, the accent decision in `AGENTS.md`, and the `BUILDING.md` preview. RisingFast is trend-driven, not Critical-only.

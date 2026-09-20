@@ -467,8 +467,8 @@ impl TrayController {
                 gpu,
             } => {
                 self.menu.addItem(&self.rings_item);
-                // ADR-0001 amendment (#26): the single memory-history row sits
-                // inside the Memory module, under the rings, above the legend.
+                // One memory-history row sits inside the Memory module, under
+                // the rings and above the legend.
                 self.menu.addItem(&self.history_item);
                 for item in &self.legend_items {
                     self.menu.addItem(item);
