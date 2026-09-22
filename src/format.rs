@@ -530,7 +530,6 @@ mod tests {
             name: "Cursor".to_string(),
             group_key: "/Applications/Cursor.app".to_string(),
             footprint_bytes: 2_147_483_648,
-            pids: vec![42],
             delta_bytes: None,
         }];
         let model =
@@ -549,7 +548,6 @@ mod tests {
             name: "Tiny".to_string(),
             group_key: "/Applications/Tiny.app".to_string(),
             footprint_bytes: 256_901_120,
-            pids: vec![1],
             delta_bytes: None,
         }];
         let model =
@@ -566,7 +564,6 @@ mod tests {
             name: "Codex Computer Use".to_string(),
             group_key: "/Applications/Codex Computer Use.app".to_string(),
             footprint_bytes: 84_934_656,
-            pids: vec![1],
             delta_bytes: None,
         }];
         let model =
@@ -853,7 +850,6 @@ mod tests {
             name: name.to_string(),
             group_key: format!("/Applications/{name}.app"),
             footprint_bytes,
-            pids: vec![1],
             delta_bytes,
         }
     }
