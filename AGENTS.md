@@ -175,7 +175,10 @@ SF Symbol hierarchical tints and `labelColor.colorWithAlphaComponent`
 bake the creation-time appearance. Resolve accent colors inside drawing
 handlers (`imageWithSize_flipped_drawingHandler`): a tinted composite
 drawn from inside a handler re-resolves per draw, but eager
-rasterization or a tinted image set directly on a menu item does not.
+rasterization or a tint baked at creation time does not, wherever the
+image ends up. Attributed menu titles have no drawing handler: build
+them with `color_for_accent_alpha` (`src/presentation.rs`), never
+`colorWithAlphaComponent` on catalog colors, even at alpha 1.0.
 `src/status_icon.rs` and `src/tray/render.rs` pin this with
 appearance-flip regression tests.
 
