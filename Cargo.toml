@@ -21,25 +21,33 @@ path = "src/main.rs"
 [dependencies]
 objc2 = "0.6"
 block2 = "0.6"
-objc2-app-kit = { version = "0.3", features = [
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
   "block2",
+  "objc2-core-foundation",
+  "objc2-core-graphics",
   "NSAppearance",
   "NSApplication",
   "NSAttributedString",
   "NSBezierPath",
   "NSBitmapImageRep",
+  "NSButton",
   "NSCell",
   "NSColor",
   "NSControl",
   "NSEvent",
   "NSFont",
+  "NSFontDescriptor",
   "NSGraphics",
   "NSGraphicsContext",
   "NSImage",
+  "NSImageRep",
+  "NSStringDrawing",
   "NSMenu",
   "NSMenuItem",
   "NSPasteboard",
   "NSParagraphStyle",
+  "NSResponder",
   "NSRunningApplication",
   "NSStatusBar",
   "NSStatusBarButton",
@@ -48,7 +56,8 @@ objc2-app-kit = { version = "0.3", features = [
   "NSView",
   "NSWorkspace",
 ] }
-objc2-foundation = { version = "0.3", features = [
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
   "NSError",
   "NSAttributedString",
   "NSObject",
