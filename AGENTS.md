@@ -171,6 +171,17 @@ if it is absent, set the seven secret names, dry-run Release, then tag.
 The status item is `menu bar 1` in the accessibility tree, not
 `menu bar 2`. Its accessibility label carries the live reading.
 
+SF Symbol hierarchical tints and `labelColor.colorWithAlphaComponent`
+bake the creation-time appearance. Resolve accent colors inside drawing
+handlers (`imageWithSize_flipped_drawingHandler`): a tinted composite
+drawn from inside a handler re-resolves per draw, but eager
+rasterization or a tint baked at creation time does not, wherever the
+image ends up. Attributed menu titles have no drawing handler: build
+them with `color_for_accent_alpha` (`src/presentation.rs`), never
+`colorWithAlphaComponent` on catalog colors, even at alpha 1.0.
+`src/status_icon.rs` and `src/tray/render.rs` pin this with
+appearance-flip regression tests.
+
 Warning and Critical accents are unreachable without exhausting real
 memory. Use `RAMI_FORCE_PRESSURE` set to `warning`, `critical`, or `normal`,
 as described in `BUILDING.md`.
