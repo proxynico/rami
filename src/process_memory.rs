@@ -36,7 +36,6 @@ pub struct AppMemoryUsage {
     pub name: String,
     pub group_key: String,
     pub footprint_bytes: u64,
-    pub pids: Vec<pid_t>,
     pub delta_bytes: Option<i64>,
 }
 
@@ -50,7 +49,6 @@ pub enum AppMemorySnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProcessMemoryRecord {
-    pid: pid_t,
     group_key: String,
     display_name: String,
     footprint_bytes: u64,
@@ -115,7 +113,6 @@ fn sample_pid<L: ProcLookup>(
 
     let (group_key, display_name) = owning_app_bundle(pid, lookup, bundle_memo)?;
     Some(ProcessMemoryRecord {
-        pid,
         group_key,
         display_name,
         footprint_bytes: footprint,
@@ -251,26 +248,21 @@ fn aggregate(records: Vec<ProcessMemoryRecord>, top_n: usize) -> Vec<AppMemoryUs
         return Vec::new();
     }
 
-    let mut by_group: HashMap<String, (String, u64, Vec<pid_t>)> = HashMap::new();
+    let mut by_group: HashMap<String, (String, u64)> = HashMap::new();
     for r in records {
         let entry = by_group
             .entry(r.group_key)
-            .or_insert_with(|| (r.display_name.clone(), 0, Vec::new()));
+            .or_insert_with(|| (r.display_name.clone(), 0));
         entry.1 = entry.1.saturating_add(r.footprint_bytes);
-        entry.2.push(r.pid);
     }
 
     let mut rows: Vec<AppMemoryUsage> = by_group
         .into_iter()
-        .map(|(group_key, (name, bytes, mut pids))| {
-            pids.sort_unstable();
-            AppMemoryUsage {
-                name,
-                group_key,
-                footprint_bytes: bytes,
-                pids,
-                delta_bytes: None,
-            }
+        .map(|(group_key, (name, bytes))| AppMemoryUsage {
+            name,
+            group_key,
+            footprint_bytes: bytes,
+            delta_bytes: None,
         })
         .collect();
 
@@ -288,9 +280,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    fn record(pid: pid_t, group: &str, name: &str, bytes: u64) -> ProcessMemoryRecord {
+    fn record(group: &str, name: &str, bytes: u64) -> ProcessMemoryRecord {
         ProcessMemoryRecord {
-            pid,
             group_key: group.to_string(),
             display_name: name.to_string(),
             footprint_bytes: bytes,
@@ -436,23 +427,22 @@ mod tests {
     #[test]
     fn aggregate_sums_helpers() {
         let records = vec![
-            record(1, "/Applications/Cursor.app", "Cursor", 100),
-            record(2, "/Applications/Cursor.app", "Cursor", 200),
-            record(3, "/Applications/Cursor.app", "Cursor", 300),
+            record("/Applications/Cursor.app", "Cursor", 100),
+            record("/Applications/Cursor.app", "Cursor", 200),
+            record("/Applications/Cursor.app", "Cursor", 300),
         ];
         let rows = aggregate(records, 5);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "Cursor");
         assert_eq!(rows[0].footprint_bytes, 600);
-        assert_eq!(rows[0].pids, vec![1, 2, 3]);
     }
 
     #[test]
     fn aggregate_sorts_desc_then_name_asc() {
         let records = vec![
-            record(1, "B", "B", 100),
-            record(2, "A", "A", 100),
-            record(3, "C", "C", 200),
+            record("B", "B", 100),
+            record("A", "A", 100),
+            record("C", "C", 200),
         ];
         let rows = aggregate(records, 5);
         assert_eq!(rows[0].name, "C");
@@ -463,7 +453,7 @@ mod tests {
     #[test]
     fn aggregate_truncates_to_top_n() {
         let records: Vec<_> = (0..7)
-            .map(|i| record(i + 1, &format!("g{i}"), &format!("g{i}"), 100 + i as u64))
+            .map(|i| record(&format!("g{i}"), &format!("g{i}"), 100 + i as u64))
             .collect();
         let rows = aggregate(records, 5);
         assert_eq!(rows.len(), 5);

@@ -465,14 +465,12 @@ mod tests {
                 name: "Cursor".to_string(),
                 group_key: "/Applications/Cursor.app".to_string(),
                 footprint_bytes: 2_147_483_648,
-                pids: vec![1],
                 delta_bytes: None,
             },
             AppMemoryUsage {
                 name: "Chrome".to_string(),
                 group_key: "/Applications/Chrome.app".to_string(),
                 footprint_bytes: 1_288_490_189,
-                pids: vec![2],
                 delta_bytes: None,
             },
         ];

@@ -281,7 +281,6 @@ fn usage(name: &str) -> AppMemoryUsage {
         name: name.to_string(),
         group_key: format!("/Applications/{name}.app"),
         footprint_bytes: 1,
-        pids: vec![1],
         delta_bytes: None,
     }
 }

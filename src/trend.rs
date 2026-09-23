@@ -139,7 +139,6 @@ mod tests {
             name: name.to_string(),
             group_key: group_key.to_string(),
             footprint_bytes,
-            pids: vec![],
             delta_bytes: None,
         }
     }
