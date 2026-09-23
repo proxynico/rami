@@ -4,22 +4,22 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>rami</string>
-	<key>CFBundleInfoDictionaryVersion</key>
-	<string>6.0</string>
 	<key>CFBundleExecutable</key>
 	<string>rami</string>
 	<key>CFBundleIconFile</key>
 	<string>rami</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.nicomontero.rami</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>rami</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.1</string>
+	<string>0.1.2</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.1</string>
+	<string>0.1.2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
