@@ -20,8 +20,9 @@ See `BUILDING.md` for the bundle, signing, and release path. The ignored
 integration tests (`cargo test -- --ignored`) are local-only.
 
 To prove a user-visible change, use the `verify-rami` skill on the
-repo-local bundle. Do not set `RAMI_INSTALL=1` during that drive. That
-flag kills any process named rami and replaces `/Applications/rami.app`.
+repo-local bundle. It lives at `.cursor/skills/verify-rami/SKILL.md`.
+Do not set `RAMI_INSTALL=1` during that drive. That flag kills any
+process named rami and replaces `/Applications/rami.app`.
 
 To refresh the installed daily driver after you have checked it:
 
