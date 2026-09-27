@@ -17,6 +17,7 @@ pub(crate) mod presentation;
 mod pressure_view;
 mod proc_list;
 mod process_memory;
+mod row_view;
 mod settings;
 mod status_icon;
 mod tray;

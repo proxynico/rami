@@ -93,3 +93,60 @@ pub(crate) fn fill_swatch(rect: NSRect, swatch: Swatch, accent: Accent, radius: 
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use block2::RcBlock;
+    use objc2::AnyThread;
+    use objc2_app_kit::{
+        NSAppearance, NSAppearanceNameDarkAqua, NSBitmapImageRep, NSDeviceRGBColorSpace,
+    };
+    use objc2_foundation::NSInteger;
+
+    #[test]
+    fn gold_swatch_resolves_to_dark_gold_in_a_dark_menu() {
+        // A mark color resolved outside the draw keeps whichever mode was
+        // active then. The swatch must pick gold for the drawing appearance.
+        let rep = unsafe {
+            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+                NSBitmapImageRep::alloc(),
+                std::ptr::null_mut(),
+                4,
+                4,
+                8,
+                4,
+                true,
+                false,
+                NSDeviceRGBColorSpace,
+                0,
+                0,
+            )
+        }
+        .expect("bitmap");
+        NSGraphicsContext::saveGraphicsState_class();
+        let ctx =
+            NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep).expect("graphics context");
+        NSGraphicsContext::setCurrentContext(Some(&ctx));
+        let dark = NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua })
+            .expect("dark appearance");
+        let draw = RcBlock::new(|| {
+            let rect = NSRect::new(NSPoint::ZERO, NSSize::new(4.0, 4.0));
+            fill_swatch(rect, Swatch::Accent(100), Accent::Neutral, 0.0);
+        });
+        dark.performAsCurrentDrawingAppearance(&draw);
+        NSGraphicsContext::restoreGraphicsState_class();
+
+        let color = rep
+            .colorAtX_y(1 as NSInteger, 1 as NSInteger)
+            .expect("pixel");
+        let (mut r, mut g, mut b, mut a) = (0.0, 0.0, 0.0, 0.0);
+        unsafe {
+            color.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
+        }
+        assert!(
+            r > 0.8 && g > 0.6 && b < 0.4,
+            "dark menu must draw the dark-mode gold, got rgba({r:.2},{g:.2},{b:.2},{a:.2})"
+        );
+    }
+}

@@ -194,15 +194,18 @@ bake the creation-time appearance. Resolve accent colors inside drawing
 handlers (`imageWithSize_flipped_drawingHandler`): a tinted composite
 drawn from inside a handler re-resolves per draw, but eager
 rasterization or a tint baked at creation time does not, wherever the
-image ends up. Attributed menu titles have no drawing handler: build
-them with `color_for_accent_alpha` (`src/presentation.rs`), never
-`colorWithAlphaComponent` on catalog colors, even at alpha 1.0.
-`src/status_icon.rs` and `src/tray/render.rs` pin this with
-appearance-flip regression tests.
+image ends up. The dropdown's custom views resolve their colors inside
+`drawRect:` for the same reason, through `color_for_accent_alpha` and
+`mark_color` (`src/presentation.rs`). `src/status_icon.rs`,
+`src/draw.rs`, and `src/presentation.rs` pin this with appearance-flip
+regression tests.
 
-NSMenu on current macOS does not draw menu-item images. Legend
-swatches ride in the attributed title as a text attachment
-(`src/tray/render.rs`); an item image would not show.
+Data rows (breakdown, Swap, apps, CPU, GPU) are `RowView`s
+(`src/row_view.rs`), not titled menu items. Once any item has a submenu,
+NSMenu reserves an arrow column on the right of every titled item, which
+left titled rows short of the custom views' right edge. NSMenu on current
+macOS also draws no menu-item images. Only Refresh, Settings, and Quit
+stay titled items.
 
 Warning and Critical accents are unreachable without exhausting real
 memory. Use `RAMI_FORCE_PRESSURE` set to `warning`, `critical`, or `normal`,

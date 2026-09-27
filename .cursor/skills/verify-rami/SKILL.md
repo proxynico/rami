@@ -67,7 +67,7 @@ Stable handles (do not invent others):
 - Memory map: AXGroup label `Memory`, value `<mem%> percent, <used> / <total> GB used, 1 cell = <size>`.
 - Pressure meter: AXGroup label `Pressure`, value `<p> percent`.
 - History view: AXGroup label `Memory history`.
-- CPU and GPU rows: menu items whose titles start with `CPU` and `GPU`.
+- Data rows (breakdown, Swap, apps, CPU, GPU): AXStaticText labeled with the row name (`App Memory`, `Swap`, `CPU`, `GPU`, an app name), the reading as its value.
 - Command items by exact title: `Refresh`, `Settings`, `Quit`.
 - Settings items by exact title: `Auto-Refresh`, `Show Apps`, `Show CPU`, `Show GPU`, `Copy Diagnostics`. About is `rami <version>` and is disabled.
 
