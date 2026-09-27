@@ -21,8 +21,7 @@ impl Default for Settings {
             auto_refresh_enabled: true,
             show_app_usage: true,
             show_cpu: true,
-            // GPU is a single utilization row; keep it opt-in so the default
-            // dropdown stays memory/CPU-dense without an extra section header.
+            // GPU is opt-in so the default dropdown stays memory-first.
             show_gpu: false,
         }
     }

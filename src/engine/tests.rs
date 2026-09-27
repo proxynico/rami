@@ -527,7 +527,33 @@ fn enabling_app_usage_schedules_the_menu_reopen_last() {
 }
 
 #[test]
-fn reopen_timer_is_ignored_once_app_usage_is_hidden_again() {
+fn enabling_cpu_or_gpu_reopens_the_menu_once() {
+    let (mut engine, _, _) = engine_on();
+    engine.step(Event::Startup);
+    let hidden = engine.step(Event::Toggle(Setting::ShowCpu)); // CPU starts on
+    assert!(!hidden.contains(&Effect::ScheduleMenuReopen));
+
+    for setting in [Setting::ShowCpu, Setting::ShowGpu] {
+        let effects = engine.step(Event::Toggle(setting));
+        assert_eq!(effects.last(), Some(&Effect::ScheduleMenuReopen));
+        let effects = engine.step(Event::ReopenMenuTimerFired);
+        assert_eq!(effects.last(), Some(&Effect::PopUpMenu));
+        assert!(engine.step(Event::ReopenMenuTimerFired).is_empty());
+    }
+}
+
+#[test]
+fn hiding_the_module_again_cancels_its_reopen() {
+    let (mut engine, _, _) = engine_on();
+    engine.step(Event::Startup);
+    engine.step(Event::Toggle(Setting::ShowGpu)); // on: reopen scheduled
+    engine.step(Event::Toggle(Setting::ShowGpu)); // off before the timer
+
+    assert!(engine.step(Event::ReopenMenuTimerFired).is_empty());
+}
+
+#[test]
+fn reopen_timer_does_nothing_without_a_pending_reopen() {
     let (mut engine, _, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::Toggle(Setting::ShowAppUsage)); // off

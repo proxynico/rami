@@ -62,7 +62,8 @@ pub(crate) enum Event {
     MenuWillOpen,
     MenuDidClose,
     Toggle(Setting),
-    /// The post-toggle menu-reopen one-shot fired (Show App Usage flow).
+    /// The post-toggle menu-reopen one-shot fired: a Show toggle turned a
+    /// module on, and clicking it closed the menu.
     ReopenMenuTimerFired,
     CopyDiagnostics,
 }
@@ -249,6 +250,7 @@ pub(crate) struct RefreshEngine<S, R, L> {
     /// The engine's belief about the repeating refresh timer, reconciled via
     /// `auto_refresh_timer_action` so arm/cancel effects fire only on change.
     refresh_timer_armed: bool,
+    menu_reopen_for: Option<Setting>,
 }
 
 impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
@@ -280,6 +282,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             last_app_sample_at: None,
             trend_tracker: MemoryTrendTracker::new(),
             refresh_timer_armed: false,
+            menu_reopen_for: None,
         }
     }
 
@@ -296,6 +299,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             Event::DrainTimerFired => self.drain_and_rerender(&mut out),
             Event::MenuWillOpen => {
                 self.menu_open = true;
+                self.menu_reopen_for = None;
                 // The status read is an XPC round trip; menu open is the only
                 // moment the answer is visible, so it is (re)read here rather
                 // than per tick.
@@ -314,7 +318,11 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             }
             Event::Toggle(setting) => self.toggle(setting, &mut out),
             Event::ReopenMenuTimerFired => {
-                if self.show_app_usage {
+                if self
+                    .menu_reopen_for
+                    .take()
+                    .is_some_and(|setting| self.shows(setting))
+                {
                     self.refresh(true, &mut out);
                     out.push(Effect::PopUpMenu);
                 }
@@ -353,7 +361,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 }
                 self.refresh(true, out);
                 if self.show_app_usage {
-                    out.push(Effect::ScheduleMenuReopen);
+                    self.schedule_menu_reopen(setting, out);
                 }
             }
             Setting::ShowCpu => {
@@ -370,6 +378,9 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                         delay: MENU_OPEN_DRAIN_DELAY,
                     });
                 }
+                if self.show_cpu {
+                    self.schedule_menu_reopen(setting, out);
+                }
             }
             Setting::ShowGpu => {
                 self.show_gpu = !self.show_gpu;
@@ -377,6 +388,9 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                     self.show_gpu,
                 )));
                 self.refresh(true, out);
+                if self.show_gpu {
+                    self.schedule_menu_reopen(setting, out);
+                }
             }
             Setting::LaunchAtLogin => {
                 self.launch_at_login_status = self.launch.toggle();
@@ -461,6 +475,22 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             self.last_cpu_state,
             self.last_gpu_state,
         )));
+    }
+
+    /// Clicking a Settings item closes the whole menu; reopen it so the
+    /// module just turned on is visible, unless it is hidden again first.
+    fn schedule_menu_reopen(&mut self, setting: Setting, out: &mut Vec<Effect>) {
+        self.menu_reopen_for = Some(setting);
+        out.push(Effect::ScheduleMenuReopen);
+    }
+
+    fn shows(&self, setting: Setting) -> bool {
+        match setting {
+            Setting::ShowAppUsage => self.show_app_usage,
+            Setting::ShowCpu => self.show_cpu,
+            Setting::ShowGpu => self.show_gpu,
+            Setting::AutoRefresh | Setting::LaunchAtLogin => false,
+        }
     }
 
     fn sync_auto_refresh_timer(&mut self, out: &mut Vec<Effect>) {
