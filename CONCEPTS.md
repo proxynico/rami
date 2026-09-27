@@ -9,12 +9,12 @@ One memory gauge stays in the menu bar. The rest lives in the dropdown.
 
 **Memory %**:
 Used memory as a share of total physical RAM. Used is App Memory + Wired +
-Compressed, Activity Monitor's "Memory Used". One of the two memory rings.
+Compressed, Activity Monitor's "Memory Used". Shown in the memory map header.
 _Avoid_: usage, load
 
 **Pressure**:
 The kernel's view of memory scarcity: 100 − `kern.memorystatus_level`
-(the jetsam "percent available" stat). The second memory ring. Distinct from
+(the jetsam "percent available" stat). Shown as the Pressure meter. Distinct from
 Memory %. Pressure can spike while Memory % is flat, and vice versa.
 _Avoid_: computing pressure from available/total (that proxy is only a fallback)
 
@@ -82,20 +82,29 @@ One monitored subsystem (Memory, CPU, GPU). Each renders as one dropdown
 section; CPU and GPU can be hidden via Settings toggles.
 
 **Accent**:
-The single hue the whole dropdown inherits, driven by pressure state:
-calm Neutral = adaptive label color for chrome/legend; memory ring strokes
-use system orange under Normal; Warning and Critical use system red for accent
-chrome (including rings). The user's macOS accent color is deliberately
-ignored so a bright personal accent does not dominate routine telemetry.
+The single hue the whole dropdown inherits, driven by pressure state.
+Under Normal, text uses the adaptive label color and marks use gold. Under
+Warning and Critical, gold marks and accent chrome use system red; Other and
+Free stay neutral gray. The user's
+macOS accent color is deliberately ignored so a bright personal accent does
+not dominate routine telemetry.
+
+**Mark**:
+Anything drawn in the accent hue rather than written: map cells, legend
+swatches, the pressure meter, the history sparkline, the contact strip.
 
 **Opacity ramp**:
-How multi-category displays encode categories in monochrome: one hue at
-stepped opacities (e.g. App 100% / Wired 65% / Compressed 35% / Free 12%
-gray; User 100% / System 50%).
+How multi-category displays encode categories in one hue: stepped
+opacities, plus a hatch and a neutral gray where a category needs one
+(App Memory 100% / Wired 62% / Compressed 36% / Cached hatched / Other
+gray / Free empty; User 100% / System 50%).
 _Avoid_: multi-hue palettes (Activity Monitor colors)
 
-**Ring**:
-A circular gauge menu-item view showing one percentage (Memory %, Pressure).
+**Memory map**:
+The dropdown's hero. RAM drawn as 64 equal cells on a board, in breakdown
+order, over a contact strip. One cell is total RAM / 64 (256 MB on 16 GB).
+Used categories are solid, Cached is hatched, Other is gray, Free is empty.
+_Avoid_: rings
 
 **Breakdown legend**:
 The monochrome list (App Memory / Wired / Compressed / Other / Cached / Free)
@@ -106,7 +115,7 @@ show.
 The single menu-bar icon (SF Symbol gauge). In normal pressure it remains a
 template image so macOS renders it black or white for the current menu bar;
 Warning and Critical pressure tint it red; severity between them is carried
-numerically (pressure ring %, tooltip, VoiceOver), not by hue. RisingFast is
+numerically (pressure meter %, tooltip, VoiceOver), not by hue. RisingFast is
 trend-driven at any pressure. When memory is climbing fast, the icon adds an
 upward badge composite. There is exactly one status item regardless of how
 many modules the dropdown shows.

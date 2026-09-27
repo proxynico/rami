@@ -12,10 +12,11 @@ use super::TrayController;
 use crate::format::{placeholder_dropdown_model, Accent};
 use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
-use crate::memory_view::MemoryRingsView;
+use crate::memory_map_view::MemoryMapView;
 use crate::model::MemoryPressure;
 use crate::module_title_view::ModuleTitleView;
 use crate::presentation::MenuMetrics;
+use crate::pressure_view::PressureView;
 use crate::process_cpu::PROCESS_CPU_ROW_LIMIT;
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
@@ -74,10 +75,15 @@ pub(super) fn build_controller(
     let placeholder_icon = make_placeholder_icon();
     let metrics = MenuMetrics::STANDARD;
     let row_render_cache = RowRenderCache::new(metrics);
-    let rings_item = make_stat_item(mtm);
-    let rings_view = MemoryRingsView::new(mtm, metrics);
+    let map_item = make_stat_item(mtm);
+    let map_view = MemoryMapView::new(mtm, metrics);
     unsafe {
-        let _: () = msg_send![&rings_item, setView: &*rings_view];
+        let _: () = msg_send![&map_item, setView: &*map_view];
+    }
+    let pressure_item = make_stat_item(mtm);
+    let pressure_view = PressureView::new(mtm, metrics);
+    unsafe {
+        let _: () = msg_send![&pressure_item, setView: &*pressure_view];
     }
     let history_item = make_stat_item(mtm);
     let history_view = MemoryHistoryView::new(mtm, metrics);
@@ -229,8 +235,10 @@ pub(super) fn build_controller(
     let controller = TrayController {
         status_item,
         menu,
-        rings_item,
-        rings_view,
+        map_item,
+        map_view,
+        pressure_item,
+        pressure_view,
         history_item,
         history_view,
         legend_items,
@@ -265,7 +273,8 @@ pub(super) fn build_controller(
         last_trend: Cell::new(MemoryTrend::Stable),
         last_pressure: Cell::new(MemoryPressure::Normal),
         shape: Cell::new(MenuShape::Uninitialized),
-        last_rings: RefCell::new(None),
+        last_map: RefCell::new(None),
+        last_pressure_percent: Cell::new(None),
         last_history: RefCell::new(None),
         last_breakdown: RefCell::new(None),
         last_accent: Cell::new(Accent::Neutral),

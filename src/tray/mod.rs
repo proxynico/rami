@@ -11,18 +11,18 @@ use self::render::{
 };
 use self::style::{
     color_for_accent, color_for_accent_alpha, status_tint_for_pressure, DEMOTED_LABEL_ALPHA,
-    DEMOTED_SWATCH_OPACITY, INFO_ROW_SWATCH_OPACITY, ROW_ICON_SIZE,
+    ROW_ICON_SIZE,
 };
 use crate::format::{
     dropdown_model_with_sections, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
     placeholder_dropdown_model, Accent, AppSectionDisplay, CpuDisplayState, DropdownModel,
-    GpuModuleDisplay, LegendRow, ModuleDisplay, RingDisplay, StatRow,
+    GpuModuleDisplay, LegendRow, MemoryMapDisplay, ModuleDisplay, StatRow,
 };
 use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
-use crate::memory_view::MemoryRingsView;
+use crate::memory_map_view::MemoryMapView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
-use crate::presentation::{ChromeColor, RingStrokeColor};
+use crate::pressure_view::PressureView;
 use crate::process_cpu::ProcessCpuSnapshot;
 use crate::process_memory::AppMemorySnapshot;
 #[cfg(test)]
@@ -43,8 +43,10 @@ use std::collections::HashMap;
 pub struct TrayController {
     status_item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
-    rings_item: Retained<NSMenuItem>,
-    rings_view: Retained<MemoryRingsView>,
+    map_item: Retained<NSMenuItem>,
+    map_view: Retained<MemoryMapView>,
+    pressure_item: Retained<NSMenuItem>,
+    pressure_view: Retained<PressureView>,
     history_item: Retained<NSMenuItem>,
     history_view: Retained<MemoryHistoryView>,
     legend_items: Vec<Retained<NSMenuItem>>,
@@ -79,7 +81,8 @@ pub struct TrayController {
     last_trend: Cell<MemoryTrend>,
     last_pressure: Cell<MemoryPressure>,
     shape: Cell<MenuShape>,
-    last_rings: RefCell<Option<[RingDisplay; 2]>>,
+    last_map: RefCell<Option<MemoryMapDisplay>>,
+    last_pressure_percent: Cell<Option<u8>>,
     last_history: RefCell<Option<Vec<u64>>>,
     last_breakdown: RefCell<Option<Vec<LegendRow>>>,
     last_accent: Cell<Accent>,
@@ -314,7 +317,8 @@ impl TrayController {
         if shape_changed {
             self.rebuild_menu(new_shape, mtm);
             self.shape.set(new_shape);
-            self.last_rings.borrow_mut().take();
+            self.last_map.borrow_mut().take();
+            self.last_pressure_percent.set(None);
             self.last_history.borrow_mut().take();
             self.last_breakdown.borrow_mut().take();
             self.last_swap_row.borrow_mut().take();
@@ -329,15 +333,18 @@ impl TrayController {
             };
             let accent_changed = self.last_accent.get() != *accent;
             let accent_color = color_for_accent(*accent);
-            let chrome = ChromeColor::resolve(*accent);
-            let stroke = RingStrokeColor::resolve(*accent);
-            if accent_changed || self.last_rings.borrow().as_ref() != Some(&memory.rings) {
-                self.rings_view
-                    .update(&memory.rings, stroke, chrome.clone());
-                *self.last_rings.borrow_mut() = Some(memory.rings.clone());
+            if accent_changed || self.last_map.borrow().as_ref() != Some(&memory.map) {
+                self.map_view.update(&memory.map, *accent);
+                *self.last_map.borrow_mut() = Some(memory.map.clone());
+            }
+            if accent_changed || self.last_pressure_percent.get() != Some(memory.pressure_percent) {
+                self.pressure_view.update(memory.pressure_percent, *accent);
+                self.last_pressure_percent
+                    .set(Some(memory.pressure_percent));
             }
             if accent_changed || self.last_history.borrow().as_ref() != Some(&memory.history) {
-                self.history_view.update(&memory.history, chrome);
+                self.history_view
+                    .update(&memory.history, memory.total_bytes, *accent);
                 *self.last_history.borrow_mut() = Some(memory.history.clone());
             }
             if accent_changed || self.last_breakdown.borrow().as_ref() != Some(&memory.breakdown) {
@@ -417,11 +424,6 @@ impl TrayController {
                     color_for_accent_alpha(accent_kind, DEMOTED_LABEL_ALPHA),
                     &self.row_render_cache,
                 )));
-                item.setImage(
-                    self.row_render_cache
-                        .legend_icon(accent_kind, DEMOTED_SWATCH_OPACITY)
-                        .as_deref(),
-                );
             }
             for (item, row) in self.cpu_process_items.iter().zip(&available.processes) {
                 item.setAttributedTitle(Some(&stat_row_attributed(
@@ -429,11 +431,6 @@ impl TrayController {
                     color_for_accent_alpha(accent_kind, 1.0),
                     &self.row_render_cache,
                 )));
-                item.setImage(
-                    self.row_render_cache
-                        .legend_icon(accent_kind, INFO_ROW_SWATCH_OPACITY)
-                        .as_deref(),
-                );
             }
         }
         *self.last_cpu_state.borrow_mut() = Some(cpu.clone());
@@ -467,16 +464,15 @@ impl TrayController {
                 cpu,
                 gpu,
             } => {
-                self.menu.addItem(&self.rings_item);
-                // One memory-history row sits inside the Memory module, under
-                // the rings and above the legend.
-                self.menu.addItem(&self.history_item);
+                self.menu.addItem(&self.map_item);
                 for item in self.legend_items.iter().take(breakdown_rows) {
                     self.menu.addItem(item);
                 }
+                self.menu.addItem(&self.pressure_item);
                 if show_swap {
                     self.menu.addItem(&self.swap_item);
                 }
+                self.menu.addItem(&self.history_item);
                 match apps {
                     AppShape::Hidden => {}
                     AppShape::Loading => {
@@ -605,11 +601,6 @@ fn update_legend_items(
 ) {
     for (item, row) in items.iter().zip(rows) {
         item.setAttributedTitle(Some(&legend_row_attributed(row, accent, render_cache)));
-        item.setImage(
-            render_cache
-                .legend_icon(accent, row.opacity_percent)
-                .as_deref(),
-        );
     }
 }
 

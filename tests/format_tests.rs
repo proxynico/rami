@@ -1,6 +1,6 @@
 use rami::format::{
     dropdown_model, gauge_symbol_name, gb_pair, gb_text, mem_text, placeholder_dropdown_model,
-    Accent, DropdownModel, ModuleDisplay,
+    Accent, DropdownModel, ModuleDisplay, Swatch,
 };
 use rami::model::{CpuModuleState, GpuModuleState, MemorySnapshot, PressureSource, SystemSnapshot};
 
@@ -76,24 +76,25 @@ fn dropdown_model_splits_memory_and_swap_rows() {
     };
 
     assert_eq!(accent, Accent::Critical);
-    assert_eq!(memory.rings[0].label, "Memory %");
-    assert_eq!(memory.rings[0].percent, 53);
-    assert_eq!(memory.rings[1].label, "Pressure");
-    assert_eq!(memory.rings[1].percent, 96);
+    assert_eq!(memory.map.used_percent, 53);
+    assert_eq!(memory.map.used_of_total, "9.0 / 16.0 GB");
+    assert_eq!(memory.map.cell_caption, "1 cell = 256 MB");
+    assert_eq!(memory.pressure_percent, 96);
     assert_eq!(memory.breakdown[0].label, "App Memory");
     assert_eq!(memory.breakdown[0].value, "6.0 GB · 38%");
-    assert_eq!(memory.breakdown[0].opacity_percent, 100);
+    assert_eq!(memory.breakdown[0].swatch, Swatch::Accent(100));
     assert_eq!(memory.breakdown[1].label, "Wired");
     assert_eq!(memory.breakdown[1].value, "2.0 GB · 13%");
-    assert_eq!(memory.breakdown[1].opacity_percent, 65);
+    assert_eq!(memory.breakdown[1].swatch, Swatch::Accent(62));
     assert_eq!(memory.breakdown[2].label, "Compressed");
     assert_eq!(memory.breakdown[2].value, "1.0 GB · 6%");
-    assert_eq!(memory.breakdown[2].opacity_percent, 35);
+    assert_eq!(memory.breakdown[2].swatch, Swatch::Accent(36));
     assert_eq!(memory.breakdown[3].label, "Cached");
+    assert_eq!(memory.breakdown[3].swatch, Swatch::Hatched);
     assert_eq!(memory.breakdown[3].value, "4.0 GB · 25%");
     assert_eq!(memory.breakdown[4].label, "Free");
     assert_eq!(memory.breakdown[4].value, "3.0 GB · 19%");
-    assert_eq!(memory.breakdown[4].opacity_percent, 12);
+    assert_eq!(memory.breakdown[4].swatch, Swatch::Empty);
     assert_eq!(
         memory.breakdown.len(),
         5,

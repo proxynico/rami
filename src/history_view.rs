@@ -1,18 +1,15 @@
 //! The memory-history row: a filled-area sparkline of the trend window.
 //! One row, memory-only. The bound allows exactly this view and nothing
-//! more. Captions under the mark show current used and the signed
-//! window delta.
+//! more. Captions under the mark show the window and its used-percent range.
 
+use crate::draw::{draw_text, draw_text_right};
 use crate::format::{history_caption, Accent};
-use crate::presentation::{ChromeColor, HistoryLayout, MenuMetrics};
+use crate::presentation::{color_for_accent_alpha, mark_color, HistoryLayout, MenuMetrics};
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, NSObjectProtocol};
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
-use objc2_app_kit::{
-    NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular,
-    NSForegroundColorAttributeName, NSStringDrawing, NSView,
-};
-use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
+use objc2::runtime::NSObjectProtocol;
+use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{NSBezierPath, NSColor, NSFont, NSFontWeightRegular, NSView};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::cell::RefCell;
 /// Below this byte span the sparkline collapses to a midline so tiny page
 /// jitter does not fill the band. Deliberately lower than the trend
@@ -56,7 +53,8 @@ fn normalized_points(samples: &[u64], span_floor: u64) -> Option<Vec<(f64, f64)>
 
 struct HistoryState {
     samples: Vec<u64>,
-    chrome: ChromeColor,
+    total_bytes: u64,
+    accent: Accent,
 }
 
 pub struct MemoryHistoryIvars {
@@ -87,7 +85,8 @@ impl MemoryHistoryView {
             metrics,
             state: RefCell::new(HistoryState {
                 samples: Vec::new(),
-                chrome: ChromeColor::resolve(Accent::Neutral),
+                total_bytes: 0,
+                accent: Accent::Neutral,
             }),
         });
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
@@ -101,14 +100,15 @@ impl MemoryHistoryView {
         view
     }
 
-    pub fn update(&self, samples: &[u64], chrome: ChromeColor) {
-        let value = match history_caption(samples) {
-            Some((current, delta)) => format!("{current} used, {delta} over the last two minutes"),
+    pub fn update(&self, samples: &[u64], total_bytes: u64, accent: Accent) {
+        let value = match history_caption(samples, total_bytes) {
+            Some((window, range)) => format!("{range} over the last {window}"),
             None => "collecting samples".to_string(),
         };
         *self.ivars().state.borrow_mut() = HistoryState {
             samples: samples.to_vec(),
-            chrome,
+            total_bytes,
+            accent,
         };
         let value = NSString::from_str(&value);
         unsafe {
@@ -120,7 +120,8 @@ impl MemoryHistoryView {
     fn render(&self) {
         let state = self.ivars().state.borrow();
         let layout = self.ivars().metrics.history_layout();
-        self.draw_caption(&state.samples, &layout, &state.chrome);
+        let mark = mark_color(state.accent);
+        self.draw_caption(&state.samples, state.total_bytes, &layout, state.accent);
 
         let Some(points) = normalized_points(&state.samples, SPAN_FLOOR_BYTES) else {
             let baseline = NSBezierPath::bezierPath();
@@ -147,11 +148,7 @@ impl MemoryHistoryView {
         area.lineToPoint(NSPoint::new(layout.band_right, layout.band_bottom));
         area.lineToPoint(NSPoint::new(layout.band_left, layout.band_bottom));
         area.closePath();
-        state
-            .chrome
-            .as_nscolor()
-            .colorWithAlphaComponent(FILL_ALPHA)
-            .setFill();
+        mark.colorWithAlphaComponent(FILL_ALPHA).setFill();
         area.fill();
 
         let line = NSBezierPath::bezierPath();
@@ -160,11 +157,7 @@ impl MemoryHistoryView {
             line.lineToPoint(to_view(point));
         }
         line.setLineWidth(LINE_WIDTH);
-        state
-            .chrome
-            .as_nscolor()
-            .colorWithAlphaComponent(LINE_ALPHA)
-            .setStroke();
+        mark.colorWithAlphaComponent(LINE_ALPHA).setStroke();
         line.stroke();
 
         let newest = to_view(points.last().expect("normalized_points is non-empty"));
@@ -172,62 +165,28 @@ impl MemoryHistoryView {
             NSPoint::new(newest.x - NOW_DOT_RADIUS, newest.y - NOW_DOT_RADIUS),
             NSSize::new(NOW_DOT_RADIUS * 2.0, NOW_DOT_RADIUS * 2.0),
         ));
-        state.chrome.as_nscolor().setFill();
+        mark.setFill();
         dot.fill();
     }
 
-    fn draw_caption(&self, samples: &[u64], layout: &HistoryLayout, chrome: &ChromeColor) {
-        // drawRect: alpha on the resolved chrome tracks appearance. Same
-        // 0.65 stop as the sparkline stroke so captions stay secondary to the mark.
-        let color = chrome.as_nscolor().colorWithAlphaComponent(LINE_ALPHA);
-        let Some((current, delta)) = history_caption(samples) else {
-            draw_caption_text(
-                "…",
-                layout.band_left,
-                layout.caption_y,
-                layout.caption_size,
-                &color,
-            );
+    fn draw_caption(
+        &self,
+        samples: &[u64],
+        total_bytes: u64,
+        layout: &HistoryLayout,
+        accent: Accent,
+    ) {
+        // Captions are text: label color under Normal, the accent otherwise.
+        let color = color_for_accent_alpha(accent, LINE_ALPHA);
+        let font = NSFont::monospacedDigitSystemFontOfSize_weight(layout.caption_size, unsafe {
+            NSFontWeightRegular
+        });
+        let Some((window, range)) = history_caption(samples, total_bytes) else {
+            draw_text("…", layout.band_left, layout.caption_y, &font, &color);
             return;
         };
-        draw_caption_text(
-            &current,
-            layout.band_left,
-            layout.caption_y,
-            layout.caption_size,
-            &color,
-        );
-        let delta_attrs = caption_attrs(&color, layout.caption_size);
-        let delta_str = NSString::from_str(&delta);
-        let measured = unsafe { delta_str.sizeWithAttributes(Some(&delta_attrs)) };
-        draw_caption_text(
-            &delta,
-            layout.band_right - measured.width,
-            layout.caption_y,
-            layout.caption_size,
-            &color,
-        );
-    }
-}
-
-fn caption_attrs(color: &NSColor, size: f64) -> Retained<NSDictionary<NSString, AnyObject>> {
-    let weight = unsafe { NSFontWeightRegular };
-    let font = NSFont::monospacedDigitSystemFontOfSize_weight(size, weight);
-    unsafe {
-        let color_obj = Retained::cast_unchecked::<AnyObject>(color.retain());
-        let font_obj = Retained::cast_unchecked::<AnyObject>(font);
-        NSDictionary::from_retained_objects(
-            &[NSForegroundColorAttributeName, NSFontAttributeName],
-            &[color_obj, font_obj],
-        )
-    }
-}
-
-fn draw_caption_text(text: &str, x: f64, y: f64, size: f64, color: &NSColor) {
-    let attrs = caption_attrs(color, size);
-    let text = NSString::from_str(text);
-    unsafe {
-        text.drawAtPoint_withAttributes(NSPoint::new(x, y), Some(&attrs));
+        draw_text(&window, layout.band_left, layout.caption_y, &font, &color);
+        draw_text_right(&range, layout.band_right, layout.caption_y, &font, &color);
     }
 }
 
