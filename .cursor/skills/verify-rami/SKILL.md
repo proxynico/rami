@@ -7,7 +7,7 @@ description: Drive rami, the macOS menu-bar memory/CPU/GPU monitor, through its 
 
 rami is an accessory (`LSUIElement`) menu-bar app. The user touches one status-item gauge and the `NSMenu` it opens. There is no window, dock icon, browser, or HTTP port. Unit tests do not prove this surface.
 
-Read `CONCEPTS.md` before naming what you see. Memory % and Pressure are different rings. CPU and GPU are hideable modules.
+Read `CONCEPTS.md` before naming what you see. Memory % and Pressure are different figures: the map header and the Pressure meter. CPU and GPU are hideable modules.
 
 ## Isolation (read this first)
 
@@ -64,7 +64,8 @@ The harness is `.cursor/skills/verify-rami/bin/control-rami`. Prefer names over 
 Stable handles (do not invent others):
 
 - Status item: accessibility description `Memory <n> percent, <used> of <total> GB used`; tooltip ` <n>% · <used> / <total> GB`. In System Events this is `menu bar item 1 of menu bar 1` of the recorded PID — **menu bar 1, not menu bar 2**.
-- Rings view: AXGroup label `Memory`, value `<mem%> percent, <used> / <total> GB, pressure <p>% percent`.
+- Memory map: AXGroup label `Memory`, value `<mem%> percent, <used> / <total> GB used, 1 cell = <size>`.
+- Pressure meter: AXGroup label `Pressure`, value `<p> percent`.
 - History view: AXGroup label `Memory history`.
 - Module headings: AXHeading `CPU`, `GPU`.
 - Command items by exact title: `Refresh`, `Settings`, `Quit`.
@@ -87,7 +88,7 @@ Standards:
 - Exercise the real status item and menu. Do not treat `cargo test` or engine fixtures as UI proof.
 - Capture the action and the resulting state: status-label before open, AX dump + screenshot of the open menu, and a second read after a mutation.
 - Side effects: settings keys via `defaults read com.nicomontero.rami`; diagnostics via the pasteboard (`pbpaste` must start with `rami diagnostics`).
-- `RAMI_FORCE_PRESSURE` is a compiled-in preview hook, not a mock. It changes displayed pressure percent and the accent derived from it, nothing else. Warning is 88%, Critical is 95%. Confirm the rings AX value, not only the screenshot tint.
+- `RAMI_FORCE_PRESSURE` is a compiled-in preview hook, not a mock. It changes displayed pressure percent and the accent derived from it, nothing else. Warning is 88%, Critical is 95%. Confirm the Pressure AX value, not only the screenshot tint.
 - Screenshots can include unrelated windows. Open the dump and the image before treating them as proof.
 
 ## Cleanup

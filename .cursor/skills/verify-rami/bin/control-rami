@@ -434,7 +434,7 @@ cmd_capture_open_menu() {
   click_status "$(recorded_pid)" || true
   wait "$watcher"
   [ -s "$dump_path" ] || die "capture-open-menu wrote no dump"
-  grep -q $'\tMemory\t' "$dump_path" || die "capture-open-menu dump missing Memory rings"
+  grep -q $'\tMemory\t' "$dump_path" || die "capture-open-menu dump missing the Memory map"
   grep -q $'\tRefresh\t' "$dump_path" || die "capture-open-menu dump missing Refresh"
   [ -f "$shot_path" ] || die "capture-open-menu wrote no screenshot"
   printf 'dump=%s screenshot=%s\n' "$dump_path" "$shot_path"

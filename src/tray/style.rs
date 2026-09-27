@@ -21,16 +21,6 @@ pub(super) const ROW_ICON_SIZE: f64 = MenuMetrics::STANDARD.icon_slot;
 /// Warning and Critical states.
 pub(super) const DEMOTED_LABEL_ALPHA: f64 = 0.55;
 
-/// Swatch opacity for demoted rows (E/P cluster splits): the same demotion
-/// strength as `DEMOTED_LABEL_ALPHA`, expressed on the 0–100 swatch scale, so
-/// a row's dot and its text always carry equal visual weight.
-pub(super) const DEMOTED_SWATCH_OPACITY: u8 = 55;
-
-/// Swatch opacity for informational ranking rows (CPU processes): a quiet
-/// bullet marker rather than a legend entry, so it sits well below the
-/// demoted step and never competes with the row's full-strength text.
-pub(super) const INFO_ROW_SWATCH_OPACITY: u8 = 35;
-
 pub(super) fn status_tint_for_pressure(pressure: MemoryPressure) -> Option<Accent> {
     match pressure {
         MemoryPressure::Normal => None,

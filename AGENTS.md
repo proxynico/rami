@@ -49,45 +49,55 @@ per-process GPU, and a quit action on ranked app-memory or CPU-process
 rows. rami is a monitor, not a task manager. E-cores and P-cores stay
 as two cluster aggregates.
 
+The Memory section opens the dropdown with the memory map: a header
+with used / total and Memory %, RAM drawn as 64 equal cells on a board
+in category order, a contact strip, and the cell size. The breakdown
+rows follow, then the Pressure meter with ticks at Warning and
+Critical, Swap when nonzero, and the history row.
+
 App-memory and CPU-process rankings show three rows each. Memory
-history is one row, memory-only, about 28 px, under the rings. It
-reuses the 5 s trend window the engine already records, including
-while the menu is closed, so it is warm when the menu opens. It
-renders in the pressure-driven accent at 12% fill, 65% line, and a
-100% now-dot. There is no second graph, no per-module history, and no
+history is one row, memory-only, about 36 px, at the end of the Memory
+section. It reuses the 5 s trend window the engine already records,
+including while the menu is closed, so it is warm when the menu opens.
+It renders in the mark color at 12% fill, 65% line, and a 100%
+now-dot. There is no second graph, no per-module history, and no
 submenu or hover reveal.
 
 Memory is the visual anchor. Settings is an arrowless command that
 opens a compact submenu. Refresh and Quit show no key equivalents.
 
-Rejected alternatives were multiple status items and an `NSPopover`
-panel.
+Rejected alternatives were multiple status items, an `NSPopover` panel,
+and two equal rings for Memory % and Pressure. Nico replaced the rings
+with the map on 2026-09-27: the rings gave both figures equal weight and
+did not show where RAM goes.
 
 ### Pressure-driven accent
 
-Under Normal pressure, dropdown text, legends, and history stay
-monochrome. They use `labelColor` at stepped opacities. Ring tracks
-are quaternary gray.
+Under Normal pressure, dropdown text stays monochrome in the adaptive
+label color. Every mark uses one gold hue: map cells, legend swatches,
+the pressure meter, the history sparkline, and the contact strip. App
+Memory, Wired, and Compressed step down at 100%, 62%, and 36%. Cached
+is a gold hatch, Other is neutral gray, and Free is the empty track.
+`mark_color` in `src/presentation.rs` picks light or dark gold while
+drawing.
 
-Memory ring strokes are the calm exception. Under Normal they use
-system orange. Under Warning and Critical they use system red. Orange
-is reserved for those calm rings.
-
-The accent is semantic. Neutral chrome and legend use the adaptive
-label color. Warning and Critical use system red, including ring
-strokes. The user's macOS accent color is ignored.
+The accent is semantic. Warning and Critical turn the gold marks and the
+accent chrome, including row labels, system red. Other and Free stay
+neutral gray in every state. The user's macOS accent color is ignored.
 
 The normal status gauge stays an untinted template image so macOS
 picks black or white for the menu bar. Warning and Critical tint the
 gauge red. Severity between those two states is numeric (pressure
-ring %, tooltip, VoiceOver), not a second hue. RisingFast is
+meter %, tooltip, VoiceOver), not a second hue. RisingFast is
 trend-driven at any pressure. When memory climbs fast, the icon adds
 an upward badge in `status_icon.rs`.
 
 Rejected alternatives were multi-hue category palettes, the user's
-macOS accent, and a fixed accent with pressure tint only on the gauge.
+macOS accent, a fixed accent with pressure tint only on the gauge, and
+gray marks with orange rings. Nico chose gold on 2026-09-27 to match the
+icon's contacts.
 
-A future category or module must fit the opacity ramp. If a display
+A future category or module must fit the one-hue ramp. If a display
 cannot be read in one hue, simplify the display.
 
 When you change Neutral, Warning, or Critical colors, update this
@@ -182,6 +192,10 @@ them with `color_for_accent_alpha` (`src/presentation.rs`), never
 `colorWithAlphaComponent` on catalog colors, even at alpha 1.0.
 `src/status_icon.rs` and `src/tray/render.rs` pin this with
 appearance-flip regression tests.
+
+NSMenu on current macOS does not draw menu-item images. Legend
+swatches ride in the attributed title as a text attachment
+(`src/tray/render.rs`); an item image would not show.
 
 Warning and Critical accents are unreachable without exhausting real
 memory. Use `RAMI_FORCE_PRESSURE` set to `warning`, `critical`, or `normal`,

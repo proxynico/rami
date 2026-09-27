@@ -42,7 +42,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 ## Features
 
 - [Status gauge](./status-gauge.md) covers the menu-bar icon, its spoken label, and its tooltip.
-- [Memory dropdown](./memory-dropdown.md) covers rings, history, breakdown, swap, and top apps.
+- [Memory dropdown](./memory-dropdown.md) covers the map, breakdown, pressure, swap, history, and top apps.
 - [Settings modules](./settings-modules.md) covers Show CPU, Show GPU, Show Apps, and Auto-Refresh.
 - [CPU module](./cpu-module.md) covers the CPU heading, User/System/Idle, E-cores/P-cores, and busy processes.
 - [Copy diagnostics](./copy-diagnostics.md) covers the pasteboard report from Settings.

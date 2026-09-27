@@ -68,22 +68,21 @@ pub fn share_of_total(bytes: u64, total_bytes: u64) -> u8 {
     percent.min(100) as u8
 }
 
-/// Caption for the memory-history row: current used and signed window delta
-/// (newest − oldest). `None` while fewer than two samples are available.
-pub fn history_caption(samples: &[u64]) -> Option<(String, String)> {
-    let first = *samples.first()?;
-    let last = *samples.last()?;
+/// Caption for the memory-history row: the window and its used-percent
+/// range, e.g. ("2 min", "71–75% used"). `None` while fewer than two samples
+/// are available.
+pub fn history_caption(samples: &[u64], total_bytes: u64) -> Option<(String, String)> {
     if samples.len() < 2 {
         return None;
     }
-    let delta = if last == first {
-        "—".to_string()
-    } else if last > first {
-        format!("+{}", mem_text(last - first))
+    let low = share_of_total(*samples.iter().min()?, total_bytes);
+    let high = share_of_total(*samples.iter().max()?, total_bytes);
+    let range = if low == high {
+        format!("{high}% used")
     } else {
-        format!("-{}", mem_text(first - last))
+        format!("{low}–{high}% used")
     };
-    Some((mem_text(last), delta))
+    Some(("2 min".to_string(), range))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,18 +117,69 @@ impl From<MemoryPressure> for Accent {
     }
 }
 
+/// How a legend swatch or map cell is filled. Every category fits one hue:
+/// accent steps, a neutral gray, an accent hatch, or the empty track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Swatch {
+    Accent(u8),
+    Neutral,
+    Hatched,
+    Empty,
+}
+
+/// One slice of physical RAM, in map and legend order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryCategory {
+    App,
+    Wired,
+    Compressed,
+    Other,
+    Cached,
+    Free,
+}
+
+impl MemoryCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::App => "App Memory",
+            Self::Wired => "Wired",
+            Self::Compressed => "Compressed",
+            Self::Other => "Other",
+            Self::Cached => "Cached",
+            Self::Free => "Free",
+        }
+    }
+
+    pub fn swatch(self) -> Swatch {
+        match self {
+            Self::App => Swatch::Accent(100),
+            Self::Wired => Swatch::Accent(62),
+            Self::Compressed => Swatch::Accent(36),
+            Self::Other => Swatch::Neutral,
+            Self::Cached => Swatch::Hatched,
+            Self::Free => Swatch::Empty,
+        }
+    }
+}
+
+pub const MAP_CELLS: usize = 64;
+
+/// The memory map: RAM drawn as `MAP_CELLS` equal cells in category order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RingDisplay {
-    pub label: String,
-    pub percent: u8,
-    pub detail: String,
+pub struct MemoryMapDisplay {
+    /// e.g. "12.7 / 16.0 GB"
+    pub used_of_total: String,
+    pub used_percent: u8,
+    pub cells: Vec<MemoryCategory>,
+    /// e.g. "1 cell = 256 MB"
+    pub cell_caption: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegendRow {
     pub label: String,
     pub value: String,
-    pub opacity_percent: u8,
+    pub swatch: Swatch,
     /// Row hierarchy (#23): totals render at full label strength, derived
     /// breakdowns are demoted. Brightness tracks actionability, not position.
     pub primary: bool,
@@ -137,7 +187,9 @@ pub struct LegendRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryModuleDisplay {
-    pub rings: [RingDisplay; 2],
+    pub map: MemoryMapDisplay,
+    pub pressure_percent: u8,
+    pub total_bytes: u64,
     /// Trend-window samples for the one memory-history row, oldest first.
     pub history: Vec<u64>,
     /// Rows partition physical RAM, less any Other too small to show.
@@ -207,18 +259,9 @@ pub(crate) fn dropdown_model_with_sections(
     let memory = snapshot.memory;
     let accent = Accent::from(classify_pressure(memory.pressure_percent));
     let mut modules = vec![ModuleDisplay::Memory(Box::new(MemoryModuleDisplay {
-        rings: [
-            RingDisplay {
-                label: "Memory %".to_string(),
-                percent: memory.used_percent,
-                detail: gb_pair(memory.used_bytes, memory.total_bytes),
-            },
-            RingDisplay {
-                label: "Pressure".to_string(),
-                percent: memory.pressure_percent,
-                detail: String::new(),
-            },
-        ],
+        map: memory_map(&memory),
+        pressure_percent: memory.pressure_percent,
+        total_bytes: memory.total_bytes,
         history: history.to_vec(),
         breakdown: memory_breakdown(&memory),
         swap: (memory.swap_used_bytes > 0).then(|| StatRow {
@@ -276,20 +319,77 @@ pub(crate) fn dropdown_model_with_sections(
     DropdownModel::Loaded { accent, modules }
 }
 
-fn memory_breakdown(memory: &MemorySnapshot) -> Vec<LegendRow> {
-    let total = memory.total_bytes;
-    let mut rows = vec![
-        legend_row("App Memory", memory.app_memory_bytes, total, 100, true),
-        legend_row("Wired", memory.wired_bytes, total, 65, false),
-        legend_row("Compressed", memory.compressed_bytes, total, 35, false),
+/// RAM split into categories in map order. Other appears only when its share
+/// rounds to at least 1%.
+fn memory_parts(memory: &MemorySnapshot) -> Vec<(MemoryCategory, u64)> {
+    let mut parts = vec![
+        (MemoryCategory::App, memory.app_memory_bytes),
+        (MemoryCategory::Wired, memory.wired_bytes),
+        (MemoryCategory::Compressed, memory.compressed_bytes),
     ];
     let other = memory.other_bytes();
-    if share_of_total(other, total) >= 1 {
-        rows.push(legend_row("Other", other, total, 20, false));
+    if share_of_total(other, memory.total_bytes) >= 1 {
+        parts.push((MemoryCategory::Other, other));
     }
-    rows.push(legend_row("Cached", memory.cached_bytes, total, 20, false));
-    rows.push(legend_row("Free", memory.free_bytes, total, 12, false));
-    rows
+    parts.push((MemoryCategory::Cached, memory.cached_bytes));
+    parts.push((MemoryCategory::Free, memory.free_bytes));
+    parts
+}
+
+fn memory_breakdown(memory: &MemorySnapshot) -> Vec<LegendRow> {
+    memory_parts(memory)
+        .into_iter()
+        .map(|(category, bytes)| LegendRow {
+            label: category.label().to_string(),
+            value: format!(
+                "{} · {}%",
+                mem_text(bytes),
+                share_of_total(bytes, memory.total_bytes)
+            ),
+            swatch: category.swatch(),
+            primary: category == MemoryCategory::App,
+        })
+        .collect()
+}
+
+fn memory_map(memory: &MemorySnapshot) -> MemoryMapDisplay {
+    MemoryMapDisplay {
+        used_of_total: gb_pair(memory.used_bytes, memory.total_bytes),
+        used_percent: memory.used_percent,
+        cells: allocate_cells(&memory_parts(memory), MAP_CELLS),
+        cell_caption: format!(
+            "1 cell = {}",
+            mem_text(memory.total_bytes / MAP_CELLS as u64)
+        ),
+    }
+}
+
+/// Largest-remainder apportionment, so the cells always number exactly
+/// `count` and stay in category order.
+fn allocate_cells(parts: &[(MemoryCategory, u64)], count: usize) -> Vec<MemoryCategory> {
+    let sum: u128 = parts.iter().map(|(_, bytes)| u128::from(*bytes)).sum();
+    if sum == 0 {
+        return vec![MemoryCategory::Free; count];
+    }
+    let quotas: Vec<(usize, u128)> = parts
+        .iter()
+        .map(|(_, bytes)| {
+            let scaled = u128::from(*bytes) * count as u128;
+            ((scaled / sum) as usize, scaled % sum)
+        })
+        .collect();
+    let mut shares: Vec<usize> = quotas.iter().map(|(whole, _)| *whole).collect();
+    let mut by_remainder: Vec<usize> = (0..parts.len()).collect();
+    by_remainder.sort_by(|a, b| quotas[*b].1.cmp(&quotas[*a].1));
+    let missing = count - shares.iter().sum::<usize>();
+    for index in by_remainder.into_iter().take(missing) {
+        shares[index] += 1;
+    }
+    parts
+        .iter()
+        .zip(shares)
+        .flat_map(|((category, _), share)| std::iter::repeat_n(*category, share))
+        .collect()
 }
 
 fn cpu_process_rows(snapshot: &ProcessCpuSnapshot) -> Vec<StatRow> {
@@ -314,7 +414,7 @@ fn percent_legend_row(label: &str, percent: u8, opacity_percent: u8, primary: bo
     LegendRow {
         label: label.to_string(),
         value: format!("{}%", percent.min(100)),
-        opacity_percent,
+        swatch: Swatch::Accent(opacity_percent),
         primary,
     }
 }
@@ -324,25 +424,6 @@ fn cpu_core_row(label: &str, percent: u8) -> StatRow {
         primary: label.to_string(),
         tail: Some(format!("{}%", percent.min(100))),
         bundle_path: None,
-    }
-}
-
-fn legend_row(
-    label: &str,
-    bytes: u64,
-    total_bytes: u64,
-    opacity_percent: u8,
-    primary: bool,
-) -> LegendRow {
-    LegendRow {
-        label: label.to_string(),
-        value: format!(
-            "{} · {}%",
-            mem_text(bytes),
-            share_of_total(bytes, total_bytes)
-        ),
-        opacity_percent,
-        primary,
     }
 }
 
@@ -478,21 +559,46 @@ mod tests {
     }
 
     #[test]
-    fn history_caption_reports_current_and_signed_window_delta() {
-        assert_eq!(history_caption(&[]), None);
-        assert_eq!(history_caption(&[ONE_GIB_BYTES]), None);
+    fn history_caption_reports_the_window_and_used_range() {
+        assert_eq!(history_caption(&[], SIXTEEN_GIB), None);
+        assert_eq!(history_caption(&[ONE_GIB_BYTES], SIXTEEN_GIB), None);
         assert_eq!(
-            history_caption(&[ONE_GIB_BYTES, 2 * ONE_GIB_BYTES]),
-            Some(("2.0 GB".into(), "+1.0 GB".into()))
+            history_caption(&[12 * ONE_GIB_BYTES, 8 * ONE_GIB_BYTES], SIXTEEN_GIB),
+            Some(("2 min".into(), "50–75% used".into()))
         );
         assert_eq!(
-            history_caption(&[2 * ONE_GIB_BYTES, ONE_GIB_BYTES]),
-            Some(("1.0 GB".into(), "-1.0 GB".into()))
+            history_caption(&[8 * ONE_GIB_BYTES, 8 * ONE_GIB_BYTES], SIXTEEN_GIB),
+            Some(("2 min".into(), "50% used".into()))
         );
+    }
+
+    #[test]
+    fn map_cells_fill_exactly_and_keep_category_order() {
+        let parts = [
+            (MemoryCategory::App, 4_300),
+            (MemoryCategory::Wired, 3_200),
+            (MemoryCategory::Compressed, 4_200),
+            (MemoryCategory::Cached, 4_200),
+            (MemoryCategory::Free, 100),
+        ];
+        let cells = allocate_cells(&parts, MAP_CELLS);
+        let count = |category| cells.iter().filter(|cell| **cell == category).count();
+
+        assert_eq!(cells.len(), MAP_CELLS);
         assert_eq!(
-            history_caption(&[ONE_GIB_BYTES, ONE_GIB_BYTES]),
-            Some(("1.0 GB".into(), "—".into()))
+            [
+                count(MemoryCategory::App),
+                count(MemoryCategory::Wired),
+                count(MemoryCategory::Compressed),
+                count(MemoryCategory::Cached),
+                count(MemoryCategory::Free),
+            ],
+            [17, 13, 17, 17, 0]
         );
+        assert!(cells.windows(2).all(|pair| {
+            let rank = |category| parts.iter().position(|(c, _)| *c == category);
+            rank(pair[0]) <= rank(pair[1])
+        }));
     }
 
     #[test]
@@ -578,11 +684,11 @@ mod tests {
     }
 
     #[test]
-    fn dropdown_model_memory_ring_shows_percent() {
+    fn dropdown_model_memory_map_shows_percent() {
         let mut snapshot = snapshot(SIXTEEN_GIB);
         snapshot.memory.used_percent = 56;
         let model = dropdown_model(snapshot);
-        assert_eq!(memory_module(&model).rings[0].percent, 56);
+        assert_eq!(memory_module(&model).map.used_percent, 56);
     }
 
     #[test]
@@ -647,7 +753,7 @@ mod tests {
             LegendRow {
                 label: "User".to_string(),
                 value: "41%".to_string(),
-                opacity_percent: 100,
+                swatch: Swatch::Accent(100),
                 primary: true,
             }
         );
@@ -655,7 +761,7 @@ mod tests {
         assert_eq!(available.utilization[1].value, "13%");
         assert_eq!(available.utilization[2].label, "Idle");
         assert_eq!(available.utilization[2].value, "46%");
-        assert_eq!(available.utilization[2].opacity_percent, 12);
+        assert_eq!(available.utilization[2].swatch, Swatch::Accent(12));
         assert_eq!(available.cores[0].primary, "E-cores");
         assert_eq!(available.cores[0].tail.as_deref(), Some("22%"));
         assert_eq!(available.cores[1].primary, "P-cores");
@@ -768,19 +874,19 @@ mod tests {
                 LegendRow {
                     label: "Utilization".to_string(),
                     value: "76%".to_string(),
-                    opacity_percent: 100,
+                    swatch: Swatch::Accent(100),
                     primary: true,
                 },
                 LegendRow {
                     label: "Renderer".to_string(),
                     value: "54%".to_string(),
-                    opacity_percent: 65,
+                    swatch: Swatch::Accent(65),
                     primary: false,
                 },
                 LegendRow {
                     label: "Tiler".to_string(),
                     value: "12%".to_string(),
-                    opacity_percent: 35,
+                    swatch: Swatch::Accent(35),
                     primary: false,
                 },
             ]

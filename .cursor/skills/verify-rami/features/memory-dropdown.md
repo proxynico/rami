@@ -1,13 +1,14 @@
 # Memory dropdown
 
-Clicking the gauge opens one native menu: Memory % and Pressure rings, a two-minute history row, the App Memory / Wired / Compressed / Free breakdown, optional Swap, and (when enabled) the top apps.
+Clicking the gauge opens one native menu: the memory map (header with used / total and Memory %, 64 cells, cell size), the App Memory / Wired / Compressed / Other / Cached / Free breakdown, the Pressure meter, optional Swap, a two-minute history row, and (when enabled) the top apps.
 
 ## Sub-features
 
 - `memory-open` opens the dropdown from the gauge.
-- `memory-rings` exposes an AXGroup named `Memory` whose value includes both Memory % and Pressure.
+- `memory-map` exposes an AXGroup named `Memory` whose value includes Memory %, used / total, and the cell size.
+- `memory-pressure` exposes an AXGroup named `Pressure` whose value is the pressure percent.
 - `memory-history` exposes an AXGroup named `Memory history`.
-- `memory-breakdown` lists App Memory, Wired, Compressed, and Free.
+- `memory-breakdown` lists App Memory, Wired, Compressed, Cached, and Free, plus Other when it rounds to at least 1% of RAM.
 - `memory-swap` shows a Swap row only when swap is non-zero.
 - `memory-apps` lists top apps when Show Apps is on, or omits them when it is off.
 
@@ -25,17 +26,18 @@ Preconditions:
 
 - **Read the closed gauge.** Run `control-rami status-label`. Save it to `.cursor/skills/verify-rami/artifacts/memory-dropdown/before-label.txt`.
 - **Open and capture.** Run `control-rami capture-open-menu --dump .cursor/skills/verify-rami/artifacts/memory-dropdown/menu.ax.txt --screenshot .cursor/skills/verify-rami/artifacts/memory-dropdown/menu.png`.
-- **Rings.** The dump contains a row whose name or description is `Memory` and whose value matches `[0-9]+ percent, .*, pressure [0-9]+ percent`.
+- **Map.** The dump contains a row whose name or description is `Memory` and whose value matches `[0-9]+ percent, .* GB used, 1 cell = .*`.
+- **Pressure.** The dump contains a row named `Pressure` whose value matches `[0-9]+ percent`.
 - **History.** The dump contains `Memory history`.
-- **Breakdown.** The dump contains `App Memory`, `Wired`, `Compressed`, and `Free`.
+- **Breakdown.** The dump contains `App Memory`, `Wired`, `Compressed`, `Cached`, and `Free`.
 - **Commands.** The dump contains `Refresh`, `Settings`, and `Quit`.
-- **Resample.** Run `control-rami click --item "Refresh"`. After the menu reopens, run `capture-open-menu` again to `.cursor/skills/verify-rami/artifacts/memory-dropdown/after-refresh.ax.txt` and `after-refresh.png`. Rings still show Memory and Pressure.
-- **Proof.** The screenshot shows the open dropdown under the gauge, and the AX dump lists rings, history, breakdown, and the three commands.
+- **Resample.** Run `control-rami click --item "Refresh"`. After the menu reopens, run `capture-open-menu` again to `.cursor/skills/verify-rami/artifacts/memory-dropdown/after-refresh.ax.txt` and `after-refresh.png`. The map and Pressure meter are still present.
+- **Proof.** The screenshot shows the open dropdown under the gauge, and the AX dump lists the map, breakdown, Pressure, history, and the three commands.
 
 ## Gotchas
 
 - Opening the menu with raw AppleScript blocks until the menu closes. Use `capture-open-menu`, not a bare `open-menu` plus a later dump in the same shell.
 - Swap is absent when swap used is 0. Missing Swap is not a failure; a Swap row when Activity Monitor also shows 0 is.
 - App names are truncated to 16 characters. Assert the row exists, not the full process name.
-- Custom views (rings, history) often have an empty menu-item title. Read the AXGroup label and value, not `name` alone.
+- Custom views (map, Pressure, history) often have an empty menu-item title. Read the AXGroup label and value, not `name` alone.
 - `RAMI_FORCE_PRESSURE=warning` makes Pressure 88%; `critical` makes it 95%. Memory % stays the real sample.

@@ -1,17 +1,17 @@
 use super::style::{
-    color_for_accent, color_for_accent_alpha, row_paragraph_style, stat_font, DEMOTED_LABEL_ALPHA,
-    ROW_ICON_SIZE,
+    color_for_accent_alpha, row_paragraph_style, stat_font, DEMOTED_LABEL_ALPHA, ROW_ICON_SIZE,
 };
-use crate::format::{Accent, LegendRow, StatRow};
+use crate::draw::fill_swatch;
+use crate::format::{Accent, LegendRow, StatRow, Swatch};
 use crate::presentation::MenuMetrics;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
-use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, Message};
+use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSImage,
-    NSImageSymbolConfiguration, NSImageSymbolScale, NSMenuItem, NSMutableParagraphStyle,
-    NSParagraphStyleAttributeName,
+    NSAttributedStringAttachmentConveniences, NSColor, NSFont, NSFontAttributeName,
+    NSForegroundColorAttributeName, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
+    NSMenuItem, NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSTextAttachment,
 };
 use objc2_foundation::{
     NSAttributedString, NSDictionary, NSMutableAttributedString, NSPoint, NSRect, NSSize, NSString,
@@ -19,16 +19,13 @@ use objc2_foundation::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct LegendIconKey {
-    accent: Accent,
-    opacity_percent: u8,
-}
+/// Edge of the square swatch drawn inline before a legend label.
+const SWATCH_SIZE: f64 = 9.0;
 
 pub(super) struct RowRenderCache {
     font: Retained<NSFont>,
     paragraph_style: Retained<NSMutableParagraphStyle>,
-    legend_icons: RefCell<HashMap<LegendIconKey, Option<Retained<NSImage>>>>,
+    swatches: RefCell<HashMap<(Accent, Swatch), Retained<NSImage>>>,
 }
 
 impl RowRenderCache {
@@ -36,28 +33,16 @@ impl RowRenderCache {
         Self {
             font: stat_font(metrics.type_scale.stat_row),
             paragraph_style: row_paragraph_style(metrics.row_tail_tab()),
-            legend_icons: RefCell::new(HashMap::new()),
+            swatches: RefCell::new(HashMap::new()),
         }
     }
 
-    pub(super) fn legend_icon(
-        &self,
-        accent: Accent,
-        opacity_percent: u8,
-    ) -> Option<Retained<NSImage>> {
-        let key = LegendIconKey {
-            accent,
-            opacity_percent,
-        };
-        if let Some(icon) = self.legend_icons.borrow().get(&key) {
-            return icon.clone();
-        }
-        // Pass the dynamic accent color and opacity separately. Applying alpha
-        // up front (or tinting via hierarchical SF Symbols) bakes labelColor
-        // against the creation appearance and leaves black swatches in dark menus.
-        let icon = make_legend_icon(&color_for_accent(accent), opacity_percent);
-        self.legend_icons.borrow_mut().insert(key, icon.clone());
-        icon
+    pub(super) fn swatch_image(&self, accent: Accent, swatch: Swatch) -> Retained<NSImage> {
+        self.swatches
+            .borrow_mut()
+            .entry((accent, swatch))
+            .or_insert_with(|| make_swatch_image(accent, swatch))
+            .clone()
     }
 }
 
@@ -104,9 +89,9 @@ pub(super) fn legend_row_attributed(
     } else {
         color_for_accent_alpha(accent, DEMOTED_LABEL_ALPHA)
     };
-    stat_row_attributed_colored(
+    let text = stat_row_attributed_colored(
         &StatRow {
-            primary: row.label.clone(),
+            primary: format!("  {}", row.label),
             tail: Some(row.value.clone()),
             bundle_path: None,
         },
@@ -114,7 +99,21 @@ pub(super) fn legend_row_attributed(
         NSColor::secondaryLabelColor(),
         NSColor::labelColor(),
         render_cache,
-    )
+    );
+    // NSMenu no longer draws item images, so the swatch rides in the title.
+    let attachment = NSTextAttachment::new();
+    attachment.setImage(Some(&render_cache.swatch_image(accent, row.swatch)));
+    attachment.setBounds(NSRect::new(
+        NSPoint::new(0.0, -0.5),
+        NSSize::new(SWATCH_SIZE, SWATCH_SIZE),
+    ));
+    let result = NSMutableAttributedString::new();
+    result.appendAttributedString(&NSAttributedString::attributedStringWithAttachment(
+        &attachment,
+    ));
+    result.appendAttributedString(&text);
+    apply_paragraph_style(&result, &render_cache.paragraph_style);
+    Retained::into_super(result)
 }
 
 pub(super) fn make_placeholder_icon() -> Retained<NSImage> {
@@ -152,32 +151,20 @@ pub(super) fn make_action_icon(name: &str) -> Option<Retained<NSImage>> {
     Some(image)
 }
 
-fn make_legend_icon(color: &NSColor, opacity_percent: u8) -> Option<Retained<NSImage>> {
-    // Draw lazily so dynamic accent colors (labelColor under Neutral) resolve
-    // against the menu's current light/dark appearance. Hierarchical SF Symbol
-    // tints bake the creation-time appearance and leave black swatches in dark
-    // menus after a light-mode create — same trap status_icon documents.
-    let color = color.retain();
-    let alpha = f64::from(opacity_percent) / 100.0;
-    let size = NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE);
+fn make_swatch_image(accent: Accent, swatch: Swatch) -> Retained<NSImage> {
+    // Drawn lazily so the mark color resolves against the menu's current
+    // appearance; a tint baked at creation keeps the wrong mode.
     let handler = RcBlock::new(move |rect: NSRect| -> Bool {
-        color.colorWithAlphaComponent(alpha).setFill();
-        // Keep the swatch inside the 16pt menu-item slot at roughly SF Symbol
-        // Small scale — inset leaves a quiet margin around the filled dot.
-        let inset = 4.0;
-        let dot = NSRect::new(
-            NSPoint::new(rect.origin.x + inset, rect.origin.y + inset),
-            NSSize::new(
-                rect.size.width - inset * 2.0,
-                rect.size.height - inset * 2.0,
-            ),
-        );
-        NSBezierPath::bezierPathWithOvalInRect(dot).fill();
+        fill_swatch(rect, swatch, accent, 2.0);
         Bool::YES
     });
-    let image = NSImage::imageWithSize_flipped_drawingHandler(size, false, &handler);
+    let image = NSImage::imageWithSize_flipped_drawingHandler(
+        NSSize::new(SWATCH_SIZE, SWATCH_SIZE),
+        false,
+        &handler,
+    );
     image.setTemplate(false);
-    Some(image)
+    image
 }
 
 fn attrs_for(
@@ -304,6 +291,7 @@ pub(super) fn unavailable_attributed_title(
 mod tests {
     use super::*;
     use block2::RcBlock;
+    use objc2::Message;
     use objc2_app_kit::{
         NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath,
         NSBitmapImageRep, NSCompositingOperation, NSDeviceRGBColorSpace, NSGraphicsContext,
@@ -448,26 +436,25 @@ mod tests {
     }
 
     #[test]
-    fn legend_icon_created_in_light_mode_stays_visible_in_dark_menus() {
-        // Hierarchical SF Symbol tints bake labelColor at creation time. Icons
-        // built while the process drawing appearance is light stay black when
-        // later drawn into a dark menu — the failure mode from the dropdown.
+    fn swatch_created_in_light_mode_draws_dark_mode_gold_in_dark_menus() {
+        // A mark color resolved at creation keeps the wrong mode wherever the
+        // image is drawn later. The swatch must pick gold at draw time.
         let light = appearance(unsafe { NSAppearanceNameAqua });
         let dark = appearance(unsafe { NSAppearanceNameDarkAqua });
         let built = RefCell::new(None);
         {
             let build = RcBlock::new(|| {
-                *built.borrow_mut() = make_legend_icon(&NSColor::labelColor(), 100);
+                *built.borrow_mut() = Some(make_swatch_image(Accent::Neutral, Swatch::Accent(100)));
             });
             light.performAsCurrentDrawingAppearance(&build);
         }
-        let image = built.into_inner().expect("legend icon");
+        let image = built.into_inner().expect("swatch");
 
         let (r, g, b, a) = sample_center(&image, &dark);
-        assert!(a > 0.5, "legend swatch should be opaque, got alpha {a:.2}");
+        assert!(a > 0.5, "swatch should be opaque, got alpha {a:.2}");
         assert!(
-            r > 0.5 && g > 0.5 && b > 0.5,
-            "dark menu must not keep a light-baked black swatch, got rgba({r:.2},{g:.2},{b:.2},{a:.2})"
+            r > 0.8 && g > 0.6 && b < 0.4,
+            "dark menu must draw the dark-mode gold, got rgba({r:.2},{g:.2},{b:.2},{a:.2})"
         );
     }
 }

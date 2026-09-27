@@ -6,14 +6,16 @@ pub mod model;
 
 mod cpu;
 mod diagnostics;
+mod draw;
 mod engine;
 mod gpu;
 mod history_view;
 mod iokit;
 mod login_item;
-mod memory_view;
+mod memory_map_view;
 mod module_title_view;
 pub(crate) mod presentation;
+mod pressure_view;
 mod proc_list;
 mod process_cpu;
 mod process_memory;

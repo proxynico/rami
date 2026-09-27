@@ -1,27 +1,45 @@
 use crate::format::Accent;
 use objc2::rc::Retained;
-use objc2_app_kit::NSColor;
-use objc2_foundation::{NSPoint, NSSize};
+use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSColor};
+use objc2_foundation::{NSArray, NSSize};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MenuTypeScale {
-    pub(crate) ring_percent: f64,
-    pub(crate) ring_label: f64,
-    pub(crate) ring_detail: f64,
-    pub(crate) history_caption: f64,
+    pub(crate) map_header: f64,
+    pub(crate) caption: f64,
     pub(crate) module_title: f64,
     pub(crate) stat_row: f64,
 }
 
+/// Top-down geometry of the memory map view: header, a 16×4 cell grid on a
+/// board, a contact strip, and a caption.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct RingMetrics {
-    radius: f64,
-    stroke_width: f64,
-    center_y: f64,
-    percent_baseline_offset: f64,
-    label_y: f64,
-    detail_y: f64,
-    view_height: f64,
+pub(crate) struct MapLayout {
+    pub(crate) view_width: f64,
+    pub(crate) view_height: f64,
+    pub(crate) left: f64,
+    pub(crate) right: f64,
+    pub(crate) header_y: f64,
+    pub(crate) board_top: f64,
+    pub(crate) board_padding: f64,
+    pub(crate) columns: usize,
+    pub(crate) rows: usize,
+    pub(crate) cell_height: f64,
+    pub(crate) cell_gap: f64,
+    pub(crate) strip_height: f64,
+    pub(crate) caption_y: f64,
+}
+
+/// One row: "Pressure", a meter with Warning and Critical ticks, the value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MeterLayout {
+    pub(crate) view_width: f64,
+    pub(crate) view_height: f64,
+    pub(crate) label_x: f64,
+    pub(crate) meter_left: f64,
+    pub(crate) meter_right: f64,
+    pub(crate) meter_height: f64,
+    pub(crate) value_right: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -36,25 +54,13 @@ struct HistoryMetrics {
 pub(crate) struct MenuMetrics {
     pub(crate) canvas_width: f64,
     pub(crate) content_inset: f64,
+    /// Menu rows end their text here short of the canvas edge, leaving room
+    /// NSMenu keeps for submenu arrows.
+    pub(crate) trailing_inset: f64,
     pub(crate) icon_slot: f64,
-    pub(crate) row_text_gap: f64,
     pub(crate) type_scale: MenuTypeScale,
-    ring: RingMetrics,
     history: HistoryMetrics,
     title_height: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct RingLayout {
-    pub(crate) centers: [NSPoint; 2],
-    pub(crate) radius: f64,
-    pub(crate) stroke_width: f64,
-    pub(crate) center_y: f64,
-    pub(crate) percent_baseline_offset: f64,
-    pub(crate) label_y: f64,
-    pub(crate) detail_y: f64,
-    pub(crate) view_width: f64,
-    pub(crate) view_height: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,24 +87,13 @@ impl MenuMetrics {
     pub(crate) const STANDARD: Self = Self {
         canvas_width: 240.0,
         content_inset: 16.0,
+        trailing_inset: 24.0,
         icon_slot: 16.0,
-        row_text_gap: 8.0,
         type_scale: MenuTypeScale {
-            ring_percent: 15.0,
-            ring_label: 12.0,
-            ring_detail: 10.0,
-            history_caption: 10.0,
+            map_header: 12.0,
+            caption: 10.0,
             module_title: 13.0,
             stat_row: 13.0,
-        },
-        ring: RingMetrics {
-            radius: 30.0,
-            stroke_width: 6.0,
-            center_y: 72.0,
-            percent_baseline_offset: 7.0,
-            label_y: 25.0,
-            detail_y: 8.0,
-            view_height: 118.0,
         },
         history: HistoryMetrics {
             view_height: 36.0,
@@ -114,11 +109,7 @@ impl MenuMetrics {
     }
 
     pub(crate) fn content_right(&self) -> f64 {
-        self.canvas_width - self.content_left()
-    }
-
-    pub(crate) fn content_width(&self) -> f64 {
-        self.content_right() - self.content_left()
+        self.canvas_width - self.trailing_inset
     }
 
     pub(crate) fn value_column_x(&self) -> f64 {
@@ -126,29 +117,40 @@ impl MenuMetrics {
     }
 
     pub(crate) fn row_label_origin_x(&self) -> f64 {
-        self.icon_slot + self.row_text_gap
+        self.content_left()
     }
 
     pub(crate) fn row_tail_tab(&self) -> f64 {
         self.value_column_x() - self.row_label_origin_x()
     }
 
-    pub(crate) fn ring_layout(&self) -> RingLayout {
-        let left = self.content_left();
-        let column = self.content_width() / 2.0;
-        RingLayout {
-            centers: [
-                NSPoint::new(left + column * 0.5, self.ring.center_y),
-                NSPoint::new(left + column * 1.5, self.ring.center_y),
-            ],
-            radius: self.ring.radius,
-            stroke_width: self.ring.stroke_width,
-            center_y: self.ring.center_y,
-            percent_baseline_offset: self.ring.percent_baseline_offset,
-            label_y: self.ring.label_y,
-            detail_y: self.ring.detail_y,
+    pub(crate) fn map_layout(&self) -> MapLayout {
+        MapLayout {
             view_width: self.canvas_width,
-            view_height: self.ring.view_height,
+            view_height: 108.0,
+            left: self.content_left(),
+            right: self.content_right(),
+            header_y: 6.0,
+            board_top: 28.0,
+            board_padding: 4.0,
+            columns: 16,
+            rows: 4,
+            cell_height: 10.0,
+            cell_gap: 2.0,
+            strip_height: 4.0,
+            caption_y: 91.0,
+        }
+    }
+
+    pub(crate) fn meter_layout(&self) -> MeterLayout {
+        MeterLayout {
+            view_width: self.canvas_width,
+            view_height: 22.0,
+            label_x: self.content_left(),
+            meter_left: 86.0,
+            meter_right: self.content_right() - 44.0,
+            meter_height: 4.0,
+            value_right: self.content_right(),
         }
     }
 
@@ -156,12 +158,12 @@ impl MenuMetrics {
         HistoryLayout {
             view_width: self.canvas_width,
             view_height: self.history.view_height,
-            band_left: self.row_label_origin_x(),
+            band_left: self.content_left(),
             band_right: self.content_right(),
             band_bottom: self.history.band_bottom,
             band_top: self.history.view_height - self.history.band_top_inset,
             caption_y: self.history.caption_y,
-            caption_size: self.type_scale.history_caption,
+            caption_size: self.type_scale.caption,
         }
     }
 
@@ -175,11 +177,28 @@ impl MenuMetrics {
     }
 }
 
-impl RingLayout {
-    pub(crate) fn center(&self, index: usize) -> NSPoint {
-        self.centers[index]
+impl MapLayout {
+    pub(crate) fn view_size(&self) -> NSSize {
+        NSSize::new(self.view_width, self.view_height)
     }
 
+    pub(crate) fn board_height(&self) -> f64 {
+        let rows = self.rows as f64;
+        rows * self.cell_height + (rows - 1.0) * self.cell_gap + self.board_padding * 2.0
+    }
+
+    pub(crate) fn cell_width(&self) -> f64 {
+        let columns = self.columns as f64;
+        let grid = self.right - self.left - self.board_padding * 2.0;
+        (grid - (columns - 1.0) * self.cell_gap) / columns
+    }
+
+    pub(crate) fn board_bottom(&self) -> f64 {
+        self.board_top + self.board_height()
+    }
+}
+
+impl MeterLayout {
     pub(crate) fn view_size(&self) -> NSSize {
         NSSize::new(self.view_width, self.view_height)
     }
@@ -207,23 +226,10 @@ enum AccentPaint {
     AlertRed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RingStroke {
-    CalmOrange,
-    AlertRed,
-}
-
 fn accent_paint(accent: Accent) -> AccentPaint {
     match accent {
         Accent::Neutral => AccentPaint::Label,
         Accent::Warning | Accent::Critical => AccentPaint::AlertRed,
-    }
-}
-
-fn ring_stroke_for_accent(accent: Accent) -> RingStroke {
-    match accent {
-        Accent::Neutral => RingStroke::CalmOrange,
-        Accent::Warning | Accent::Critical => RingStroke::AlertRed,
     }
 }
 
@@ -234,11 +240,30 @@ pub(crate) fn color_for_accent(accent: Accent) -> Retained<NSColor> {
     }
 }
 
-pub(crate) fn color_for_rings(accent: Accent) -> Retained<NSColor> {
-    match ring_stroke_for_accent(accent) {
-        RingStroke::CalmOrange => NSColor::systemOrangeColor(),
-        RingStroke::AlertRed => NSColor::systemRedColor(),
+/// The hue of every mark: map cells, swatches, the meter, the sparkline, and
+/// the contact strip. Gold under Neutral, red under Warning and Critical.
+///
+/// Call it while drawing. Gold is picked for the current drawing appearance,
+/// so a color resolved outside a draw keeps whichever mode was active then.
+pub(crate) fn mark_color(accent: Accent) -> Retained<NSColor> {
+    match accent_paint(accent) {
+        AccentPaint::Label => {
+            if drawing_in_dark_mode() {
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.957, 0.706, 0.243, 1.0)
+            } else {
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.718, 0.467, 0.059, 1.0)
+            }
+        }
+        AccentPaint::AlertRed => NSColor::systemRedColor(),
     }
+}
+
+fn drawing_in_dark_mode() -> bool {
+    let appearance = NSAppearance::currentDrawingAppearance();
+    let names = unsafe { NSArray::from_slice(&[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) };
+    appearance
+        .bestMatchFromAppearancesWithNames(&names)
+        .is_some_and(|name| unsafe { &*name == NSAppearanceNameDarkAqua })
 }
 
 /// `colorWithAlphaComponent` on catalog colors (especially `labelColor`)
@@ -270,90 +295,35 @@ pub(crate) fn rising_fast_badge_color(accent: Accent) -> Retained<NSColor> {
     color_for_accent_alpha(accent, 0.65)
 }
 
-#[derive(Clone)]
-pub(crate) struct ChromeColor(Retained<NSColor>);
-
-#[derive(Clone)]
-pub(crate) struct RingStrokeColor(Retained<NSColor>);
-
-impl ChromeColor {
-    pub(crate) fn resolve(accent: Accent) -> Self {
-        Self(color_for_accent(accent))
-    }
-
-    pub(crate) fn as_nscolor(&self) -> &NSColor {
-        &self.0
-    }
-}
-
-impl RingStrokeColor {
-    pub(crate) fn resolve(accent: Accent) -> Self {
-        Self(color_for_rings(accent))
-    }
-
-    pub(crate) fn as_nscolor(&self) -> &NSColor {
-        &self.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{accent_paint, ring_stroke_for_accent, AccentPaint, MenuMetrics, RingStroke};
+    use super::{accent_paint, AccentPaint, MenuMetrics};
 
     #[test]
     fn standard_metrics_line_up_the_dropdown() {
         let m = MenuMetrics::STANDARD;
         assert_eq!(m.canvas_width, 240.0);
         assert_eq!(m.content_left(), 16.0);
-        assert_eq!(m.content_right(), 224.0);
-        assert_eq!(m.value_column_x(), 224.0);
-        assert_eq!(m.row_label_origin_x(), 24.0);
+        assert_eq!(m.content_right(), 216.0);
+        assert_eq!(m.value_column_x(), 216.0);
+        assert_eq!(m.row_label_origin_x(), 16.0);
         assert_eq!(m.row_tail_tab(), 200.0);
 
         let hist = m.history_layout();
-        assert_eq!(hist.band_left, m.row_label_origin_x());
-        assert_eq!(hist.band_left, 24.0);
+        assert_eq!(hist.band_left, m.content_left());
         assert_eq!(hist.band_right, m.value_column_x());
         assert_eq!(hist.view_height, 36.0);
 
-        let rings = m.ring_layout();
-        assert_eq!(rings.stroke_width, 6.0);
-        let left_gap = rings.center(0).x - m.content_left();
-        let right_gap = m.content_right() - rings.center(1).x;
-        assert_eq!(left_gap, right_gap);
-        assert_eq!(
-            rings.center(0).x,
-            m.content_left() + m.content_width() / 4.0
-        );
-        assert_eq!(
-            rings.center(1).x,
-            m.content_left() + m.content_width() * 0.75
-        );
+        let map = m.map_layout();
+        let grid = map.cell_width() * 16.0 + map.cell_gap * 15.0 + map.board_padding * 2.0;
+        assert_eq!(grid, m.content_right() - m.content_left());
+        assert!(map.board_bottom() + map.strip_height <= map.caption_y);
+        assert!(map.caption_y + 13.0 <= map.view_height);
 
         let title = m.title_layout();
         assert_eq!(title.origin_x, m.row_label_origin_x());
         assert_eq!(title.view_height, 24.0);
         assert_eq!(title.font_size, 13.0);
-    }
-
-    #[test]
-    fn ring_stroke_is_calm_orange_under_neutral() {
-        assert_eq!(
-            ring_stroke_for_accent(crate::format::Accent::Neutral),
-            RingStroke::CalmOrange
-        );
-    }
-
-    #[test]
-    fn ring_stroke_is_alert_red_under_warning_and_critical() {
-        assert_eq!(
-            ring_stroke_for_accent(crate::format::Accent::Warning),
-            RingStroke::AlertRed
-        );
-        assert_eq!(
-            ring_stroke_for_accent(crate::format::Accent::Critical),
-            RingStroke::AlertRed
-        );
     }
 
     #[test]
