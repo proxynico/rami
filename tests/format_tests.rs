@@ -59,6 +59,7 @@ fn dropdown_model_splits_memory_and_swap_rows() {
         wired_bytes: 2 * ONE_GIB,
         compressed_bytes: ONE_GIB,
         free_bytes: 3 * ONE_GIB,
+        cached_bytes: 4 * ONE_GIB,
         swap_used_bytes: 4_724_461_226,
         available_bytes: 8_160_449_024,
     };
@@ -88,9 +89,16 @@ fn dropdown_model_splits_memory_and_swap_rows() {
     assert_eq!(memory.breakdown[2].label, "Compressed");
     assert_eq!(memory.breakdown[2].value, "1.0 GB · 6%");
     assert_eq!(memory.breakdown[2].opacity_percent, 35);
-    assert_eq!(memory.breakdown[3].label, "Free");
-    assert_eq!(memory.breakdown[3].value, "3.0 GB · 19%");
-    assert_eq!(memory.breakdown[3].opacity_percent, 12);
+    assert_eq!(memory.breakdown[3].label, "Cached");
+    assert_eq!(memory.breakdown[3].value, "4.0 GB · 25%");
+    assert_eq!(memory.breakdown[4].label, "Free");
+    assert_eq!(memory.breakdown[4].value, "3.0 GB · 19%");
+    assert_eq!(memory.breakdown[4].opacity_percent, 12);
+    assert_eq!(
+        memory.breakdown.len(),
+        5,
+        "no Other row when rows already sum to total"
+    );
     let swap = memory.swap.as_ref().expect("swap row present when nonzero");
     assert_eq!(swap.primary, "Swap");
     assert_eq!(swap.tail.as_deref(), Some("4.4 GB"));
@@ -108,6 +116,7 @@ fn dropdown_model_hides_swap_when_zero() {
         wired_bytes: ONE_GIB,
         compressed_bytes: ONE_GIB,
         free_bytes: 4 * ONE_GIB,
+        cached_bytes: 0,
         swap_used_bytes: 0,
         available_bytes: 11 * ONE_GIB,
     };

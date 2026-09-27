@@ -35,8 +35,8 @@ struct XswUsage {
 pub struct MemoryCounts {
     pub total_bytes: u64,
     pub page_size: u64,
-    pub active_pages: u64,
     pub internal_pages: u64,
+    pub external_pages: u64,
     pub wired_pages: u64,
     pub compressed_pages: u64,
     pub free_pages: u64,
@@ -50,18 +50,9 @@ pub fn snapshot_from_counts(
     swap_used_bytes: u64,
     kernel_available_percent: Option<i32>,
 ) -> MemorySnapshot {
-    // "Used" = active + wired + compressed pages from host_statistics64. This is a simple,
-    // stable definition; Activity Monitor's "Memory Used" applies extra app-memory
-    // attribution, so this figure can drift from it by a few percent.
-    let used_pages = counts
-        .active_pages
-        .saturating_add(counts.wired_pages)
-        .saturating_add(counts.compressed_pages);
-    let used_bytes = used_pages.saturating_mul(counts.page_size);
-
     // "Available" = free + inactive + purgeable: pages the system can reclaim without
-    // swapping. A rough mirror of Activity Monitor's "Memory Available"; same
-    // few-percent drift caveat as `used_bytes`.
+    // swapping. A rough mirror of Activity Monitor's "Memory Available" that can
+    // drift from it by a few percent.
     //
     // Speculative pages are NOT added here. `host_statistics64` reports
     // `free_count` as raw free pages *plus* speculative pages, so adding
@@ -83,6 +74,16 @@ pub fn snapshot_from_counts(
         .saturating_mul(counts.page_size);
     let wired_bytes = counts.wired_pages.saturating_mul(counts.page_size);
     let compressed_bytes = counts.compressed_pages.saturating_mul(counts.page_size);
+    // Activity Monitor's "Memory Used" and "Cached Files". Internal and external
+    // pages together are exactly active + inactive + speculative, so used,
+    // cached, and free partition every page the kernel reports.
+    let used_bytes = app_memory_bytes
+        .saturating_add(wired_bytes)
+        .saturating_add(compressed_bytes);
+    let cached_bytes = counts
+        .external_pages
+        .saturating_add(counts.purgeable_pages)
+        .saturating_mul(counts.page_size);
     // The Free row shows genuinely free pages, so strip the speculative pages that
     // `free_count` bundles in. Without this the row reads high against Activity
     // Monitor and `vm_stat` by the speculative count, which on a warm system is
@@ -127,6 +128,7 @@ pub fn snapshot_from_counts(
         wired_bytes,
         compressed_bytes,
         free_bytes,
+        cached_bytes,
         swap_used_bytes,
         available_bytes,
     }
@@ -273,8 +275,8 @@ impl MemorySampler {
             MemoryCounts {
                 total_bytes: self.total_bytes,
                 page_size: self.page_size,
-                active_pages: stats.active_count as u64,
                 internal_pages: stats.internal_page_count as u64,
+                external_pages: stats.external_page_count as u64,
                 wired_pages: stats.wire_count as u64,
                 compressed_pages: stats.compressor_page_count as u64,
                 free_pages: stats.free_count as u64,

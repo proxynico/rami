@@ -1,27 +1,34 @@
 use rami::memory::{snapshot_from_counts, validate_stats_count, MemoryCounts};
 use rami::model::PressureSource;
 
+/// Real counts from `vm_stat` on a 16 GB Apple Silicon Mac. Used matches
+/// Activity Monitor's "Memory Used" (App + Wired + Compressed), and used,
+/// cached, free, and other add up to physical RAM.
 #[test]
-fn snapshot_uses_active_wired_and_compressed_bytes() {
+fn snapshot_partitions_physical_memory_like_activity_monitor() {
     let counts = MemoryCounts {
-        total_bytes: 1000,
-        page_size: 10,
-        active_pages: 30,
-        internal_pages: 25,
-        wired_pages: 20,
-        compressed_pages: 10,
-        free_pages: 0,
-        inactive_pages: 0,
-        speculative_pages: 0,
-        purgeable_pages: 0,
+        total_bytes: 17_179_869_184,
+        page_size: 16_384,
+        internal_pages: 294_354,
+        external_pages: 149_444,
+        wired_pages: 139_551,
+        compressed_pages: 409_072,
+        free_pages: 4_303,
+        inactive_pages: 221_245,
+        speculative_pages: 305,
+        purgeable_pages: 8,
     };
 
     let snapshot = snapshot_from_counts(counts, 0, None);
 
-    assert_eq!(snapshot.used_bytes, 600);
-    assert_eq!(snapshot.total_bytes, 1000);
-    assert_eq!(snapshot.used_percent, 60);
-    assert_eq!(snapshot.swap_used_bytes, 0);
+    assert_eq!(snapshot.used_bytes, (294_346 + 139_551 + 409_072) * 16_384);
+    assert_eq!(snapshot.used_percent, 80);
+    assert_eq!(snapshot.cached_bytes, 149_452 * 16_384);
+    assert_eq!(snapshot.other_bytes(), 52_157 * 16_384);
+    assert_eq!(
+        snapshot.used_bytes + snapshot.cached_bytes + snapshot.free_bytes + snapshot.other_bytes(),
+        snapshot.total_bytes
+    );
 }
 
 #[test]
@@ -29,8 +36,8 @@ fn snapshot_sums_available_from_reclaimable_pools() {
     let counts = MemoryCounts {
         total_bytes: 1000,
         page_size: 10,
-        active_pages: 30,
         internal_pages: 25,
+        external_pages: 0,
         wired_pages: 20,
         compressed_pages: 10,
         free_pages: 5,
@@ -54,8 +61,8 @@ fn snapshot_rounds_to_nearest_whole_percent() {
     let counts = MemoryCounts {
         total_bytes: 1000,
         page_size: 1,
-        active_pages: 524,
         internal_pages: 524,
+        external_pages: 0,
         wired_pages: 0,
         compressed_pages: 0,
         free_pages: 0,
@@ -74,8 +81,8 @@ fn snapshot_clamps_when_used_exceeds_total() {
     let counts = MemoryCounts {
         total_bytes: 100,
         page_size: 10,
-        active_pages: 8,
         internal_pages: 8,
+        external_pages: 0,
         wired_pages: 3,
         compressed_pages: 2,
         free_pages: 0,
@@ -96,8 +103,8 @@ fn snapshot_returns_zero_percent_when_total_bytes_is_zero() {
     let counts = MemoryCounts {
         total_bytes: 0,
         page_size: 10,
-        active_pages: 8,
         internal_pages: 8,
+        external_pages: 0,
         wired_pages: 3,
         compressed_pages: 2,
         free_pages: 0,
@@ -129,8 +136,8 @@ fn snapshot_carries_swap_usage() {
     let counts = MemoryCounts {
         total_bytes: 1000,
         page_size: 10,
-        active_pages: 30,
         internal_pages: 25,
+        external_pages: 0,
         wired_pages: 20,
         compressed_pages: 10,
         free_pages: 0,
@@ -141,8 +148,8 @@ fn snapshot_carries_swap_usage() {
 
     let snapshot = snapshot_from_counts(counts, 2_000, None);
 
-    assert_eq!(snapshot.used_bytes, 600);
-    assert_eq!(snapshot.used_percent, 60);
+    assert_eq!(snapshot.used_bytes, 550);
+    assert_eq!(snapshot.used_percent, 55);
     assert_eq!(snapshot.swap_used_bytes, 2_000);
 }
 
@@ -151,8 +158,8 @@ fn snapshot_exposes_breakdown_and_kernel_pressure() {
     let counts = MemoryCounts {
         total_bytes: 1_000,
         page_size: 10,
-        active_pages: 30,
         internal_pages: 25,
+        external_pages: 0,
         wired_pages: 20,
         compressed_pages: 10,
         free_pages: 5,
@@ -190,8 +197,8 @@ fn free_row_strips_the_speculative_pages_that_free_count_bundles_in() {
     let counts = MemoryCounts {
         total_bytes: 16 * 1024 * 1024 * 1024,
         page_size: 16_384,
-        active_pages: 267_651,
         internal_pages: 200_000,
+        external_pages: 0,
         wired_pages: 100_000,
         compressed_pages: 50_000,
         free_pages: 7_368,
@@ -218,8 +225,8 @@ fn snapshot_falls_back_to_available_share_when_kernel_pressure_is_unavailable() 
     let counts = MemoryCounts {
         total_bytes: 1_000,
         page_size: 10,
-        active_pages: 30,
         internal_pages: 25,
+        external_pages: 0,
         wired_pages: 20,
         compressed_pages: 10,
         free_pages: 5,

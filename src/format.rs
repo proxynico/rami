@@ -1,5 +1,6 @@
 use crate::model::{
-    classify_pressure, CpuModuleState, GpuModuleState, MemoryPressure, SystemSnapshot,
+    classify_pressure, CpuModuleState, GpuModuleState, MemoryPressure, MemorySnapshot,
+    SystemSnapshot,
 };
 use crate::process_cpu::{ProcessCpuSnapshot, ProcessCpuUsage, PROCESS_CPU_ROW_LIMIT};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
@@ -139,7 +140,8 @@ pub struct MemoryModuleDisplay {
     pub rings: [RingDisplay; 2],
     /// Trend-window samples for the one memory-history row, oldest first.
     pub history: Vec<u64>,
-    pub breakdown: [LegendRow; 4],
+    /// Rows partition physical RAM, less any Other too small to show.
+    pub breakdown: Vec<LegendRow>,
     pub swap: Option<StatRow>,
     pub apps: AppSectionDisplay,
 }
@@ -218,24 +220,7 @@ pub(crate) fn dropdown_model_with_sections(
             },
         ],
         history: history.to_vec(),
-        breakdown: [
-            legend_row(
-                "App Memory",
-                memory.app_memory_bytes,
-                memory.total_bytes,
-                100,
-                true,
-            ),
-            legend_row("Wired", memory.wired_bytes, memory.total_bytes, 65, false),
-            legend_row(
-                "Compressed",
-                memory.compressed_bytes,
-                memory.total_bytes,
-                35,
-                false,
-            ),
-            legend_row("Free", memory.free_bytes, memory.total_bytes, 12, false),
-        ],
+        breakdown: memory_breakdown(&memory),
         swap: (memory.swap_used_bytes > 0).then(|| StatRow {
             primary: "Swap".to_string(),
             tail: Some(mem_text(memory.swap_used_bytes)),
@@ -289,6 +274,22 @@ pub(crate) fn dropdown_model_with_sections(
         modules.push(ModuleDisplay::Gpu(GpuModuleDisplay { rows }));
     }
     DropdownModel::Loaded { accent, modules }
+}
+
+fn memory_breakdown(memory: &MemorySnapshot) -> Vec<LegendRow> {
+    let total = memory.total_bytes;
+    let mut rows = vec![
+        legend_row("App Memory", memory.app_memory_bytes, total, 100, true),
+        legend_row("Wired", memory.wired_bytes, total, 65, false),
+        legend_row("Compressed", memory.compressed_bytes, total, 35, false),
+    ];
+    let other = memory.other_bytes();
+    if share_of_total(other, total) >= 1 {
+        rows.push(legend_row("Other", other, total, 20, false));
+    }
+    rows.push(legend_row("Cached", memory.cached_bytes, total, 20, false));
+    rows.push(legend_row("Free", memory.free_bytes, total, 12, false));
+    rows
 }
 
 fn cpu_process_rows(snapshot: &ProcessCpuSnapshot) -> Vec<StatRow> {
@@ -415,6 +416,7 @@ mod tests {
                 wired_bytes: total_bytes / 8,
                 compressed_bytes: total_bytes / 8,
                 free_bytes: total_bytes / 4,
+                cached_bytes: 0,
                 swap_used_bytes: 0,
                 available_bytes: total_bytes / 2,
             },

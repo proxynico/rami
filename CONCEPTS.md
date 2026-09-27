@@ -8,7 +8,8 @@ One memory gauge stays in the menu bar. The rest lives in the dropdown.
 ### Memory
 
 **Memory %**:
-Used memory as a share of total physical RAM. One of the two memory rings.
+Used memory as a share of total physical RAM. Used is App Memory + Wired +
+Compressed, Activity Monitor's "Memory Used". One of the two memory rings.
 _Avoid_: usage, load
 
 **Pressure**:
@@ -19,7 +20,7 @@ _Avoid_: computing pressure from available/total (that proxy is only a fallback)
 
 **App Memory**:
 Anonymous (application-allocated) memory, per Activity Monitor's vocabulary.
-One of the four breakdown categories.
+A breakdown category.
 _Avoid_: used, active
 
 **Wired**:
@@ -27,6 +28,14 @@ Kernel-pinned memory that can never be paged out. Breakdown category.
 
 **Compressed**:
 Memory held by the compressor. Breakdown category.
+
+**Cached**:
+File-backed and purgeable pages, Activity Monitor's "Cached Files". macOS
+reclaims them on demand. Breakdown category.
+
+**Other**:
+Physical RAM the kernel's page counts do not cover: total − used − Cached −
+Free. Breakdown category, shown only when its share rounds to at least 1%.
 
 **Free**:
 Truly free page count, as Activity Monitor reports it. Breakdown category
@@ -89,8 +98,9 @@ _Avoid_: multi-hue palettes (Activity Monitor colors)
 A circular gauge menu-item view showing one percentage (Memory %, Pressure).
 
 **Breakdown legend**:
-The four-way monochrome list (App Memory / Wired / Compressed / Free) that
-accounts for where RAM is going.
+The monochrome list (App Memory / Wired / Compressed / Other / Cached / Free)
+that partitions RAM. Its rows sum to the total, less any Other too small to
+show.
 
 **Status gauge**:
 The single menu-bar icon (SF Symbol gauge). In normal pressure it remains a

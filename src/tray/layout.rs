@@ -1,4 +1,4 @@
-use super::style::APP_ROW_POOL;
+use super::style::{APP_ROW_POOL, BREAKDOWN_ROW_POOL};
 use crate::format::{AppSectionDisplay, CpuDisplayState, DropdownModel, ModuleDisplay};
 use crate::login_item::LaunchAtLoginStatus;
 use crate::process_cpu::PROCESS_CPU_ROW_LIMIT;
@@ -30,6 +30,7 @@ pub(super) enum MenuShape {
     Uninitialized,
     Loading,
     Loaded {
+        breakdown_rows: usize,
         apps: AppShape,
         show_swap: bool,
         cpu: CpuShape,
@@ -78,6 +79,7 @@ pub(super) fn menu_shape_for(model: &DropdownModel) -> MenuShape {
                 },
             };
             MenuShape::Loaded {
+                breakdown_rows: memory.breakdown.len().min(BREAKDOWN_ROW_POOL),
                 apps: app_shape,
                 show_swap: memory.swap.is_some(),
                 cpu: modules
@@ -284,6 +286,7 @@ mod tests {
                 wired_bytes: 1_073_741_824,
                 compressed_bytes: 751_619_276,
                 free_bytes: 2_147_483_648,
+                cached_bytes: 8_912_057_139,
                 swap_used_bytes: 1_288_490_189,
                 available_bytes: 11_055_540_777,
             },
@@ -341,6 +344,11 @@ mod tests {
                     opacity_percent: 35,
                 },
                 MenuEntry::Legend {
+                    label: "Cached",
+                    value: "8.3 GB · 52%",
+                    opacity_percent: 20,
+                },
+                MenuEntry::Legend {
                     label: "Free",
                     value: "2.0 GB · 13%",
                     opacity_percent: 12,
@@ -370,10 +378,11 @@ mod tests {
         let model = dropdown_model(snapshot());
         let entries = loaded_menu_entries(&model);
         assert!(matches!(
-            &entries[..7],
+            &entries[..8],
             [
                 MenuEntry::Rings { .. },
                 MenuEntry::History { .. },
+                MenuEntry::Legend { .. },
                 MenuEntry::Legend { .. },
                 MenuEntry::Legend { .. },
                 MenuEntry::Legend { .. },
@@ -422,16 +431,16 @@ mod tests {
     fn loaded_with_apps_loading_renders_loading_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Loading);
         let entries = loaded_menu_entries(&model);
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::AppLoading);
+        assert_eq!(entries[8], MenuEntry::Separator);
+        assert_eq!(entries[9], MenuEntry::AppLoading);
     }
 
     #[test]
     fn loaded_with_apps_unavailable_renders_one_row() {
         let model = dropdown_model_with_apps(snapshot(), &AppMemorySnapshot::Unavailable);
         let entries = loaded_menu_entries(&model);
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::AppUnavailable);
+        assert_eq!(entries[8], MenuEntry::Separator);
+        assert_eq!(entries[9], MenuEntry::AppUnavailable);
     }
 
     #[test]
@@ -487,28 +496,28 @@ mod tests {
             }
         ));
         assert!(matches!(
-            entries[6],
+            entries[7],
             MenuEntry::Stat {
                 primary: "Swap",
                 ..
             }
         ));
-        assert_eq!(entries[7], MenuEntry::Separator);
+        assert_eq!(entries[8], MenuEntry::Separator);
         assert_eq!(
-            entries[8],
+            entries[9],
             MenuEntry::AppRow {
                 primary: "Cursor",
                 tail: Some("2.0 GB"),
             }
         );
         assert_eq!(
-            entries[9],
+            entries[10],
             MenuEntry::AppRow {
                 primary: "Chrome",
                 tail: Some("1.2 GB"),
             }
         );
-        assert_eq!(entries[10], MenuEntry::Separator);
+        assert_eq!(entries[11], MenuEntry::Separator);
     }
 
     #[test]
@@ -524,10 +533,10 @@ mod tests {
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model);
 
-        assert_eq!(entries[7], MenuEntry::Separator);
-        assert_eq!(entries[8], MenuEntry::ModuleTitle("CPU"));
+        assert_eq!(entries[8], MenuEntry::Separator);
+        assert_eq!(entries[9], MenuEntry::ModuleTitle("CPU"));
         assert_eq!(
-            entries[9],
+            entries[10],
             MenuEntry::Legend {
                 label: "User",
                 value: "42%",
@@ -535,7 +544,7 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[10],
+            entries[11],
             MenuEntry::Legend {
                 label: "System",
                 value: "9%",
@@ -543,7 +552,7 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[11],
+            entries[12],
             MenuEntry::Legend {
                 label: "Idle",
                 value: "49%",
@@ -551,14 +560,14 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[12],
+            entries[13],
             MenuEntry::Stat {
                 primary: "E-cores",
                 tail: Some("18%"),
             }
         );
         assert_eq!(
-            entries[13],
+            entries[14],
             MenuEntry::Stat {
                 primary: "P-cores",
                 tail: Some("74%"),
@@ -585,7 +594,7 @@ mod tests {
         let entries = loaded_menu_entries(&model);
 
         assert_eq!(
-            entries[12],
+            entries[13],
             MenuEntry::Stat {
                 primary: "Video Encoder",
                 tail: Some("240%"),
@@ -611,10 +620,10 @@ mod tests {
         let device_only_model = dropdown_model(snapshot);
         let device_only = loaded_menu_entries(&device_only_model);
 
-        assert_eq!(device_only[7], MenuEntry::Separator);
-        assert_eq!(device_only[8], MenuEntry::ModuleTitle("GPU"));
+        assert_eq!(device_only[8], MenuEntry::Separator);
+        assert_eq!(device_only[9], MenuEntry::ModuleTitle("GPU"));
         assert_eq!(
-            device_only[9],
+            device_only[10],
             MenuEntry::Legend {
                 label: "Utilization",
                 value: "76%",
@@ -638,7 +647,7 @@ mod tests {
         let entries = loaded_menu_entries(&model);
 
         assert_eq!(
-            entries[9],
+            entries[10],
             MenuEntry::Legend {
                 label: "Utilization",
                 value: "76%",
@@ -646,7 +655,7 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[10],
+            entries[11],
             MenuEntry::Legend {
                 label: "Renderer",
                 value: "54%",
@@ -654,7 +663,7 @@ mod tests {
             }
         );
         assert_eq!(
-            entries[11],
+            entries[12],
             MenuEntry::Legend {
                 label: "Tiler",
                 value: "12%",

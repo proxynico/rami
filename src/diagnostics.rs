@@ -77,6 +77,8 @@ pub(crate) fn build_diagnostic_report(input: DiagnosticReportInput<'_>) -> Strin
                 "Compressed: {}\n",
                 mem_text(snapshot.compressed_bytes)
             ));
+            out.push_str(&format!("Cached: {}\n", mem_text(snapshot.cached_bytes)));
+            out.push_str(&format!("Other: {}\n", mem_text(snapshot.other_bytes())));
             out.push_str(&format!("Free: {}\n", mem_text(snapshot.free_bytes)));
             out.push_str(&format!(
                 "Available: {}\n",
@@ -163,6 +165,7 @@ mod tests {
                 wired_bytes: 2_147_483_648,
                 compressed_bytes: 1_073_741_824,
                 free_bytes: 3_221_225_472,
+                cached_bytes: 0,
                 swap_used_bytes: 419_430_400,
                 available_bytes: 9_556_301_414,
             }),
