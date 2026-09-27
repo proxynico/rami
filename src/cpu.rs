@@ -1,20 +1,11 @@
-use crate::iokit::{
-    CFDataGetBytePtr, CFDataGetLength, CFDataGetTypeID, CFGetTypeID, CFNumberGetTypeID,
-    CFNumberGetValue, CFStringCreateWithCString, CfIndex, CfObject, IOIteratorNext,
-    IORegistryEntryCreateCFProperty, IORegistryEntryFromPath, IORegistryEntryGetChildIterator,
-    IoObject, IoObjectId, CF_STRING_ENCODING_UTF8,
-};
 use crate::model::CpuSnapshot;
 use libc::{
     host_processor_info, integer_t, mach_msg_type_number_t, natural_t, vm_address_t, vm_deallocate,
     vm_size_t, CPU_STATE_IDLE, CPU_STATE_MAX, CPU_STATE_NICE, CPU_STATE_SYSTEM, CPU_STATE_USER,
     PROCESSOR_CPU_LOAD_INFO,
 };
-use std::ffi::CStr;
 use std::io;
 use std::mem::size_of;
-
-const CF_NUMBER_SINT64_TYPE: CfIndex = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProcessorTicks {
@@ -35,71 +26,21 @@ impl ProcessorTicks {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CoreKind {
-    Efficiency,
-    Performance,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CoreTopology {
-    efficiency: Vec<usize>,
-    performance: Vec<usize>,
-    processor_count: usize,
-}
-
-impl CoreTopology {
-    fn from_logical_cpus(cores: &[(usize, CoreKind)], processor_count: usize) -> Option<Self> {
-        if processor_count == 0 || cores.len() != processor_count {
-            return None;
-        }
-        let mut kinds = vec![None; processor_count];
-        for &(logical_id, kind) in cores {
-            let slot = kinds.get_mut(logical_id)?;
-            if slot.replace(kind).is_some() {
-                return None;
-            }
-        }
-        let efficiency: Vec<_> = kinds
-            .iter()
-            .enumerate()
-            .filter_map(|(index, kind)| (*kind == Some(CoreKind::Efficiency)).then_some(index))
-            .collect();
-        let performance: Vec<_> = kinds
-            .iter()
-            .enumerate()
-            .filter_map(|(index, kind)| (*kind == Some(CoreKind::Performance)).then_some(index))
-            .collect();
-        if efficiency.is_empty() || performance.is_empty() {
-            return None;
-        }
-        Some(Self {
-            efficiency,
-            performance,
-            processor_count,
-        })
-    }
-}
-
 #[derive(Debug)]
 struct CpuTracker {
     previous: Option<Vec<ProcessorTicks>>,
-    topology: Option<CoreTopology>,
 }
 
 impl CpuTracker {
-    fn new(topology: Option<CoreTopology>) -> Self {
-        Self {
-            previous: None,
-            topology,
-        }
+    fn new() -> Self {
+        Self { previous: None }
     }
 
     fn record(&mut self, current: Vec<ProcessorTicks>) -> Option<CpuSnapshot> {
         let snapshot = self
             .previous
             .as_deref()
-            .and_then(|previous| snapshot_from_ticks(previous, &current, self.topology.as_ref()));
+            .and_then(|previous| snapshot_from_ticks(previous, &current));
         self.previous = Some(current);
         snapshot
     }
@@ -112,7 +53,6 @@ impl CpuTracker {
 pub(crate) struct CpuSampler {
     host_port: libc::mach_port_t,
     tracker: CpuTracker,
-    topology_loaded: bool,
 }
 
 impl CpuSampler {
@@ -121,20 +61,13 @@ impl CpuSampler {
         let host_port = unsafe { libc::mach_host_self() };
         Self {
             host_port,
-            tracker: CpuTracker::new(None),
-            topology_loaded: false,
+            tracker: CpuTracker::new(),
         }
     }
 
     pub(crate) fn sample(&mut self) -> io::Result<Option<CpuSnapshot>> {
         match read_processor_ticks(self.host_port) {
-            Ok(ticks) => {
-                if !self.topology_loaded {
-                    self.tracker.topology = detect_topology(ticks.len());
-                    self.topology_loaded = true;
-                }
-                Ok(self.tracker.record(ticks))
-            }
+            Ok(ticks) => Ok(self.tracker.record(ticks)),
             Err(error) => {
                 self.tracker.reset();
                 Err(error)
@@ -214,121 +147,18 @@ fn read_processor_ticks(host_port: libc::mach_port_t) -> io::Result<Vec<Processo
     copied
 }
 
-fn detect_topology(processor_count: usize) -> Option<CoreTopology> {
-    // IODeviceTree exposes the logical CPU ID and E/P cluster identity
-    // together. Perf-level counts alone cannot establish this ordering.
-    let cpus =
-        IoObject::new(unsafe { IORegistryEntryFromPath(0, c"IODeviceTree:/cpus".as_ptr()) })?;
-    let mut iterator = 0;
-    let result = unsafe {
-        IORegistryEntryGetChildIterator(cpus.id(), c"IODeviceTree".as_ptr(), &mut iterator)
-    };
-    if result != 0 {
-        return None;
-    }
-    let iterator = IoObject::new(iterator)?;
-    let mut cores = Vec::with_capacity(processor_count);
-    loop {
-        let Some(cpu) = IoObject::new(unsafe { IOIteratorNext(iterator.id()) }) else {
-            break;
-        };
-        cores.push((
-            registry_number(cpu.id(), c"logical-cpu-id")?,
-            registry_core_kind(cpu.id())?,
-        ));
-    }
-    CoreTopology::from_logical_cpus(&cores, processor_count)
-}
-
-fn registry_number(entry: IoObjectId, key: &CStr) -> Option<usize> {
-    let property = registry_property(entry, key)?;
-    if unsafe { CFGetTypeID(property.get()) } != unsafe { CFNumberGetTypeID() } {
-        return None;
-    }
-    let mut value = 0_i64;
-    let converted = unsafe {
-        CFNumberGetValue(
-            property.get(),
-            CF_NUMBER_SINT64_TYPE,
-            (&mut value as *mut i64).cast(),
-        )
-    };
-    (converted != 0)
-        .then(|| usize::try_from(value).ok())
-        .flatten()
-}
-
-fn registry_core_kind(entry: IoObjectId) -> Option<CoreKind> {
-    let property = registry_property(entry, c"cluster-type")?;
-    if unsafe { CFGetTypeID(property.get()) } != unsafe { CFDataGetTypeID() } {
-        return None;
-    }
-    let length = unsafe { CFDataGetLength(property.get()) };
-    if length <= 0 {
-        return None;
-    }
-    let bytes = unsafe { CFDataGetBytePtr(property.get()) };
-    if bytes.is_null() {
-        return None;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(bytes, length as usize) };
-    core_kind_from_bytes(bytes)
-}
-
-fn core_kind_from_bytes(bytes: &[u8]) -> Option<CoreKind> {
-    match bytes.iter().copied().find(|byte| *byte != 0)? {
-        b'E' => Some(CoreKind::Efficiency),
-        b'P' => Some(CoreKind::Performance),
-        _ => None,
-    }
-}
-
-fn registry_property(entry: IoObjectId, key: &CStr) -> Option<CfObject> {
-    let key = CfObject::new(unsafe {
-        CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), CF_STRING_ENCODING_UTF8)
-    })?;
-    CfObject::new(unsafe { IORegistryEntryCreateCFProperty(entry, key.get(), std::ptr::null(), 0) })
-}
-
 fn snapshot_from_ticks(
     previous: &[ProcessorTicks],
     current: &[ProcessorTicks],
-    topology: Option<&CoreTopology>,
 ) -> Option<CpuSnapshot> {
     if previous.len() != current.len() || current.is_empty() {
         return None;
     }
-
     let totals = tick_totals(previous, current);
-
-    let compatible_topology = topology.filter(|topology| topology.processor_count == current.len());
-    let efficiency_percent = compatible_topology
-        .and_then(|topology| utilization_for_indices(previous, current, &topology.efficiency));
-    let performance_percent = compatible_topology
-        .and_then(|topology| utilization_for_indices(previous, current, &topology.performance));
-
     Some(CpuSnapshot {
         user_percent: percent(totals.user, totals.total()),
         system_percent: percent(totals.system, totals.total()),
-        idle_percent: percent(totals.idle, totals.total()),
-        efficiency_percent,
-        performance_percent,
     })
-}
-
-fn utilization_for_indices(
-    previous: &[ProcessorTicks],
-    current: &[ProcessorTicks],
-    indices: &[usize],
-) -> Option<u8> {
-    let mut totals = TickTotals::default();
-    for &index in indices {
-        totals.add(previous.get(index)?, current.get(index)?);
-    }
-    Some(percent(
-        totals.user.saturating_add(totals.system),
-        totals.total(),
-    ))
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -387,45 +217,16 @@ mod tests {
         let previous = [ProcessorTicks::new(100, 40, 360, 0)];
         let current = [ProcessorTicks::new(175, 65, 410, 0)];
 
-        let snapshot = snapshot_from_ticks(&previous, &current, None)
+        let snapshot = snapshot_from_ticks(&previous, &current)
             .expect("matching samples should produce a snapshot");
 
         assert_eq!(snapshot.user_percent, 50);
         assert_eq!(snapshot.system_percent, 17);
-        assert_eq!(snapshot.idle_percent, 33);
-        assert_eq!(snapshot.efficiency_percent, None);
-        assert_eq!(snapshot.performance_percent, None);
-    }
-
-    #[test]
-    fn io_registry_logical_ids_drive_e_and_p_core_aggregates() {
-        let previous = [ProcessorTicks::new(0, 0, 0, 0); 4];
-        let current = [
-            ProcessorTicks::new(15, 5, 80, 0),
-            ProcessorTicks::new(15, 5, 80, 0),
-            ProcessorTicks::new(60, 20, 20, 0),
-            ProcessorTicks::new(60, 20, 20, 0),
-        ];
-        let topology = CoreTopology::from_logical_cpus(
-            &[
-                (0, CoreKind::Efficiency),
-                (1, CoreKind::Efficiency),
-                (2, CoreKind::Performance),
-                (3, CoreKind::Performance),
-            ],
-            4,
-        )
-        .expect("complete logical CPU identities should produce a topology");
-
-        let snapshot = snapshot_from_ticks(&previous, &current, Some(&topology)).unwrap();
-
-        assert_eq!(snapshot.efficiency_percent, Some(20));
-        assert_eq!(snapshot.performance_percent, Some(80));
     }
 
     #[test]
     fn tracker_requires_two_fresh_samples_after_reset() {
-        let mut tracker = CpuTracker::new(None);
+        let mut tracker = CpuTracker::new();
         let first = vec![ProcessorTicks::new(10, 10, 80, 0)];
         let second = vec![ProcessorTicks::new(20, 20, 160, 0)];
 
@@ -437,49 +238,11 @@ mod tests {
     }
 
     #[test]
-    fn unknown_duplicate_or_incomplete_core_mappings_do_not_mislabel_cores() {
-        assert_eq!(core_kind_from_bytes(b"X\0"), None);
-        assert!(CoreTopology::from_logical_cpus(
-            &[(0, CoreKind::Efficiency), (0, CoreKind::Performance)],
-            2,
-        )
-        .is_none());
-        assert!(CoreTopology::from_logical_cpus(
-            &[(0, CoreKind::Efficiency), (1, CoreKind::Performance)],
-            4,
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn topology_count_mismatch_keeps_overall_cpu_without_core_labels() {
-        let topology = CoreTopology::from_logical_cpus(
-            &[
-                (0, CoreKind::Efficiency),
-                (1, CoreKind::Efficiency),
-                (2, CoreKind::Performance),
-                (3, CoreKind::Performance),
-            ],
-            4,
-        )
-        .unwrap();
-        let previous = [ProcessorTicks::new(0, 0, 0, 0); 3];
-        let current = [ProcessorTicks::new(40, 10, 50, 0); 3];
-
-        let snapshot = snapshot_from_ticks(&previous, &current, Some(&topology)).unwrap();
-
-        assert_eq!(snapshot.user_percent, 40);
-        assert_eq!(snapshot.system_percent, 10);
-        assert_eq!(snapshot.efficiency_percent, None);
-        assert_eq!(snapshot.performance_percent, None);
-    }
-
-    #[test]
     fn wrapping_tick_counters_stay_within_percentage_bounds() {
         let previous = [ProcessorTicks::new(u32::MAX - 4, 20, 30, 0)];
         let current = [ProcessorTicks::new(5, 20, 30, 0)];
 
-        let snapshot = snapshot_from_ticks(&previous, &current, None).unwrap();
+        let snapshot = snapshot_from_ticks(&previous, &current).unwrap();
 
         assert_eq!(snapshot.user_percent, 100);
         assert!(snapshot.system_percent <= 100);
@@ -491,7 +254,6 @@ mod tests {
         let started = std::time::Instant::now();
         let mut sampler = CpuSampler::new();
         assert_eq!(sampler.sample().unwrap(), None);
-        assert!(sampler.tracker.topology.is_some());
         std::thread::sleep(std::time::Duration::from_millis(20));
         let snapshot = sampler
             .sample()
@@ -499,15 +261,10 @@ mod tests {
             .expect("second live sample should produce a delta");
         let elapsed = started.elapsed();
         eprintln!(
-            "CPU tick sample took {elapsed:?}: user {}% system {}% e-cores {:?} p-cores {:?}",
-            snapshot.user_percent,
-            snapshot.system_percent,
-            snapshot.efficiency_percent,
-            snapshot.performance_percent
+            "CPU tick sample took {elapsed:?}: user {}% system {}%",
+            snapshot.user_percent, snapshot.system_percent
         );
         assert!(snapshot.user_percent <= 100);
         assert!(snapshot.system_percent <= 100);
-        assert!(snapshot.efficiency_percent.is_some());
-        assert!(snapshot.performance_percent.is_some());
     }
 }

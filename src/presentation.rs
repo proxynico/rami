@@ -7,7 +7,6 @@ use objc2_foundation::{NSArray, NSSize};
 pub(crate) struct MenuTypeScale {
     pub(crate) map_header: f64,
     pub(crate) caption: f64,
-    pub(crate) module_title: f64,
     pub(crate) stat_row: f64,
 }
 
@@ -60,7 +59,6 @@ pub(crate) struct MenuMetrics {
     pub(crate) icon_slot: f64,
     pub(crate) type_scale: MenuTypeScale,
     history: HistoryMetrics,
-    title_height: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,14 +73,6 @@ pub(crate) struct HistoryLayout {
     pub(crate) caption_size: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct TitleLayout {
-    pub(crate) view_width: f64,
-    pub(crate) view_height: f64,
-    pub(crate) font_size: f64,
-    pub(crate) origin_x: f64,
-}
-
 impl MenuMetrics {
     pub(crate) const STANDARD: Self = Self {
         canvas_width: 240.0,
@@ -92,7 +82,6 @@ impl MenuMetrics {
         type_scale: MenuTypeScale {
             map_header: 12.0,
             caption: 10.0,
-            module_title: 13.0,
             stat_row: 13.0,
         },
         history: HistoryMetrics {
@@ -101,7 +90,6 @@ impl MenuMetrics {
             band_bottom: 14.0,
             caption_y: 1.0,
         },
-        title_height: 24.0,
     };
 
     pub(crate) fn content_left(&self) -> f64 {
@@ -166,15 +154,6 @@ impl MenuMetrics {
             caption_size: self.type_scale.caption,
         }
     }
-
-    pub(crate) fn title_layout(&self) -> TitleLayout {
-        TitleLayout {
-            view_width: self.canvas_width,
-            view_height: self.title_height,
-            font_size: self.type_scale.module_title,
-            origin_x: self.row_label_origin_x(),
-        }
-    }
 }
 
 impl MapLayout {
@@ -209,12 +188,6 @@ impl HistoryLayout {
         self.band_right - self.band_left
     }
 
-    pub(crate) fn view_size(&self) -> NSSize {
-        NSSize::new(self.view_width, self.view_height)
-    }
-}
-
-impl TitleLayout {
     pub(crate) fn view_size(&self) -> NSSize {
         NSSize::new(self.view_width, self.view_height)
     }
@@ -319,11 +292,6 @@ mod tests {
         assert_eq!(grid, m.content_right() - m.content_left());
         assert!(map.board_bottom() + map.strip_height <= map.caption_y);
         assert!(map.caption_y + 13.0 <= map.view_height);
-
-        let title = m.title_layout();
-        assert_eq!(title.origin_x, m.row_label_origin_x());
-        assert_eq!(title.view_height, 24.0);
-        assert_eq!(title.font_size, 13.0);
     }
 
     #[test]

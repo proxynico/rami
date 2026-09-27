@@ -7,9 +7,9 @@
 A restrained system monitor that lives in your Mac menu bar.
 
 One memory gauge stays in the menu bar. Click it to see Memory, CPU, and GPU
-in one compact native menu: memory pressure and breakdown, a bounded history,
-the apps using the most memory, CPU utilization and busy processes, and GPU
-utilization when macOS exposes it. A small trend marker appears when memory is
+in one compact native menu: a memory map with its breakdown and pressure, a
+bounded history, the apps using the most memory, and one-line CPU and GPU
+readings (GPU when macOS exposes it). A small trend marker appears when memory is
 climbing fast.
 
 CPU, GPU, and app rows can each be hidden. There is still one status item, no

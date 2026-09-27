@@ -76,21 +76,6 @@ fn auto_refresh_timer_tracks_the_setting() {
     );
 }
 
-#[test]
-fn cpu_process_results_require_the_current_visible_generation() {
-    assert!(should_accept_cpu_process_result(7, 7, true, true));
-    assert!(!should_accept_cpu_process_result(6, 7, true, true));
-    assert!(!should_accept_cpu_process_result(7, 7, false, true));
-    assert!(!should_accept_cpu_process_result(7, 7, true, false));
-}
-
-#[test]
-fn slow_cpu_process_scans_keep_polling_until_the_result_is_drained() {
-    assert!(should_schedule_cpu_process_drain(true, false, true));
-    assert!(!should_schedule_cpu_process_drain(true, true, false));
-    assert!(!should_schedule_cpu_process_drain(false, false, true));
-}
-
 // --- fakes -----------------------------------------------------------
 
 #[derive(Clone, Default)]
@@ -159,9 +144,6 @@ impl Samplers for FakeSamplers {
         Ok(Some(CpuSnapshot {
             user_percent: 10,
             system_percent: 5,
-            idle_percent: 85,
-            efficiency_percent: None,
-            performance_percent: None,
         }))
     }
 
@@ -183,9 +165,7 @@ impl Samplers for FakeSamplers {
 #[derive(Default)]
 struct ScanState {
     app_starts: Vec<u64>,
-    cpu_starts: Vec<u64>,
     app_results: VecDeque<AppScanResult>,
-    cpu_results: VecDeque<CpuProcessScanResult>,
 }
 
 #[derive(Clone, Default)]
@@ -200,22 +180,8 @@ impl FakeScans {
         });
     }
 
-    fn push_cpu(&self, generation: u64, rows: Vec<ProcessCpuUsage>) {
-        self.0
-            .borrow_mut()
-            .cpu_results
-            .push_back(CpuProcessScanResult {
-                generation,
-                rows: Ok(rows),
-            });
-    }
-
     fn app_starts(&self) -> Vec<u64> {
         self.0.borrow().app_starts.clone()
-    }
-
-    fn cpu_starts(&self) -> Vec<u64> {
-        self.0.borrow().cpu_starts.clone()
     }
 }
 
@@ -224,16 +190,8 @@ impl ScanRunner for FakeScans {
         self.0.borrow_mut().app_starts.push(generation);
     }
 
-    fn start_cpu_process_scan(&mut self, generation: u64) {
-        self.0.borrow_mut().cpu_starts.push(generation);
-    }
-
     fn poll_app_scan(&mut self) -> Option<AppScanResult> {
         self.0.borrow_mut().app_results.pop_front()
-    }
-
-    fn poll_cpu_process_scan(&mut self) -> Option<CpuProcessScanResult> {
-        self.0.borrow_mut().cpu_results.pop_front()
     }
 }
 
@@ -283,13 +241,6 @@ fn usage(name: &str) -> AppMemoryUsage {
         group_key: format!("/Applications/{name}.app"),
         footprint_bytes: 1,
         delta_bytes: None,
-    }
-}
-
-fn cpu_row(name: &str, utilization_percent: u16) -> ProcessCpuUsage {
-    ProcessCpuUsage {
-        name: name.to_string(),
-        utilization_percent,
     }
 }
 
@@ -367,7 +318,7 @@ fn toggling_auto_refresh_cancels_and_rearms_the_timer_once() {
 }
 
 #[test]
-fn menu_open_samples_modules_and_schedules_the_menu_drain_last() {
+fn menu_open_samples_modules_and_schedules_the_menu_drain() {
     let (mut engine, counts, scans) = engine_on();
     engine.step(Event::Startup);
 
@@ -377,12 +328,8 @@ fn menu_open_samples_modules_and_schedules_the_menu_drain_last() {
     assert_eq!(counts.cpu.get(), 1);
     assert_eq!(counts.gpu.get(), 0);
     assert_eq!(scans.app_starts(), vec![0]);
-    assert_eq!(scans.cpu_starts(), vec![0]);
     assert_eq!(menu_renders(&effects), 1);
-    // The 150 ms menu-open drain is emitted last, so it replaces the
-    // 300 ms CPU-process drain the refresh scheduled: the latest wins.
-    let drains = scheduled_drains(&effects);
-    assert_eq!(*drains.last().unwrap(), Duration::from_millis(150));
+    assert_eq!(scheduled_drains(&effects), vec![Duration::from_millis(150)]);
 }
 
 #[test]
@@ -467,6 +414,7 @@ fn reenabling_cpu_while_open_recovers_the_split_via_the_drain() {
     let (mut engine, _, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::MenuWillOpen);
+    engine.step(Event::DrainTimerFired); // the menu-open drain is spent
     engine.step(Event::Toggle(Setting::ShowCpu)); // off
 
     let effects = engine.step(Event::Toggle(Setting::ShowCpu)); // on
@@ -477,90 +425,13 @@ fn reenabling_cpu_while_open_recovers_the_split_via_the_drain() {
             ..
         })
     )));
+    assert_eq!(scheduled_drains(&effects), vec![Duration::from_millis(150)]);
 
     let effects = engine.step(Event::DrainTimerFired);
     assert!(effects.iter().any(|e| matches!(
         e,
         Effect::Render(Render::Menu {
             cpu: CpuModuleState::Available(_),
-            ..
-        })
-    )));
-}
-
-#[test]
-fn empty_cpu_process_result_is_a_complete_answer_and_does_not_retry() {
-    let (mut engine, _, scans) = engine_on();
-    engine.step(Event::Startup);
-    engine.step(Event::MenuWillOpen);
-    scans.push_cpu(0, Vec::new());
-
-    let effects = engine.step(Event::DrainTimerFired);
-
-    assert!(scheduled_drains(&effects).is_empty());
-    assert_eq!(scans.cpu_starts(), vec![0], "empty result restarted a scan");
-    // The empty answer replaces the Loading state and reaches the render.
-    assert!(effects.iter().any(|e| matches!(
-        e,
-        Effect::Render(Render::Menu { cpu_processes: ProcessCpuSnapshot::Loaded(rows), .. })
-            if rows.is_empty()
-    )));
-
-    // Further drains stay quiet; only the next real refresh tick starts
-    // a new scan, which is the normal 5 s cadence rather than a retry.
-    let effects = engine.step(Event::DrainTimerFired);
-    assert!(scheduled_drains(&effects).is_empty());
-    assert_eq!(scans.cpu_starts(), vec![0]);
-    engine.step(Event::Tick { manual: false });
-    assert_eq!(scans.cpu_starts(), vec![0, 0]);
-}
-
-#[test]
-fn populated_cpu_process_result_replaces_the_rows_in_the_render() {
-    let (mut engine, _, scans) = engine_on();
-    engine.step(Event::Startup);
-    engine.step(Event::MenuWillOpen);
-    let rows = vec![cpu_row("Editor", 12)];
-    scans.push_cpu(0, rows.clone());
-
-    let effects = engine.step(Event::DrainTimerFired);
-
-    assert!(effects.iter().any(|e| matches!(
-        e,
-        Effect::Render(Render::Menu { cpu_processes: ProcessCpuSnapshot::Loaded(got), .. })
-            if *got == rows
-    )));
-    assert!(scheduled_drains(&effects).is_empty());
-}
-
-#[test]
-fn drains_while_a_scan_is_in_flight_reschedule_the_slow_drain() {
-    let (mut engine, _, _) = engine_on();
-    engine.step(Event::Startup);
-    engine.step(Event::MenuWillOpen);
-
-    // No result yet: the drain re-arms itself at the CPU-process delay.
-    let effects = engine.step(Event::DrainTimerFired);
-    assert_eq!(scheduled_drains(&effects), vec![Duration::from_millis(300)]);
-}
-
-#[test]
-fn stale_generation_results_are_dropped() {
-    let (mut engine, _, scans) = engine_on();
-    engine.step(Event::Startup);
-    engine.step(Event::MenuWillOpen);
-
-    // Toggling CPU off and back on bumps the generation past the in-flight
-    // scan's tag; its late result must not repopulate the rows.
-    engine.step(Event::Toggle(Setting::ShowCpu));
-    engine.step(Event::Toggle(Setting::ShowCpu));
-    scans.push_cpu(0, vec![cpu_row("Editor", 12)]);
-
-    let effects = engine.step(Event::DrainTimerFired);
-    assert!(effects.iter().any(|e| matches!(
-        e,
-        Effect::Render(Render::Menu {
-            cpu_processes: ProcessCpuSnapshot::Loading,
             ..
         })
     )));

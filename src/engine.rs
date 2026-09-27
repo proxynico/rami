@@ -13,8 +13,7 @@
 //! Interface contract the shell must honor:
 //! - Effects are performed strictly in returned order.
 //! - `ScheduleDrain` replaces any pending drain timer (at most one exists;
-//!   the latest schedule wins). The engine relies on this when a composite
-//!   event emits a later drain after a refresh already scheduled one.
+//!   the latest schedule wins).
 //! - No engine borrow may be held while performing effects: `PopUpMenu`
 //!   re-enters `menuWillOpen:` synchronously, which dispatches a new event.
 //! - Port adapters must not pump the main run loop: `step` runs under the
@@ -30,7 +29,6 @@
 
 use crate::login_item::LaunchAtLoginStatus;
 use crate::model::{CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot};
-use crate::process_cpu::{ProcessCpuSnapshot, ProcessCpuUsage};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::settings::Settings;
 use crate::trend::{app_rows_with_deltas, MemoryTrend, MemoryTrendTracker};
@@ -46,7 +44,6 @@ pub(crate) const REFRESH_TICK_SECONDS: f64 = 5.0;
 const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
 const APP_DELTA_BASELINE_MAX_AGE: Duration = Duration::from_secs(90);
 const MENU_OPEN_DRAIN_DELAY: Duration = Duration::from_millis(150);
-const CPU_PROCESS_DRAIN_DELAY: Duration = Duration::from_millis(300);
 
 /// Everything the outside world can tell the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +56,8 @@ pub(crate) enum Event {
         manual: bool,
     },
     /// The one-shot drain timer fired: pick up scan results, re-render from
-    /// cache. Never samples, never advances a cadence.
+    /// cache. Samples only to warm a Loading CPU reading; never advances a
+    /// cadence.
     DrainTimerFired,
     MenuWillOpen,
     MenuDidClose,
@@ -123,7 +121,6 @@ pub(crate) enum Render {
         cpu: CpuModuleState,
         gpu: GpuModuleState,
         apps: AppMemorySnapshot,
-        cpu_processes: ProcessCpuSnapshot,
         /// The trend window for the memory-history sparkline. Recorded every
         /// real refresh regardless of menu state, so it is warm on open.
         history: Vec<u64>,
@@ -159,21 +156,14 @@ pub(crate) struct AppScanResult {
     pub(crate) rows: io::Result<Vec<AppMemoryUsage>>,
 }
 
-pub(crate) struct CpuProcessScanResult {
-    pub(crate) generation: u64,
-    pub(crate) rows: io::Result<Vec<ProcessCpuUsage>>,
-}
-
-/// Async process scans. `start_*` is fire-and-forget (the production adapter
-/// spawns a utility-QoS worker); `poll_*` is a non-blocking single-result
-/// read. The engine decides when to start and polls until empty; results stay
+/// Async app-memory scans. `start_app_scan` is fire-and-forget (the
+/// production adapter spawns a utility-QoS worker); `poll_app_scan` is a
+/// non-blocking single-result read. The engine decides when to start and polls until empty; results stay
 /// queued in the adapter until the engine asks, so a skipped refresh drops
 /// nothing.
 pub(crate) trait ScanRunner {
     fn start_app_scan(&mut self, generation: u64);
-    fn start_cpu_process_scan(&mut self, generation: u64);
     fn poll_app_scan(&mut self) -> Option<AppScanResult>;
-    fn poll_cpu_process_scan(&mut self) -> Option<CpuProcessScanResult>;
 }
 
 /// Launch-at-login service. `toggle` attempts the flip and returns the
@@ -236,39 +226,6 @@ fn should_sample_gpu(menu_open: bool, show_gpu: bool) -> bool {
     menu_open && show_gpu
 }
 
-fn should_accept_cpu_process_result(
-    result_generation: u64,
-    current_generation: u64,
-    menu_open: bool,
-    show_cpu: bool,
-) -> bool {
-    result_generation == current_generation && menu_open && show_cpu
-}
-
-fn should_schedule_cpu_process_drain(
-    show_cpu: bool,
-    result_updated: bool,
-    scan_in_flight: bool,
-) -> bool {
-    show_cpu && !result_updated && scan_in_flight
-}
-
-/// An empty row set is a complete answer, not a failed scan.
-///
-/// `ProcessCpuSampler::sample` takes its own before/after readings inside one
-/// call, so it never needs a warm-up round: "no rows" means nothing crossed the
-/// 0% threshold during its 200 ms window. Reporting that as "not updated" made
-/// `refresh` start another scan *and* schedule another drain, which re-entered
-/// this path roughly three times a second for as long as the menu stayed open —
-/// two full process-table sweeps per cycle.
-///
-/// This previously kept the last rows on screen to avoid flicker. It no longer
-/// does: rami is a monitor, and showing a busy process list for a machine that
-/// has since gone idle is worse than showing none.
-fn merge_cpu_process_rows(rows: Vec<ProcessCpuUsage>) -> (ProcessCpuSnapshot, bool) {
-    (ProcessCpuSnapshot::Loaded(rows), true)
-}
-
 pub(crate) struct RefreshEngine<S, R, L> {
     samplers: S,
     scans: R,
@@ -281,8 +238,6 @@ pub(crate) struct RefreshEngine<S, R, L> {
     ticks_until_app_refresh: u8,
     app_scan_in_flight: bool,
     app_scan_generation: u64,
-    cpu_process_scan_in_flight: bool,
-    cpu_process_scan_generation: u64,
     launch_at_login_status: LaunchAtLoginStatus,
     last_snapshot: Option<MemorySnapshot>,
     last_cpu_state: CpuModuleState,
@@ -290,7 +245,6 @@ pub(crate) struct RefreshEngine<S, R, L> {
     app_memory: AppMemorySnapshot,
     last_app_rows: Vec<AppMemoryUsage>,
     last_app_sample_at: Option<Instant>,
-    cpu_processes: ProcessCpuSnapshot,
     trend_tracker: MemoryTrendTracker,
     /// The engine's belief about the repeating refresh timer, reconciled via
     /// `auto_refresh_timer_action` so arm/cancel effects fire only on change.
@@ -317,8 +271,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             ticks_until_app_refresh: 0,
             app_scan_in_flight: false,
             app_scan_generation: 0,
-            cpu_process_scan_in_flight: false,
-            cpu_process_scan_generation: 0,
             launch_at_login_status,
             last_snapshot: None,
             last_cpu_state: CpuModuleState::Loading,
@@ -326,7 +278,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             app_memory,
             last_app_rows: Vec::new(),
             last_app_sample_at: None,
-            cpu_processes: ProcessCpuSnapshot::Hidden,
             trend_tracker: MemoryTrendTracker::new(),
             refresh_timer_armed: false,
         }
@@ -345,16 +296,11 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             Event::DrainTimerFired => self.drain_and_rerender(&mut out),
             Event::MenuWillOpen => {
                 self.menu_open = true;
-                if self.show_cpu {
-                    self.cpu_processes = ProcessCpuSnapshot::Loading;
-                }
                 // The status read is an XPC round trip; menu open is the only
                 // moment the answer is visible, so it is (re)read here rather
                 // than per tick.
                 self.launch_at_login_status = self.launch.status();
                 self.refresh(true, &mut out);
-                // Emitted after the refresh so this drain replaces any slower
-                // CPU-process drain the refresh scheduled: the latest wins.
                 out.push(Effect::ScheduleDrain {
                     delay: MENU_OPEN_DRAIN_DELAY,
                 });
@@ -363,7 +309,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 self.menu_open = false;
                 self.ticks_until_app_refresh = 0;
                 self.samplers.reset_cpu();
-                self.clear_cpu_processes();
                 // Nothing to drain into once the dropdown is gone.
                 out.push(Effect::CancelDrain);
             }
@@ -417,12 +362,14 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                     self.show_cpu,
                 )));
                 self.samplers.reset_cpu();
-                if self.show_cpu && self.menu_open {
-                    self.cpu_processes = ProcessCpuSnapshot::Loading;
-                } else {
-                    self.clear_cpu_processes();
-                }
                 self.refresh(true, out);
+                if self.show_cpu && self.menu_open {
+                    // The refresh only recorded a baseline; a drain takes
+                    // the second reading so the row leaves Loading.
+                    out.push(Effect::ScheduleDrain {
+                        delay: MENU_OPEN_DRAIN_DELAY,
+                    });
+                }
             }
             Setting::ShowGpu => {
                 self.show_gpu = !self.show_gpu;
@@ -444,7 +391,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         }
         out.push(Effect::Render(self.settings_state_render()));
         self.drain_app_scan_results();
-        let cpu_processes_updated = self.drain_cpu_process_scan_results();
         match self.samplers.sample_memory() {
             Ok(snapshot) => {
                 self.last_snapshot = Some(snapshot);
@@ -464,18 +410,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 if self.menu_open {
                     let cpu = self.sample_cpu_if_visible();
                     self.last_cpu_state = cpu;
-                    if self.show_cpu && !cpu_processes_updated {
-                        self.start_cpu_process_scan();
-                    }
-                    if should_schedule_cpu_process_drain(
-                        self.show_cpu,
-                        cpu_processes_updated,
-                        self.cpu_process_scan_in_flight,
-                    ) {
-                        out.push(Effect::ScheduleDrain {
-                            delay: CPU_PROCESS_DRAIN_DELAY,
-                        });
-                    }
                     let gpu = self.sample_gpu_if_visible();
                     self.last_gpu_state = gpu;
                     out.push(Effect::Render(self.menu_render(snapshot, cpu, gpu)));
@@ -494,7 +428,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
     /// the last real refresh sampled.
     ///
     /// This deliberately does NOT resample memory, record a trend sample, or
-    /// advance any cadence counter. It runs on a 150–300 ms one-shot timer,
+    /// advance any cadence counter. It runs on a 150 ms one-shot timer,
     /// and routing it through the full `refresh` path meant every drain aged
     /// the tick-counted cadences: the 125 s trend window collapsed to about
     /// 7 s and the 30 s app/swap cadences to under 2 s whenever the menu was
@@ -503,9 +437,9 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
     ///
     /// The one exception is the CPU host split while it reads Loading: the
     /// sample that ran on menu open (or on re-enabling Show CPU) only records
-    /// the delta baseline, so without a second reading the User/System rows
+    /// the delta baseline, so without a second reading the CPU row
     /// would sit on Loading until the next tick — indefinitely with
-    /// Auto-Refresh off. The drain's 150–300 ms delay is a valid delta
+    /// Auto-Refresh off. The drain's 150 ms delay is a valid delta
     /// window, and host CPU sampling advances no cadence, so warming it up
     /// here is safe.
     fn drain_and_rerender(&mut self, out: &mut Vec<Effect>) {
@@ -514,20 +448,9 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         }
 
         self.drain_app_scan_results();
-        let cpu_processes_updated = self.drain_cpu_process_scan_results();
 
         if matches!(self.last_cpu_state, CpuModuleState::Loading) {
             self.last_cpu_state = self.sample_cpu_if_visible();
-        }
-
-        if should_schedule_cpu_process_drain(
-            self.show_cpu,
-            cpu_processes_updated,
-            self.cpu_process_scan_in_flight,
-        ) {
-            out.push(Effect::ScheduleDrain {
-                delay: CPU_PROCESS_DRAIN_DELAY,
-            });
         }
 
         let Some(snapshot) = self.last_snapshot else {
@@ -600,15 +523,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         self.scans.start_app_scan(self.app_scan_generation);
     }
 
-    fn start_cpu_process_scan(&mut self) {
-        if self.cpu_process_scan_in_flight {
-            return;
-        }
-        self.cpu_process_scan_in_flight = true;
-        self.scans
-            .start_cpu_process_scan(self.cpu_process_scan_generation);
-    }
-
     fn drain_app_scan_results(&mut self) {
         while let Some(result) = self.scans.poll_app_scan() {
             if result.generation != self.app_scan_generation {
@@ -637,43 +551,12 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         }
     }
 
-    fn drain_cpu_process_scan_results(&mut self) -> bool {
-        let mut accepted = false;
-        while let Some(result) = self.scans.poll_cpu_process_scan() {
-            if !should_accept_cpu_process_result(
-                result.generation,
-                self.cpu_process_scan_generation,
-                self.menu_open,
-                self.show_cpu,
-            ) {
-                continue;
-            }
-            self.cpu_process_scan_in_flight = false;
-            let (next, updated) = match result.rows {
-                Ok(rows) => merge_cpu_process_rows(rows),
-                Err(error) => {
-                    eprintln!("process CPU scan failed: {error}");
-                    (ProcessCpuSnapshot::Unavailable, true)
-                }
-            };
-            accepted = updated;
-            self.cpu_processes = next;
-        }
-        accepted
-    }
-
     fn clear_app_usage(&mut self) {
         self.app_memory = AppMemorySnapshot::Hidden;
         self.last_app_rows.clear();
         self.last_app_sample_at = None;
         self.app_scan_in_flight = false;
         self.app_scan_generation = self.app_scan_generation.wrapping_add(1);
-    }
-
-    fn clear_cpu_processes(&mut self) {
-        self.cpu_processes = ProcessCpuSnapshot::Hidden;
-        self.cpu_process_scan_in_flight = false;
-        self.cpu_process_scan_generation = self.cpu_process_scan_generation.wrapping_add(1);
     }
 
     fn settings_state_render(&self) -> Render {
@@ -697,7 +580,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             cpu,
             gpu,
             apps: self.app_memory.clone(),
-            cpu_processes: self.cpu_processes.clone(),
             history: self.trend_tracker.window(),
             launch_at_login: self.launch_at_login_status,
             auto_refresh_enabled: self.auto_refresh_enabled,

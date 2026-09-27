@@ -81,7 +81,7 @@ pub(super) fn legend_row_attributed(
     accent: Accent,
     render_cache: &RowRenderCache,
 ) -> Retained<NSAttributedString> {
-    // Row hierarchy (#23): the total (App Memory, User) keeps full label
+    // Row hierarchy (#23): the total (App Memory) keeps full label
     // strength; derived breakdown rows are demoted on the opacity ramp so the
     // Accent hue survives Warning/Critical instead of flattening to gray.
     let label_color = if row.primary {

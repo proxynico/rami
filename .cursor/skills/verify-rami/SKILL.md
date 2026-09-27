@@ -67,7 +67,7 @@ Stable handles (do not invent others):
 - Memory map: AXGroup label `Memory`, value `<mem%> percent, <used> / <total> GB used, 1 cell = <size>`.
 - Pressure meter: AXGroup label `Pressure`, value `<p> percent`.
 - History view: AXGroup label `Memory history`.
-- Module headings: AXHeading `CPU`, `GPU`.
+- CPU and GPU rows: menu items whose titles start with `CPU` and `GPU`.
 - Command items by exact title: `Refresh`, `Settings`, `Quit`.
 - Settings items by exact title: `Auto-Refresh`, `Show Apps`, `Show CPU`, `Show GPU`, `Copy Diagnostics`. About is `rami <version>` and is disabled.
 

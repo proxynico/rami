@@ -18,15 +18,6 @@ unsafe extern "C" {
         matching: CfDictionaryRef,
         iterator: *mut IoObjectId,
     ) -> libc::kern_return_t;
-    pub(crate) fn IORegistryEntryFromPath(
-        main_port: libc::mach_port_t,
-        path: *const c_char,
-    ) -> IoObjectId;
-    pub(crate) fn IORegistryEntryGetChildIterator(
-        entry: IoObjectId,
-        plane: *const c_char,
-        iterator: *mut IoObjectId,
-    ) -> libc::kern_return_t;
     pub(crate) fn IORegistryEntryCreateCFProperty(
         entry: IoObjectId,
         key: CfStringRef,
@@ -56,9 +47,6 @@ unsafe extern "C" {
         number_type: CfIndex,
         value: *mut c_void,
     ) -> u8;
-    pub(crate) fn CFDataGetTypeID() -> CfTypeId;
-    pub(crate) fn CFDataGetLength(data: CfTypeRef) -> CfIndex;
-    pub(crate) fn CFDataGetBytePtr(data: CfTypeRef) -> *const u8;
     pub(crate) fn CFRelease(value: CfTypeRef);
 }
 

@@ -1,9 +1,8 @@
 use super::style::{APP_ROW_POOL, BREAKDOWN_ROW_POOL};
 #[cfg(test)]
 use crate::format::Swatch;
-use crate::format::{AppSectionDisplay, CpuDisplayState, DropdownModel, ModuleDisplay};
+use crate::format::{AppSectionDisplay, DropdownModel, ModuleDisplay};
 use crate::login_item::LaunchAtLoginStatus;
-use crate::process_cpu::PROCESS_CPU_ROW_LIMIT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AppShape {
@@ -14,20 +13,6 @@ pub(super) enum AppShape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CpuShape {
-    Hidden,
-    Loading,
-    Unavailable,
-    Available { cores: usize, processes: usize },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum GpuShape {
-    Hidden,
-    Available { rows: usize },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MenuShape {
     Uninitialized,
     Loading,
@@ -35,8 +20,8 @@ pub(super) enum MenuShape {
         breakdown_rows: usize,
         apps: AppShape,
         show_swap: bool,
-        cpu: CpuShape,
-        gpu: GpuShape,
+        show_cpu: bool,
+        show_gpu: bool,
     },
 }
 
@@ -84,29 +69,12 @@ pub(super) fn menu_shape_for(model: &DropdownModel) -> MenuShape {
                 breakdown_rows: memory.breakdown.len().min(BREAKDOWN_ROW_POOL),
                 apps: app_shape,
                 show_swap: memory.swap.is_some(),
-                cpu: modules
+                show_cpu: modules
                     .iter()
-                    .find_map(|module| match module {
-                        ModuleDisplay::Cpu(cpu) => Some(match &cpu.state {
-                            CpuDisplayState::Loading => CpuShape::Loading,
-                            CpuDisplayState::Unavailable => CpuShape::Unavailable,
-                            CpuDisplayState::Available(available) => CpuShape::Available {
-                                cores: available.cores.len().min(2),
-                                processes: available.processes.len().min(PROCESS_CPU_ROW_LIMIT),
-                            },
-                        }),
-                        ModuleDisplay::Memory(_) | ModuleDisplay::Gpu(_) => None,
-                    })
-                    .unwrap_or(CpuShape::Hidden),
-                gpu: modules
+                    .any(|module| matches!(module, ModuleDisplay::Cpu(_))),
+                show_gpu: modules
                     .iter()
-                    .find_map(|module| match module {
-                        ModuleDisplay::Gpu(gpu) => Some(GpuShape::Available {
-                            rows: gpu.rows.len().min(3),
-                        }),
-                        ModuleDisplay::Memory(_) | ModuleDisplay::Cpu(_) => None,
-                    })
-                    .unwrap_or(GpuShape::Hidden),
+                    .any(|module| matches!(module, ModuleDisplay::Gpu(_))),
             }
         }
     }
@@ -115,7 +83,6 @@ pub(super) fn menu_shape_for(model: &DropdownModel) -> MenuShape {
 #[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 enum MenuEntry<'a> {
-    ModuleTitle(&'a str),
     Map {
         used_percent: u8,
         cells: usize,
@@ -138,8 +105,6 @@ enum MenuEntry<'a> {
     Loading,
     AppLoading,
     AppUnavailable,
-    CpuLoading,
-    CpuUnavailable,
     AppRow {
         primary: &'a str,
         tail: Option<&'a str>,
@@ -208,50 +173,21 @@ fn loaded_menu_entries(model: &DropdownModel) -> Vec<MenuEntry<'_>> {
                     }
                 }
             }
-            for module in modules.iter().skip(1) {
-                match module {
-                    ModuleDisplay::Memory(_) => {}
-                    ModuleDisplay::Cpu(cpu) => {
-                        entries.push(MenuEntry::Separator);
-                        entries.push(MenuEntry::ModuleTitle("CPU"));
-                        match &cpu.state {
-                            CpuDisplayState::Loading => entries.push(MenuEntry::CpuLoading),
-                            CpuDisplayState::Unavailable => entries.push(MenuEntry::CpuUnavailable),
-                            CpuDisplayState::Available(available) => {
-                                for row in &available.utilization {
-                                    entries.push(MenuEntry::Legend {
-                                        label: &row.label,
-                                        value: &row.value,
-                                        swatch: row.swatch,
-                                    });
-                                }
-                                for row in &available.cores {
-                                    entries.push(MenuEntry::Stat {
-                                        primary: &row.primary,
-                                        tail: row.tail.as_deref(),
-                                    });
-                                }
-                                for row in &available.processes {
-                                    entries.push(MenuEntry::Stat {
-                                        primary: &row.primary,
-                                        tail: row.tail.as_deref(),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    ModuleDisplay::Gpu(gpu) => {
-                        entries.push(MenuEntry::Separator);
-                        entries.push(MenuEntry::ModuleTitle("GPU"));
-                        for row in &gpu.rows {
-                            entries.push(MenuEntry::Legend {
-                                label: &row.label,
-                                value: &row.value,
-                                swatch: row.swatch,
-                            });
-                        }
-                    }
-                }
+            let compact: Vec<_> = modules
+                .iter()
+                .filter_map(|module| match module {
+                    ModuleDisplay::Memory(_) => None,
+                    ModuleDisplay::Cpu(row) | ModuleDisplay::Gpu(row) => Some(row),
+                })
+                .collect();
+            if !compact.is_empty() {
+                entries.push(MenuEntry::Separator);
+            }
+            for row in compact {
+                entries.push(MenuEntry::Stat {
+                    primary: &row.primary,
+                    tail: row.tail.as_deref(),
+                });
             }
         }
     }
@@ -271,15 +207,13 @@ fn loaded_menu_entries(model: &DropdownModel) -> Vec<MenuEntry<'_>> {
 mod tests {
     use super::{loaded_menu_entries, settings_menu_projection, MenuEntry, SettingsMenuProjection};
     use crate::format::{
-        dropdown_model, dropdown_model_with_apps, dropdown_model_with_sections,
-        placeholder_dropdown_model, Swatch,
+        dropdown_model, dropdown_model_with_apps, placeholder_dropdown_model, Swatch,
     };
     use crate::login_item::LaunchAtLoginStatus;
     use crate::model::{
         CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot, PressureSource,
         SystemSnapshot,
     };
-    use crate::process_cpu::{ProcessCpuSnapshot, ProcessCpuUsage};
     use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 
     fn snapshot() -> SystemSnapshot {
@@ -531,154 +465,36 @@ mod tests {
     }
 
     #[test]
-    fn loaded_cpu_module_follows_memory_with_shared_legend_and_core_rows() {
+    fn cpu_and_gpu_rows_share_one_separator_after_the_memory_section() {
         let mut snapshot = snapshot();
         snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
-            user_percent: 42,
-            system_percent: 9,
-            idle_percent: 49,
-            efficiency_percent: Some(18),
-            performance_percent: Some(74),
+            user_percent: 12,
+            system_percent: 6,
         });
-        let model = dropdown_model(snapshot);
-        let entries = loaded_menu_entries(&model);
-
-        assert_eq!(entries[9], MenuEntry::Separator);
-        assert_eq!(entries[10], MenuEntry::ModuleTitle("CPU"));
-        assert_eq!(
-            entries[11],
-            MenuEntry::Legend {
-                label: "User",
-                value: "42%",
-                swatch: Swatch::Accent(100),
-            }
-        );
-        assert_eq!(
-            entries[12],
-            MenuEntry::Legend {
-                label: "System",
-                value: "9%",
-                swatch: Swatch::Accent(50),
-            }
-        );
-        assert_eq!(
-            entries[13],
-            MenuEntry::Legend {
-                label: "Idle",
-                value: "49%",
-                swatch: Swatch::Accent(12),
-            }
-        );
-        assert_eq!(
-            entries[14],
-            MenuEntry::Stat {
-                primary: "E-cores",
-                tail: Some("18%"),
-            }
-        );
-        assert_eq!(
-            entries[15],
-            MenuEntry::Stat {
-                primary: "P-cores",
-                tail: Some("74%"),
-            }
-        );
-    }
-
-    #[test]
-    fn loaded_cpu_process_rows_follow_the_cpu_overview_without_app_actions() {
-        let mut snapshot = snapshot();
-        snapshot.cpu = CpuModuleState::Available(CpuSnapshot {
-            user_percent: 42,
-            system_percent: 9,
-            idle_percent: 49,
-            efficiency_percent: None,
-            performance_percent: None,
-        });
-        let processes = ProcessCpuSnapshot::Loaded(vec![ProcessCpuUsage {
-            name: "Video Encoder".to_string(),
-            utilization_percent: 240,
-        }]);
-        let model =
-            dropdown_model_with_sections(snapshot, &AppMemorySnapshot::Hidden, &processes, &[]);
-        let entries = loaded_menu_entries(&model);
-
-        assert_eq!(
-            entries[14],
-            MenuEntry::Stat {
-                primary: "Video Encoder",
-                tail: Some("240%"),
-            }
-        );
-        assert!(!entries.iter().any(|entry| matches!(
-            entry,
-            MenuEntry::AppRow {
-                primary: "Video Encoder",
-                ..
-            }
-        )));
-    }
-
-    #[test]
-    fn loaded_gpu_module_follows_existing_modules_with_legend_rows() {
-        let mut snapshot = snapshot();
         snapshot.gpu = GpuModuleState::Available(GpuSnapshot {
-            utilization_percent: 76,
-            renderer_percent: None,
+            utilization_percent: 4,
+            renderer_percent: Some(3),
             tiler_percent: None,
         });
-        let device_only_model = dropdown_model(snapshot);
-        let device_only = loaded_menu_entries(&device_only_model);
-
-        assert_eq!(device_only[9], MenuEntry::Separator);
-        assert_eq!(device_only[10], MenuEntry::ModuleTitle("GPU"));
-        assert_eq!(
-            device_only[11],
-            MenuEntry::Legend {
-                label: "Utilization",
-                value: "76%",
-                swatch: Swatch::Accent(100),
-            }
-        );
-        assert!(!device_only.iter().any(|entry| matches!(
-            entry,
-            MenuEntry::Legend {
-                label: "Renderer" | "Tiler",
-                ..
-            }
-        )));
-
-        snapshot.gpu = GpuModuleState::Available(GpuSnapshot {
-            utilization_percent: 76,
-            renderer_percent: Some(54),
-            tiler_percent: Some(12),
-        });
         let model = dropdown_model(snapshot);
         let entries = loaded_menu_entries(&model);
 
+        assert!(matches!(entries[8], MenuEntry::History { .. }));
+        assert_eq!(entries[9], MenuEntry::Separator);
+        assert_eq!(
+            entries[10],
+            MenuEntry::Stat {
+                primary: "CPU",
+                tail: Some("12 usr · 6 sys\t18%"),
+            }
+        );
         assert_eq!(
             entries[11],
-            MenuEntry::Legend {
-                label: "Utilization",
-                value: "76%",
-                swatch: Swatch::Accent(100),
+            MenuEntry::Stat {
+                primary: "GPU",
+                tail: Some("render 3\t4%"),
             }
         );
-        assert_eq!(
-            entries[12],
-            MenuEntry::Legend {
-                label: "Renderer",
-                value: "54%",
-                swatch: Swatch::Accent(65),
-            }
-        );
-        assert_eq!(
-            entries[13],
-            MenuEntry::Legend {
-                label: "Tiler",
-                value: "12%",
-                swatch: Swatch::Accent(35),
-            }
-        );
+        assert_eq!(entries[12], MenuEntry::Separator);
     }
 }

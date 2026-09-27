@@ -14,10 +14,8 @@ use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_map_view::MemoryMapView;
 use crate::model::MemoryPressure;
-use crate::module_title_view::ModuleTitleView;
 use crate::presentation::MenuMetrics;
 use crate::pressure_view::PressureView;
-use crate::process_cpu::PROCESS_CPU_ROW_LIMIT;
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
@@ -106,28 +104,8 @@ pub(super) fn build_controller(
     app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title(&row_render_cache)));
     let app_items: Vec<Retained<NSMenuItem>> =
         (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
-    let cpu_title_item = make_stat_item(mtm);
-    let cpu_title_view = ModuleTitleView::new(mtm, metrics, "CPU");
-    unsafe {
-        let _: () = msg_send![&cpu_title_item, setView: &*cpu_title_view];
-    }
-    let cpu_loading_item = make_stat_item(mtm);
-    cpu_loading_item.setImage(Some(&placeholder_icon));
-    cpu_loading_item.setAttributedTitle(Some(&loading_attributed_title(&row_render_cache)));
-    let cpu_unavailable_item = make_stat_item(mtm);
-    cpu_unavailable_item.setImage(Some(&placeholder_icon));
-    cpu_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title(&row_render_cache)));
-    let cpu_legend_items = (0..3).map(|_| make_stat_item(mtm)).collect();
-    let cpu_core_items = (0..2).map(|_| make_stat_item(mtm)).collect();
-    let cpu_process_items = (0..PROCESS_CPU_ROW_LIMIT)
-        .map(|_| make_stat_item(mtm))
-        .collect();
-    let gpu_title_item = make_stat_item(mtm);
-    let gpu_title_view = ModuleTitleView::new(mtm, metrics, "GPU");
-    unsafe {
-        let _: () = msg_send![&gpu_title_item, setView: &*gpu_title_view];
-    }
-    let gpu_legend_items = (0..3).map(|_| make_stat_item(mtm)).collect();
+    let cpu_item = make_stat_item(mtm);
+    let gpu_item = make_stat_item(mtm);
 
     let refresh_item = make_command_item(
         mtm,
@@ -247,14 +225,8 @@ pub(super) fn build_controller(
         app_loading_item,
         app_unavailable_item,
         app_items,
-        cpu_title_item,
-        cpu_loading_item,
-        cpu_unavailable_item,
-        cpu_legend_items,
-        cpu_core_items,
-        cpu_process_items,
-        gpu_title_item,
-        gpu_legend_items,
+        cpu_item,
+        gpu_item,
         refresh_item,
         auto_refresh_item,
         show_app_usage_item,
@@ -280,8 +252,8 @@ pub(super) fn build_controller(
         last_accent: Cell::new(Accent::Neutral),
         last_swap_row: RefCell::new(None),
         last_app_section: RefCell::new(None),
-        last_cpu_state: RefCell::new(None),
-        last_gpu: RefCell::new(None),
+        last_cpu_row: RefCell::new(None),
+        last_gpu_row: RefCell::new(None),
         last_auto_refresh_enabled: Cell::new(true),
         last_tooltip: RefCell::new(String::new()),
         last_launch_title: RefCell::new(String::new()),
