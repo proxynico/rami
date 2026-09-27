@@ -81,7 +81,7 @@ pub struct TrayController {
     shape: Cell<MenuShape>,
     last_rings: RefCell<Option<[RingDisplay; 2]>>,
     last_history: RefCell<Option<Vec<u64>>>,
-    last_breakdown: RefCell<Option<[LegendRow; 4]>>,
+    last_breakdown: RefCell<Option<Vec<LegendRow>>>,
     last_accent: Cell<Accent>,
     last_swap_row: RefCell<Option<StatRow>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
@@ -461,6 +461,7 @@ impl TrayController {
                 self.menu.addItem(&self.loading_item);
             }
             MenuShape::Loaded {
+                breakdown_rows,
                 apps,
                 show_swap,
                 cpu,
@@ -470,7 +471,7 @@ impl TrayController {
                 // One memory-history row sits inside the Memory module, under
                 // the rings and above the legend.
                 self.menu.addItem(&self.history_item);
-                for item in &self.legend_items {
+                for item in self.legend_items.iter().take(breakdown_rows) {
                     self.menu.addItem(item);
                 }
                 if show_swap {

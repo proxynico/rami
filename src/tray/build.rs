@@ -7,7 +7,7 @@ use super::render::{
     loading_attributed_title, make_action_icon, make_placeholder_icon, make_stat_item,
     set_row_icon, unavailable_attributed_title, RowRenderCache,
 };
-use super::style::APP_ROW_POOL;
+use super::style::{APP_ROW_POOL, BREAKDOWN_ROW_POOL};
 use super::TrayController;
 use crate::format::{placeholder_dropdown_model, Accent};
 use crate::history_view::MemoryHistoryView;
@@ -84,7 +84,9 @@ pub(super) fn build_controller(
     unsafe {
         let _: () = msg_send![&history_item, setView: &*history_view];
     }
-    let legend_items = (0..4).map(|_| make_stat_item(mtm)).collect();
+    let legend_items = (0..BREAKDOWN_ROW_POOL)
+        .map(|_| make_stat_item(mtm))
+        .collect();
     let swap_item = make_stat_item(mtm);
     set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
     let loading_item = make_stat_item(mtm);

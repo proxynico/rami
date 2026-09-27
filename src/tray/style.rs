@@ -11,6 +11,8 @@ use objc2_foundation::{NSArray, NSDictionary};
 pub(super) use crate::presentation::{color_for_accent, color_for_accent_alpha};
 
 pub(super) const APP_ROW_POOL: usize = 3;
+/// App Memory, Wired, Compressed, Other, Cached, Free.
+pub(super) const BREAKDOWN_ROW_POOL: usize = 6;
 pub(super) const ROW_ICON_SIZE: f64 = MenuMetrics::STANDARD.icon_slot;
 
 /// Label alpha for demoted rows (#23): derived breakdowns render at this

@@ -271,6 +271,7 @@ fn snapshot(used_bytes: u64) -> MemorySnapshot {
         wired_bytes: 0,
         compressed_bytes: 0,
         free_bytes: 0,
+        cached_bytes: 0,
         swap_used_bytes: 0,
         available_bytes: 0,
     }
