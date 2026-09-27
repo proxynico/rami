@@ -2,7 +2,7 @@
 //! order, a contact strip, and the cell size. Used cells are solid, Cached is
 //! hatched, Free is empty.
 
-use crate::draw::{draw_text, draw_text_right, fill_swatch};
+use crate::draw::{draw_text, draw_text_right, fill_swatch, text_width};
 use crate::format::{Accent, MemoryMapDisplay};
 use crate::presentation::{mark_color, MenuMetrics};
 use objc2::rc::Retained;
@@ -18,6 +18,8 @@ use std::cell::RefCell;
 const NOTCH_AT: f64 = 0.4;
 const NOTCH_WIDTH: f64 = 6.0;
 const STRIP_INSET: f64 = 10.0;
+const HEADER_GAP: f64 = 8.0;
+const MIN_FIGURE_SIZE: f64 = 10.0;
 
 struct MapState {
     map: Option<MemoryMapDisplay>,
@@ -94,11 +96,14 @@ impl MemoryMapView {
         let layout = self.ivars().metrics.map_layout();
         let scale = self.ivars().metrics.type_scale;
 
-        let title_font = NSFont::systemFontOfSize_weight(13.0, unsafe { NSFontWeightSemibold });
-        let figure_font =
-            NSFont::monospacedDigitSystemFontOfSize_weight(scale.map_header, unsafe {
-                NSFontWeightRegular
-            });
+        let title_font =
+            NSFont::systemFontOfSize_weight(scale.map_title, unsafe { NSFontWeightSemibold });
+        let figures = format!("{} · {}%", map.used_of_total, map.used_percent);
+        let figure_font = header_figure_font(
+            &figures,
+            scale.map_header,
+            layout.right - layout.left - text_width("Memory", &title_font) - HEADER_GAP,
+        );
         draw_text(
             "Memory",
             layout.left,
@@ -107,7 +112,7 @@ impl MemoryMapView {
             &NSColor::labelColor(),
         );
         draw_text_right(
-            &format!("{} · {}%", map.used_of_total, map.used_percent),
+            &figures,
             layout.right,
             layout.header_y + 1.0,
             &figure_font,
@@ -182,5 +187,36 @@ impl MemoryMapView {
             &caption_font,
             &caption_color,
         );
+    }
+}
+
+/// The header figures at their full size, or smaller when a large machine's
+/// reading (e.g. "123.4 / 128.0 GB · 100%") would run into the title.
+fn header_figure_font(figures: &str, size: f64, available: f64) -> Retained<NSFont> {
+    let font =
+        |size| NSFont::monospacedDigitSystemFontOfSize_weight(size, unsafe { NSFontWeightRegular });
+    let mut size = size;
+    while size > MIN_FIGURE_SIZE && text_width(figures, &font(size)) > available {
+        size -= 1.0;
+    }
+    font(size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_figures_shrink_only_when_they_would_hit_the_title() {
+        let title = NSFont::systemFontOfSize_weight(15.0, unsafe { NSFontWeightSemibold });
+        let available = 200.0 - text_width("Memory", &title) - HEADER_GAP;
+
+        let usual = header_figure_font("13.0 / 16.0 GB · 81%", 13.0, available);
+        assert_eq!(usual.pointSize(), 13.0);
+
+        let wide = "123.4 / 128.0 GB · 100%";
+        let shrunk = header_figure_font(wide, 13.0, available);
+        assert!(shrunk.pointSize() < 13.0);
+        assert!(text_width(wide, &shrunk) <= available);
     }
 }
