@@ -90,7 +90,7 @@ impl LaunchAtLoginController {
     }
 
     pub fn status(&self) -> LaunchAtLoginStatus {
-        self.service.status().into()
+        status_for(self.service.status(), current_app_bundle_path().is_some())
     }
 
     pub fn toggle(&self) -> Result<LaunchAtLoginStatus, Retained<NSError>> {
@@ -102,6 +102,20 @@ impl LaunchAtLoginController {
             LaunchAtLoginStatus::Unavailable => return Ok(self.status()),
         }
         Ok(self.status())
+    }
+}
+
+/// SMAppService's `notFound`, which macOS reports for a bundled app that has
+/// never registered.
+const NOT_FOUND: NSInteger = 3;
+
+/// Inside an app bundle, `notFound` still permits a registration attempt, so
+/// it reads as off rather than unavailable.
+fn status_for(raw: NSInteger, in_app_bundle: bool) -> LaunchAtLoginStatus {
+    if raw == NOT_FOUND && in_app_bundle {
+        LaunchAtLoginStatus::Disabled
+    } else {
+        raw.into()
     }
 }
 
@@ -131,6 +145,16 @@ mod tests {
     #[test]
     fn unavailable_status_disables_the_menu_item() {
         assert!(!LaunchAtLoginStatus::Unavailable.should_enable_menu_item());
+    }
+
+    #[test]
+    fn not_found_is_toggleable_inside_an_app_bundle() {
+        assert_eq!(status_for(NOT_FOUND, true), LaunchAtLoginStatus::Disabled);
+        assert_eq!(
+            status_for(NOT_FOUND, false),
+            LaunchAtLoginStatus::Unavailable
+        );
+        assert_eq!(status_for(1, true), LaunchAtLoginStatus::Enabled);
     }
 
     #[test]
