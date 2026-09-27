@@ -241,7 +241,7 @@ pub(super) fn build_controller(
         quit_item,
         pause_icon,
         play_icon,
-        last_image_name: RefCell::new(None),
+        last_gauge_percent: Cell::new(None),
         last_trend: Cell::new(MemoryTrend::Stable),
         last_pressure: Cell::new(MemoryPressure::Normal),
         shape: Cell::new(MenuShape::Uninitialized),

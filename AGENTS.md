@@ -38,7 +38,8 @@ terminated PIDs, the new binary mtime, and the relaunch.
 
 ### One status item
 
-There is exactly one `NSStatusItem`. Its icon is the memory gauge. The
+There is exactly one `NSStatusItem`. Its icon is the memory stick: four
+chips that fill left to right with Memory %, drawn in `status_icon.rs`. The
 dropdown is an `NSMenu` with custom menu-item views, not an `NSPopover`.
 
 CPU and GPU are one row each after the Memory section. The CPU row
@@ -89,8 +90,9 @@ accent chrome, including row labels, system red. Other and Free stay
 neutral gray in every state. The user's macOS accent color is ignored.
 
 The normal status gauge stays an untinted template image so macOS
-picks black or white for the menu bar. Warning and Critical tint the
-gauge red. Severity between those two states is numeric (pressure
+picks black or white for the menu bar. Warning and Critical draw the
+gauge in red; the button's content tint does not recolor a template image
+in the menu bar. Severity between those two states is numeric (pressure
 meter %, tooltip, VoiceOver), not a second hue. RisingFast is
 trend-driven at any pressure. When memory climbs fast, the icon adds
 an upward badge in `status_icon.rs`.

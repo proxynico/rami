@@ -106,9 +106,10 @@ that partitions RAM. Its rows sum to the total, less any Other too small to
 show.
 
 **Status gauge**:
-The single menu-bar icon (SF Symbol gauge). In normal pressure it remains a
-template image so macOS renders it black or white for the current menu bar;
-Warning and Critical pressure tint it red; severity between them is carried
+The single menu-bar icon: a RAM stick whose four chips fill left to right
+with Memory %, over four legs. In normal pressure it remains a template image
+so macOS renders it black or white for the current menu bar; Warning and
+Critical pressure draw it red; severity between them is carried
 numerically (pressure meter %, tooltip, VoiceOver), not by hue. RisingFast is
 trend-driven at any pressure. When memory is climbing fast, the icon adds an
 upward badge composite. There is exactly one status item regardless of how
