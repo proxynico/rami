@@ -67,8 +67,10 @@ It renders in the mark color at 12% fill, 65% line, and a 100%
 now-dot. There is no second graph, no per-module history, and no
 submenu or hover reveal.
 
-Memory is the visual anchor. Settings is an arrowless command that
-opens a compact submenu. Refresh and Quit show no key equivalents.
+Memory is the visual anchor. Settings is a standard submenu: hovering
+it shows the settings beside the dropdown, which stays open. Nico
+replaced the arrowless command on 2026-09-27 because it closed the
+dropdown and left only the settings. Refresh and Quit show no key equivalents.
 
 Rejected alternatives were multiple status items, an `NSPopover` panel,
 and two equal rings for Memory % and Pressure. Nico replaced the rings

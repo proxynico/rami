@@ -395,16 +395,6 @@ define_class!(
             open_releases_page();
         }
 
-        #[unsafe(method(openSettings:))]
-        fn open_settings(&self, _sender: &AnyObject) {
-            with_app_state(|state| state.schedule_one_shot(sel!(openSettingsMenu:)));
-        }
-
-        #[unsafe(method(openSettingsMenu:))]
-        fn open_settings_menu(&self, _sender: &AnyObject) {
-            with_app_state(|state| state.tray.pop_up_settings_menu());
-        }
-
         #[unsafe(method(reopenMenu:))]
         fn reopen_menu(&self, _sender: &AnyObject) {
             dispatch_event(Event::ReopenMenuTimerFired);

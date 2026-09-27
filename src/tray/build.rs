@@ -194,13 +194,8 @@ pub(super) fn build_controller(
     settings_menu.addItem(&check_updates_item);
     settings_menu.addItem(&about_item);
 
-    let settings_item = make_command_item(
-        mtm,
-        "Settings",
-        Some(sel!(openSettings:)),
-        target,
-        Some("gearshape"),
-    );
+    let settings_item = make_command_item(mtm, "Settings", None, None, Some("gearshape"));
+    settings_item.setSubmenu(Some(&settings_menu));
 
     let quit_item = make_command_item(mtm, "Quit", Some(sel!(terminate:)), None, None);
 
@@ -237,7 +232,6 @@ pub(super) fn build_controller(
         _about_item: about_item,
         _check_updates_item: check_updates_item,
         settings_item,
-        settings_menu,
         quit_item,
         pause_icon,
         play_icon,
