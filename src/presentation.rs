@@ -54,10 +54,7 @@ struct HistoryMetrics {
 pub(crate) struct MenuMetrics {
     pub(crate) canvas_width: f64,
     pub(crate) content_inset: f64,
-    /// Menu rows end their text here short of the canvas edge, leaving room
-    /// NSMenu keeps for submenu arrows.
-    pub(crate) trailing_inset: f64,
-    pub(crate) icon_slot: f64,
+    pub(crate) row_height: f64,
     pub(crate) type_scale: MenuTypeScale,
     history: HistoryMetrics,
 }
@@ -78,8 +75,7 @@ impl MenuMetrics {
     pub(crate) const STANDARD: Self = Self {
         canvas_width: 240.0,
         content_inset: 16.0,
-        trailing_inset: 24.0,
-        icon_slot: 16.0,
+        row_height: 24.0,
         type_scale: MenuTypeScale {
             map_title: 15.0,
             map_header: 13.0,
@@ -99,19 +95,7 @@ impl MenuMetrics {
     }
 
     pub(crate) fn content_right(&self) -> f64 {
-        self.canvas_width - self.trailing_inset
-    }
-
-    pub(crate) fn value_column_x(&self) -> f64 {
-        self.content_right()
-    }
-
-    pub(crate) fn row_label_origin_x(&self) -> f64 {
-        self.content_left()
-    }
-
-    pub(crate) fn row_tail_tab(&self) -> f64 {
-        self.value_column_x() - self.row_label_origin_x()
+        self.canvas_width - self.content_inset
     }
 
     pub(crate) fn map_layout(&self) -> MapLayout {
@@ -272,21 +256,113 @@ pub(crate) fn rising_fast_badge_color(accent: Accent) -> Retained<NSColor> {
 
 #[cfg(test)]
 mod tests {
-    use super::{accent_paint, AccentPaint, MenuMetrics};
+    use super::{accent_paint, color_for_accent_alpha, AccentPaint, MenuMetrics};
+    use crate::format::Accent;
+    use block2::RcBlock;
+    use objc2::rc::Retained;
+    use objc2::{AnyThread, Message};
+    use objc2_app_kit::{
+        NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath,
+        NSBitmapImageRep, NSColor, NSDeviceRGBColorSpace, NSGraphicsContext,
+    };
+    use objc2_foundation::{NSInteger, NSPoint, NSRect, NSSize};
+    use std::cell::RefCell;
+
+    fn appearance(name: &objc2_foundation::NSString) -> Retained<NSAppearance> {
+        NSAppearance::appearanceNamed(name).expect("named appearance")
+    }
+
+    fn sample_fill(color: &NSColor, drawing_appearance: &NSAppearance) -> (f64, f64, f64, f64) {
+        let rep = unsafe {
+            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+                NSBitmapImageRep::alloc(),
+                std::ptr::null_mut(),
+                4,
+                4,
+                8,
+                4,
+                true,
+                false,
+                NSDeviceRGBColorSpace,
+                0,
+                0,
+            )
+        }
+        .expect("bitmap");
+        NSGraphicsContext::saveGraphicsState_class();
+        let ctx =
+            NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep).expect("graphics context");
+        NSGraphicsContext::setCurrentContext(Some(&ctx));
+        let color = color.retain();
+        let draw = RcBlock::new(move || {
+            color.setFill();
+            let bounds = NSRect::new(NSPoint::ZERO, NSSize::new(4.0, 4.0));
+            NSBezierPath::bezierPathWithRect(bounds).fill();
+        });
+        drawing_appearance.performAsCurrentDrawingAppearance(&draw);
+        NSGraphicsContext::restoreGraphicsState_class();
+        let sampled = rep
+            .colorAtX_y(1 as NSInteger, 1 as NSInteger)
+            .expect("pixel");
+        let mut r = 0.0;
+        let mut g = 0.0;
+        let mut b = 0.0;
+        let mut a = 0.0;
+        unsafe {
+            sampled.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
+        }
+        (r, g, b, a)
+    }
+
+    #[test]
+    fn accent_alpha_created_in_dark_mode_stays_readable_in_light_menus() {
+        // colorWithAlphaComponent on labelColor freezes the creation appearance
+        // (white from dark stays white in light). color_for_accent_alpha must
+        // keep Neutral adaptive so row text stays readable.
+
+        let light = appearance(unsafe { NSAppearanceNameAqua });
+        let dark = appearance(unsafe { NSAppearanceNameDarkAqua });
+
+        let built = RefCell::new(None);
+        {
+            let build = RcBlock::new(|| {
+                *built.borrow_mut() = Some(color_for_accent_alpha(Accent::Neutral, 1.0));
+            });
+            dark.performAsCurrentDrawingAppearance(&build);
+        }
+        let color = built.into_inner().expect("color");
+
+        let (r, g, b, _) = sample_fill(&color, &light);
+        assert!(
+            r < 0.5 && g < 0.5 && b < 0.5,
+            "Neutral accent built in dark must draw dark-on-light, got rgba({r:.2},{g:.2},{b:.2})"
+        );
+
+        let demoted = RefCell::new(None);
+        {
+            let build = RcBlock::new(|| {
+                *demoted.borrow_mut() = Some(color_for_accent_alpha(Accent::Neutral, 0.55));
+            });
+            dark.performAsCurrentDrawingAppearance(&build);
+        }
+        let demoted = demoted.into_inner().expect("demoted color");
+        let (r, g, b, a) = sample_fill(&demoted, &light);
+        assert!(
+            a > 0.2 && r < 0.6 && g < 0.6 && b < 0.6,
+            "demoted Neutral built in dark must stay dark-on-light, got rgba({r:.2},{g:.2},{b:.2},{a:.2})"
+        );
+    }
 
     #[test]
     fn standard_metrics_line_up_the_dropdown() {
         let m = MenuMetrics::STANDARD;
         assert_eq!(m.canvas_width, 240.0);
         assert_eq!(m.content_left(), 16.0);
-        assert_eq!(m.content_right(), 216.0);
-        assert_eq!(m.value_column_x(), 216.0);
-        assert_eq!(m.row_label_origin_x(), 16.0);
-        assert_eq!(m.row_tail_tab(), 200.0);
+        assert_eq!(m.content_right(), 224.0, "right inset matches the left");
 
         let hist = m.history_layout();
         assert_eq!(hist.band_left, m.content_left());
-        assert_eq!(hist.band_right, m.value_column_x());
+        assert_eq!(hist.band_right, m.content_right());
         assert_eq!(hist.view_height, 36.0);
 
         let map = m.map_layout();

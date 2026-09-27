@@ -78,7 +78,6 @@ pub fn history_caption(samples: &[u64], total_bytes: u64) -> Option<(String, Str
 pub struct StatRow {
     pub primary: String,
     pub tail: Option<String>,
-    pub bundle_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,7 +230,6 @@ pub(crate) fn dropdown_model_with_sections(
         swap: (memory.swap_used_bytes > 0).then(|| StatRow {
             primary: "Swap".to_string(),
             tail: Some(mem_text(memory.swap_used_bytes)),
-            bundle_path: None,
         }),
         apps: app_section_display(apps),
     }))];
@@ -333,7 +331,6 @@ fn cpu_row(state: CpuModuleState) -> Option<StatRow> {
     Some(StatRow {
         primary: "CPU".to_string(),
         tail: Some(tail),
-        bundle_path: None,
     })
 }
 
@@ -359,7 +356,6 @@ fn gpu_row(state: GpuModuleState) -> Option<StatRow> {
     Some(StatRow {
         primary: "GPU".to_string(),
         tail: Some(tail),
-        bundle_path: None,
     })
 }
 
@@ -396,10 +392,6 @@ fn app_row(app: &AppMemoryUsage) -> StatRow {
     StatRow {
         primary: truncate_name(&app.name, APP_NAME_MAX_CHARS),
         tail: Some(tail),
-        bundle_path: app
-            .group_key
-            .ends_with(".app")
-            .then(|| app.group_key.clone()),
     }
 }
 

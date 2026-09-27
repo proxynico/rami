@@ -3,12 +3,9 @@
 //! all state updates stay in `tray/mod.rs`.
 
 use super::layout::MenuShape;
-use super::render::{
-    loading_attributed_title, make_action_icon, make_placeholder_icon, make_stat_item,
-    set_row_icon, unavailable_attributed_title, RowRenderCache,
-};
+use super::render::{make_action_icon, make_stat_item};
 use super::style::{APP_ROW_POOL, BREAKDOWN_ROW_POOL};
-use super::TrayController;
+use super::{RowItem, TrayController};
 use crate::format::{placeholder_dropdown_model, Accent};
 use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
@@ -26,7 +23,6 @@ use objc2_app_kit::{
 };
 use objc2_foundation::NSString;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 
 /// One enabled command row: title, optional selector/target, optional
 /// SF Symbol icon. Callers adjust state or enablement afterwards where a
@@ -70,9 +66,7 @@ pub(super) fn build_controller(
     let empty = NSString::from_str("");
     let target = Some(&*refresh_target);
 
-    let placeholder_icon = make_placeholder_icon();
     let metrics = MenuMetrics::STANDARD;
-    let row_render_cache = RowRenderCache::new(metrics);
     let map_item = make_stat_item(mtm);
     let map_view = MemoryMapView::new(mtm, metrics);
     unsafe {
@@ -89,23 +83,17 @@ pub(super) fn build_controller(
         let _: () = msg_send![&history_item, setView: &*history_view];
     }
     let legend_items = (0..BREAKDOWN_ROW_POOL)
-        .map(|_| make_stat_item(mtm))
+        .map(|_| RowItem::new(mtm, metrics))
         .collect();
-    let swap_item = make_stat_item(mtm);
-    set_row_icon(&swap_item, "arrow.up.arrow.down", &placeholder_icon);
-    let loading_item = make_stat_item(mtm);
-    loading_item.setImage(Some(&placeholder_icon));
-    loading_item.setAttributedTitle(Some(&loading_attributed_title(&row_render_cache)));
-    let app_loading_item = make_stat_item(mtm);
-    app_loading_item.setImage(Some(&placeholder_icon));
-    app_loading_item.setAttributedTitle(Some(&loading_attributed_title(&row_render_cache)));
-    let app_unavailable_item = make_stat_item(mtm);
-    app_unavailable_item.setImage(Some(&placeholder_icon));
-    app_unavailable_item.setAttributedTitle(Some(&unavailable_attributed_title(&row_render_cache)));
-    let app_items: Vec<Retained<NSMenuItem>> =
-        (0..APP_ROW_POOL).map(|_| make_stat_item(mtm)).collect();
-    let cpu_item = make_stat_item(mtm);
-    let gpu_item = make_stat_item(mtm);
+    let swap_item = RowItem::new(mtm, metrics);
+    let loading_item = RowItem::muted(mtm, metrics, "Loading…");
+    let app_loading_item = RowItem::muted(mtm, metrics, "Loading…");
+    let app_unavailable_item = RowItem::muted(mtm, metrics, "Unavailable");
+    let app_items = (0..APP_ROW_POOL)
+        .map(|_| RowItem::new(mtm, metrics))
+        .collect();
+    let cpu_item = RowItem::new(mtm, metrics);
+    let gpu_item = RowItem::new(mtm, metrics);
 
     let refresh_item = make_command_item(
         mtm,
@@ -256,8 +244,6 @@ pub(super) fn build_controller(
         last_show_app_usage: Cell::new(true),
         last_show_cpu: Cell::new(true),
         last_show_gpu: Cell::new(false),
-        app_icon_cache: RefCell::new(HashMap::new()),
-        row_render_cache,
     };
     controller.set_gauge(0, MemoryTrend::Stable, MemoryPressure::Normal, mtm);
     controller.apply_model(

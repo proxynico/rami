@@ -4,10 +4,7 @@ mod render;
 mod style;
 
 use self::layout::{menu_shape_for, settings_menu_projection, AppShape, MenuShape};
-use self::render::{
-    app_row_attributed, legend_row_attributed, stat_row_attributed, RowRenderCache,
-};
-use self::style::{color_for_accent, ROW_ICON_SIZE};
+use self::render::make_stat_item;
 use crate::format::{
     dropdown_model_with_sections, gauge_accessibility_label, gauge_tooltip,
     placeholder_dropdown_model, Accent, AppSectionDisplay, DropdownModel, LegendRow,
@@ -17,8 +14,10 @@ use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_map_view::MemoryMapView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
+use crate::presentation::MenuMetrics;
 use crate::pressure_view::PressureView;
 use crate::process_memory::AppMemorySnapshot;
+use crate::row_view::{RowContent, RowView};
 #[cfg(test)]
 use crate::status_icon::{badge_for_state, BadgeKind};
 use crate::status_icon::{make_status_image, StatusImage};
@@ -28,11 +27,10 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{msg_send, MainThreadMarker};
 use objc2_app_kit::{
     NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuDelegate, NSMenuItem,
-    NSStatusItem, NSWorkspace,
+    NSStatusItem,
 };
-use objc2_foundation::{NSSize, NSString};
+use objc2_foundation::NSString;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 
 pub struct TrayController {
     status_item: Retained<NSStatusItem>,
@@ -43,14 +41,14 @@ pub struct TrayController {
     pressure_view: Retained<PressureView>,
     history_item: Retained<NSMenuItem>,
     history_view: Retained<MemoryHistoryView>,
-    legend_items: Vec<Retained<NSMenuItem>>,
-    swap_item: Retained<NSMenuItem>,
-    loading_item: Retained<NSMenuItem>,
-    app_loading_item: Retained<NSMenuItem>,
-    app_unavailable_item: Retained<NSMenuItem>,
-    app_items: Vec<Retained<NSMenuItem>>,
-    cpu_item: Retained<NSMenuItem>,
-    gpu_item: Retained<NSMenuItem>,
+    legend_items: Vec<RowItem>,
+    swap_item: RowItem,
+    loading_item: RowItem,
+    app_loading_item: RowItem,
+    app_unavailable_item: RowItem,
+    app_items: Vec<RowItem>,
+    cpu_item: RowItem,
+    gpu_item: RowItem,
     refresh_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
     show_app_usage_item: Retained<NSMenuItem>,
@@ -85,8 +83,29 @@ pub struct TrayController {
     last_show_app_usage: Cell<bool>,
     last_show_cpu: Cell<bool>,
     last_show_gpu: Cell<bool>,
-    app_icon_cache: RefCell<HashMap<String, Retained<NSImage>>>,
-    row_render_cache: RowRenderCache,
+}
+
+/// A data row: a menu item carrying a `RowView`.
+struct RowItem {
+    item: Retained<NSMenuItem>,
+    view: Retained<RowView>,
+}
+
+impl RowItem {
+    fn new(mtm: MainThreadMarker, metrics: MenuMetrics) -> Self {
+        let item = make_stat_item(mtm);
+        let view = RowView::new(mtm, metrics);
+        unsafe {
+            let _: () = msg_send![&item, setView: &*view];
+        }
+        Self { item, view }
+    }
+
+    fn muted(mtm: MainThreadMarker, metrics: MenuMetrics, label: &str) -> Self {
+        let row = Self::new(mtm, metrics);
+        row.view.update(&RowContent::muted(label), Accent::Neutral);
+        row
+    }
 }
 
 impl TrayController {
@@ -301,7 +320,6 @@ impl TrayController {
                 return;
             };
             let accent_changed = self.last_accent.get() != *accent;
-            let accent_color = color_for_accent(*accent);
             if accent_changed || self.last_map.borrow().as_ref() != Some(&memory.map) {
                 self.map_view.update(&memory.map, *accent);
                 *self.last_map.borrow_mut() = Some(memory.map.clone());
@@ -317,22 +335,17 @@ impl TrayController {
                 *self.last_history.borrow_mut() = Some(memory.history.clone());
             }
             if accent_changed || self.last_breakdown.borrow().as_ref() != Some(&memory.breakdown) {
-                update_legend_items(
-                    &self.legend_items,
-                    &memory.breakdown,
-                    *accent,
-                    &self.row_render_cache,
-                );
+                for (row_item, row) in self.legend_items.iter().zip(&memory.breakdown) {
+                    row_item.view.update(&RowContent::legend(row), *accent);
+                }
                 *self.last_breakdown.borrow_mut() = Some(memory.breakdown.clone());
             }
             self.update_app_section(&memory.apps, *accent, accent_changed);
             if accent_changed || self.last_swap_row.borrow().as_ref() != memory.swap.as_ref() {
                 if let Some(swap_row) = &memory.swap {
-                    self.swap_item.setAttributedTitle(Some(&stat_row_attributed(
-                        swap_row,
-                        accent_color.clone(),
-                        &self.row_render_cache,
-                    )));
+                    self.swap_item
+                        .view
+                        .update(&RowContent::stat(swap_row), *accent);
                 }
                 *self.last_swap_row.borrow_mut() = memory.swap.clone();
             }
@@ -343,11 +356,7 @@ impl TrayController {
                     ModuleDisplay::Gpu(row) => (&self.gpu_item, &self.last_gpu_row, row),
                 };
                 if accent_changed || last.borrow().as_ref() != Some(row) {
-                    item.setAttributedTitle(Some(&stat_row_attributed(
-                        row,
-                        accent_color.clone(),
-                        &self.row_render_cache,
-                    )));
+                    item.view.update(&RowContent::stat(row), *accent);
                     *last.borrow_mut() = Some(row.clone());
                 }
             }
@@ -363,14 +372,8 @@ impl TrayController {
             return;
         }
         if let AppSectionDisplay::Rows { rows } = apps {
-            for (item, row) in self.app_items.iter().zip(rows.iter()) {
-                item.setAttributedTitle(Some(&app_row_attributed(
-                    row,
-                    accent,
-                    &self.row_render_cache,
-                )));
-                item.setImage(self.app_row_icon(row).as_deref());
-                item.setSubmenu(None);
+            for (row_item, row) in self.app_items.iter().zip(rows.iter()) {
+                row_item.view.update(&RowContent::stat(row), accent);
             }
         }
         *self.last_app_section.borrow_mut() = Some(apps.clone());
@@ -381,7 +384,7 @@ impl TrayController {
         match shape {
             MenuShape::Uninitialized => {}
             MenuShape::Loading => {
-                self.menu.addItem(&self.loading_item);
+                self.menu.addItem(&self.loading_item.item);
             }
             MenuShape::Loaded {
                 breakdown_rows,
@@ -391,28 +394,28 @@ impl TrayController {
                 show_gpu,
             } => {
                 self.menu.addItem(&self.map_item);
-                for item in self.legend_items.iter().take(breakdown_rows) {
-                    self.menu.addItem(item);
+                for row in self.legend_items.iter().take(breakdown_rows) {
+                    self.menu.addItem(&row.item);
                 }
                 self.menu.addItem(&self.pressure_item);
                 if show_swap {
-                    self.menu.addItem(&self.swap_item);
+                    self.menu.addItem(&self.swap_item.item);
                 }
                 self.menu.addItem(&self.history_item);
                 match apps {
                     AppShape::Hidden => {}
                     AppShape::Loading => {
                         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        self.menu.addItem(&self.app_loading_item);
+                        self.menu.addItem(&self.app_loading_item.item);
                     }
                     AppShape::Unavailable => {
                         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        self.menu.addItem(&self.app_unavailable_item);
+                        self.menu.addItem(&self.app_unavailable_item.item);
                     }
                     AppShape::Rows { rows } => {
                         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        for item in self.app_items.iter().take(rows) {
-                            self.menu.addItem(item);
+                        for row in self.app_items.iter().take(rows) {
+                            self.menu.addItem(&row.item);
                         }
                     }
                 }
@@ -420,10 +423,10 @@ impl TrayController {
                     self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                 }
                 if show_cpu {
-                    self.menu.addItem(&self.cpu_item);
+                    self.menu.addItem(&self.cpu_item.item);
                 }
                 if show_gpu {
-                    self.menu.addItem(&self.gpu_item);
+                    self.menu.addItem(&self.gpu_item.item);
                 }
             }
         }
@@ -475,31 +478,6 @@ impl TrayController {
             self.launch_at_login_item.setEnabled(enabled);
             self.last_launch_enabled.set(enabled);
         }
-    }
-
-    fn app_row_icon(&self, row: &StatRow) -> Option<Retained<NSImage>> {
-        let bundle_path = row.bundle_path.as_ref()?;
-        if let Some(cached) = self.app_icon_cache.borrow().get(bundle_path) {
-            return Some(cached.clone());
-        }
-        let path = NSString::from_str(bundle_path);
-        let image = NSWorkspace::sharedWorkspace().iconForFile(&path);
-        image.setSize(NSSize::new(ROW_ICON_SIZE, ROW_ICON_SIZE));
-        self.app_icon_cache
-            .borrow_mut()
-            .insert(bundle_path.clone(), image.clone());
-        Some(image)
-    }
-}
-
-fn update_legend_items(
-    items: &[Retained<NSMenuItem>],
-    rows: &[LegendRow],
-    accent: Accent,
-    render_cache: &RowRenderCache,
-) {
-    for (item, row) in items.iter().zip(rows) {
-        item.setAttributedTitle(Some(&legend_row_attributed(row, accent, render_cache)));
     }
 }
 
