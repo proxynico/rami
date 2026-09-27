@@ -27,8 +27,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{msg_send, MainThreadMarker};
 use objc2_app_kit::{
-    NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSImage, NSMenu, NSMenuDelegate,
-    NSMenuItem, NSStatusItem, NSWorkspace,
+    NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuDelegate, NSMenuItem,
+    NSStatusItem, NSWorkspace,
 };
 use objc2_foundation::{NSSize, NSString};
 use std::cell::{Cell, RefCell};
@@ -61,7 +61,6 @@ pub struct TrayController {
     _about_item: Retained<NSMenuItem>,
     _check_updates_item: Retained<NSMenuItem>,
     settings_item: Retained<NSMenuItem>,
-    settings_menu: Retained<NSMenu>,
     quit_item: Retained<NSMenuItem>,
     pause_icon: Option<Retained<NSImage>>,
     play_icon: Option<Retained<NSImage>>,
@@ -146,8 +145,9 @@ impl TrayController {
         );
     }
 
-    /// Attach the open/close delegate to the main tray menu only; the separate
-    /// settings menu must not count as the live monitor menu being open.
+    /// Attach the open/close delegate to the main tray menu only: the root
+    /// menu owns the monitor's open/close lifecycle, and opening the Settings
+    /// submenu must not change it.
     pub fn set_menu_delegate(&self, delegate: &ProtocolObject<dyn NSMenuDelegate>) {
         self.menu.setDelegate(Some(delegate));
     }
@@ -214,12 +214,6 @@ impl TrayController {
     #[allow(deprecated)]
     pub fn pop_up_menu(&self) {
         self.status_item.popUpStatusItemMenu(&self.menu);
-    }
-
-    pub fn pop_up_settings_menu(&self) {
-        let location = NSEvent::mouseLocation();
-        self.settings_menu
-            .popUpMenuPositioningItem_atLocation_inView(None, location, None);
     }
 
     pub fn set_placeholder(
