@@ -8,16 +8,6 @@ use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 const APP_NAME_MAX_CHARS: usize = 16;
 const APP_USAGE_ROW_LIMIT: usize = 3;
 
-pub fn gauge_symbol_name(percent: u8) -> &'static str {
-    match percent {
-        0..=19 => "gauge.with.dots.needle.0percent",
-        20..=39 => "gauge.with.dots.needle.33percent",
-        40..=59 => "gauge.with.dots.needle.50percent",
-        60..=79 => "gauge.with.dots.needle.67percent",
-        _ => "gauge.with.dots.needle.100percent",
-    }
-}
-
 /// Binary gibibytes (1024³), matching Activity Monitor and marketed RAM sizes.
 const ONE_GIB_BYTES: u64 = 1_073_741_824;
 const ONE_MIB_BYTES: u64 = 1_048_576;
@@ -462,20 +452,6 @@ mod tests {
     }
 
     const SIXTEEN_GIB: u64 = 17_179_869_184;
-
-    #[test]
-    fn gauge_symbol_name_buckets_by_percent() {
-        assert_eq!(gauge_symbol_name(0), "gauge.with.dots.needle.0percent");
-        assert_eq!(gauge_symbol_name(19), "gauge.with.dots.needle.0percent");
-        assert_eq!(gauge_symbol_name(20), "gauge.with.dots.needle.33percent");
-        assert_eq!(gauge_symbol_name(39), "gauge.with.dots.needle.33percent");
-        assert_eq!(gauge_symbol_name(40), "gauge.with.dots.needle.50percent");
-        assert_eq!(gauge_symbol_name(59), "gauge.with.dots.needle.50percent");
-        assert_eq!(gauge_symbol_name(60), "gauge.with.dots.needle.67percent");
-        assert_eq!(gauge_symbol_name(79), "gauge.with.dots.needle.67percent");
-        assert_eq!(gauge_symbol_name(80), "gauge.with.dots.needle.100percent");
-        assert_eq!(gauge_symbol_name(100), "gauge.with.dots.needle.100percent");
-    }
 
     #[test]
     fn gauge_tooltip_pairs_percent_with_used_over_total() {

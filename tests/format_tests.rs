@@ -1,30 +1,11 @@
 use rami::format::{
-    dropdown_model, gauge_symbol_name, gb_pair, gb_text, mem_text, placeholder_dropdown_model,
-    Accent, DropdownModel, ModuleDisplay, Swatch,
+    dropdown_model, gb_pair, gb_text, mem_text, placeholder_dropdown_model, Accent, DropdownModel,
+    ModuleDisplay, Swatch,
 };
 use rami::model::{CpuModuleState, GpuModuleState, MemorySnapshot, PressureSource, SystemSnapshot};
 
 const ONE_GIB: u64 = 1_073_741_824;
 const SIXTEEN_GIB: u64 = 16 * ONE_GIB;
-
-#[test]
-fn gauge_symbol_name_returns_expected_variant_for_each_bucket() {
-    let cases = [
-        (0_u8, "gauge.with.dots.needle.0percent"),
-        (19, "gauge.with.dots.needle.0percent"),
-        (20, "gauge.with.dots.needle.33percent"),
-        (39, "gauge.with.dots.needle.33percent"),
-        (40, "gauge.with.dots.needle.50percent"),
-        (59, "gauge.with.dots.needle.50percent"),
-        (60, "gauge.with.dots.needle.67percent"),
-        (79, "gauge.with.dots.needle.67percent"),
-        (80, "gauge.with.dots.needle.100percent"),
-        (100, "gauge.with.dots.needle.100percent"),
-    ];
-    for (percent, expected) in cases {
-        assert_eq!(gauge_symbol_name(percent), expected, "percent {percent}");
-    }
-}
 
 #[test]
 fn gb_text_rounds_to_one_decimal_place() {

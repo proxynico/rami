@@ -7,9 +7,9 @@ use self::layout::{menu_shape_for, settings_menu_projection, AppShape, MenuShape
 use self::render::{
     app_row_attributed, legend_row_attributed, stat_row_attributed, RowRenderCache,
 };
-use self::style::{color_for_accent, status_tint_for_pressure, ROW_ICON_SIZE};
+use self::style::{color_for_accent, ROW_ICON_SIZE};
 use crate::format::{
-    dropdown_model_with_sections, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
+    dropdown_model_with_sections, gauge_accessibility_label, gauge_tooltip,
     placeholder_dropdown_model, Accent, AppSectionDisplay, DropdownModel, LegendRow,
     MemoryMapDisplay, ModuleDisplay, StatRow,
 };
@@ -65,7 +65,7 @@ pub struct TrayController {
     quit_item: Retained<NSMenuItem>,
     pause_icon: Option<Retained<NSImage>>,
     play_icon: Option<Retained<NSImage>>,
-    last_image_name: RefCell<Option<&'static str>>,
+    last_gauge_percent: Cell<Option<u8>>,
     last_trend: Cell<MemoryTrend>,
     last_pressure: Cell<MemoryPressure>,
     shape: Cell<MenuShape>,
@@ -262,30 +262,19 @@ impl TrayController {
         pressure: MemoryPressure,
         mtm: MainThreadMarker,
     ) {
-        let name = gauge_symbol_name(percent);
-        let name_unchanged = *self.last_image_name.borrow() == Some(name);
+        let percent_unchanged = self.last_gauge_percent.get() == Some(percent);
         let trend_unchanged = self.last_trend.get() == trend;
         let pressure_unchanged = self.last_pressure.get() == pressure;
-        if name_unchanged && trend_unchanged && pressure_unchanged {
+        if percent_unchanged && trend_unchanged && pressure_unchanged {
             return;
         }
 
         if let Some(button) = self.status_item.button(mtm) {
-            match make_status_image(name, trend, Accent::from(pressure)) {
-                Some(StatusImage { image, template }) => {
-                    image.setTemplate(template);
-                    button.setImage(Some(&image));
-                    *self.last_image_name.borrow_mut() = Some(name);
-                }
-                None => {
-                    button.setImage(None);
-                    *self.last_image_name.borrow_mut() = None;
-                }
-            }
-            // Let the normal template gauge follow the menu bar's light/dark
-            // appearance. Only warning and critical pressure force a semantic tint.
-            let status_tint = status_tint_for_pressure(pressure).map(color_for_accent);
-            button.setContentTintColor(status_tint.as_deref());
+            let StatusImage { image, template } =
+                make_status_image(percent, trend, Accent::from(pressure));
+            image.setTemplate(template);
+            button.setImage(Some(&image));
+            self.last_gauge_percent.set(Some(percent));
             self.last_trend.set(trend);
             self.last_pressure.set(pressure);
         }

@@ -5,7 +5,8 @@ use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::Bool;
 use objc2_app_kit::{
-    NSColor, NSCompositingOperation, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
+    NSBezierPath, NSColor, NSCompositingOperation, NSGraphicsContext, NSImage,
+    NSImageSymbolConfiguration, NSImageSymbolScale,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -27,102 +28,152 @@ pub(crate) struct StatusImage {
     pub(crate) template: bool,
 }
 
+/// The status glyph's design grid in points: a RAM stick whose four chips
+/// fill left to right with Memory %, over four short legs.
+const GLYPH_WIDTH: f64 = 28.0;
+const GLYPH_HEIGHT: f64 = 16.0;
+const CHIPS_LEFT: f64 = 3.2;
+const CHIP_WIDTH: f64 = 4.2;
+const CHIP_GAP: f64 = 1.6;
+const LEG_CENTERS: [f64; 4] = [5.2, 11.0, 17.0, 22.8];
+const EMPTY_CHIP_ALPHA: f64 = 0.3;
+
 pub(crate) fn make_status_image(
-    gauge_name: &'static str,
+    used_percent: u8,
     trend: MemoryTrend,
     accent: Accent,
-) -> Option<StatusImage> {
-    let badge = badge_for_state(trend);
-    let base_template = render_template_symbol(gauge_name, NSImageSymbolScale::Large)?;
-    match badge {
-        BadgeKind::None => Some(StatusImage {
-            image: base_template,
-            template: true,
-        }),
-        BadgeKind::RisingFast => {
-            let composite = compose_rising_fast(gauge_name, accent, base_template.size())?;
-            Some(StatusImage {
-                image: composite,
-                template: false,
+) -> StatusImage {
+    let level = f64::from(used_percent.min(100)) / 100.0;
+    let rising = badge_for_state(trend) == BadgeKind::RisingFast;
+    // Only the calm, steady glyph is a template: macOS picks black or white
+    // for it from its alpha. The status button's content tint does not
+    // recolor a template image in the menu bar, so Warning, Critical, and
+    // RisingFast draw their own colors, resolved against the appearance here.
+    let tinted = rising || accent != Accent::Neutral;
+    let handler = RcBlock::new(move |rect: NSRect| -> Bool {
+        let scale = rect.size.width / GLYPH_WIDTH;
+        let at = |x: f64, y: f64, w: f64, h: f64| {
+            NSRect::new(
+                NSPoint::new(rect.origin.x + x * scale, rect.origin.y + y * scale),
+                NSSize::new(w * scale, h * scale),
+            )
+        };
+        let ink = if tinted {
+            color_for_accent(accent)
+        } else {
+            NSColor::blackColor()
+        };
+
+        let body = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+            at(1.1, 2.1, 25.8, 8.8),
+            2.0 * scale,
+            2.0 * scale,
+        );
+        body.setLineWidth(1.3 * scale);
+        ink.setStroke();
+        body.stroke();
+
+        let chips: Vec<NSRect> = (0..4)
+            .map(|k| {
+                at(
+                    CHIPS_LEFT + f64::from(k) * (CHIP_WIDTH + CHIP_GAP),
+                    4.3,
+                    CHIP_WIDTH,
+                    4.4,
+                )
             })
+            .collect();
+        ink.colorWithAlphaComponent(EMPTY_CHIP_ALPHA).setFill();
+        for chip in &chips {
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                *chip,
+                0.7 * scale,
+                0.7 * scale,
+            )
+            .fill();
         }
-    }
-}
+        let span = 4.0 * CHIP_WIDTH + 3.0 * CHIP_GAP;
+        NSGraphicsContext::saveGraphicsState_class();
+        NSBezierPath::clipRect(at(CHIPS_LEFT, 0.0, span * level, GLYPH_HEIGHT));
+        ink.setFill();
+        for chip in &chips {
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                *chip,
+                0.7 * scale,
+                0.7 * scale,
+            )
+            .fill();
+        }
+        NSGraphicsContext::restoreGraphicsState_class();
 
-fn render_template_symbol(name: &str, scale: NSImageSymbolScale) -> Option<Retained<NSImage>> {
-    let symbol_name = NSString::from_str(name);
-    let desc = NSString::from_str("");
-    let base =
-        NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
-    let config = NSImageSymbolConfiguration::configurationWithScale(scale);
-    base.imageWithSymbolConfiguration(&config)
-}
+        ink.setFill();
+        for center in LEG_CENTERS {
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                at(center - 1.1, 11.2, 2.2, 3.0),
+                0.5 * scale,
+                0.5 * scale,
+            )
+            .fill();
+        }
 
-fn render_colored_symbol(
-    name: &str,
-    scale: NSImageSymbolScale,
-    color: &NSColor,
-) -> Option<Retained<NSImage>> {
-    let symbol_name = NSString::from_str(name);
-    let desc = NSString::from_str("");
-    let base =
-        NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))?;
-    let scale_config = NSImageSymbolConfiguration::configurationWithScale(scale);
-    let color_config = NSImageSymbolConfiguration::configurationWithHierarchicalColor(color);
-    let combined = scale_config.configurationByApplyingConfiguration(&color_config);
-    base.imageWithSymbolConfiguration(&combined)
-}
-
-fn compose_rising_fast(
-    gauge_name: &'static str,
-    accent: Accent,
-    size: NSSize,
-) -> Option<Retained<NSImage>> {
-    if size.width <= 0.0 || size.height <= 0.0 {
-        return None;
-    }
-    // Hierarchical SF Symbol tints and Neutral alpha resolve here, against
-    // the menu bar's current appearance, not at image-create time.
-    let handler = RcBlock::new(move |dest_rect: NSRect| -> Bool {
-        let chrome = color_for_accent(accent);
-        let climb = rising_fast_badge_color(accent);
-        let Some(base) = render_colored_symbol(gauge_name, NSImageSymbolScale::Large, &chrome)
-        else {
-            return Bool::NO;
-        };
-        let Some(badge) = render_colored_symbol(
-            "arrow.up.right.circle.fill",
-            NSImageSymbolScale::Small,
-            &climb,
-        ) else {
-            return Bool::NO;
-        };
-        let zero_rect = NSRect::ZERO;
-        base.drawInRect_fromRect_operation_fraction(
-            dest_rect,
-            zero_rect,
-            NSCompositingOperation::SourceOver,
-            1.0,
-        );
-        let badge_extent = (dest_rect.size.height * 0.65).min(dest_rect.size.width);
-        let badge_rect = NSRect::new(
-            NSPoint::new(
-                dest_rect.origin.x + dest_rect.size.width - badge_extent,
-                dest_rect.origin.y,
-            ),
-            NSSize::new(badge_extent, badge_extent),
-        );
-        badge.drawInRect_fromRect_operation_fraction(
-            badge_rect,
-            zero_rect,
-            NSCompositingOperation::SourceOver,
-            1.0,
-        );
+        if rising {
+            draw_rising_badge(at(21.8, -0.2, 6.8, 6.8), accent);
+        }
         Bool::YES
     });
-    Some(NSImage::imageWithSize_flipped_drawingHandler(
-        size, false, &handler,
-    ))
+    let image = NSImage::imageWithSize_flipped_drawingHandler(
+        NSSize::new(GLYPH_WIDTH, GLYPH_HEIGHT),
+        true,
+        &handler,
+    );
+    StatusImage {
+        image,
+        template: !tinted,
+    }
+}
+
+/// The RisingFast badge in the glyph's top-right corner, cut out of the
+/// stick so the two shapes stay distinct.
+fn draw_rising_badge(rect: NSRect, accent: Accent) {
+    let symbol_name = NSString::from_str("arrow.up.right.circle.fill");
+    let desc = NSString::from_str("");
+    let Some(badge) =
+        NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol_name, Some(&desc))
+            .and_then(|symbol| {
+                let scale =
+                    NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Small);
+                let tint = NSImageSymbolConfiguration::configurationWithHierarchicalColor(
+                    &rising_fast_badge_color(accent),
+                );
+                symbol.imageWithSymbolConfiguration(
+                    &scale.configurationByApplyingConfiguration(&tint),
+                )
+            })
+    else {
+        return;
+    };
+    let cutout = NSRect::new(
+        NSPoint::new(rect.origin.x - 0.8, rect.origin.y - 0.8),
+        NSSize::new(rect.size.width + 1.6, rect.size.height + 1.6),
+    );
+    if let Some(context) = NSGraphicsContext::currentContext() {
+        context.saveGraphicsState();
+        context.setCompositingOperation(NSCompositingOperation::Clear);
+        NSBezierPath::bezierPathWithOvalInRect(cutout).fill();
+        context.restoreGraphicsState();
+    }
+    // The glyph's handler draws top-down; the plain draw call would mirror
+    // the arrow vertically.
+    unsafe {
+        badge.drawInRect_fromRect_operation_fraction_respectFlipped_hints(
+            rect,
+            NSRect::ZERO,
+            NSCompositingOperation::SourceOver,
+            1.0,
+            true,
+            None,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -213,7 +264,7 @@ mod tests {
     fn rising_fast_icon_created_in_light_mode_stays_visible_in_dark_menu_bars() {
         // The RisingFast composite carries the Neutral accent (labelColor).
         // Hierarchical SF Symbol tints bake the creation-time appearance, so
-        // the tinted symbols must be built inside the drawing handler — an
+        // the tinted glyph must be drawn inside the drawing handler — an
         // icon created under a light appearance must still draw light glyphs
         // when the menu bar is dark.
         let light = appearance(unsafe { NSAppearanceNameAqua });
@@ -222,11 +273,11 @@ mod tests {
         let built = RefCell::new(None);
         {
             let build = RcBlock::new(|| {
-                *built.borrow_mut() = make_status_image(
-                    "gauge.with.dots.needle.50percent",
+                *built.borrow_mut() = Some(make_status_image(
+                    50,
                     MemoryTrend::RisingFast,
                     Accent::Neutral,
-                );
+                ));
             });
             light.performAsCurrentDrawingAppearance(&build);
         }
@@ -244,6 +295,65 @@ mod tests {
         assert!(
             r > 0.5 && g > 0.5 && b > 0.5,
             "dark menu bar must not keep a light-baked black glyph, got avg rgba({r:.2},{g:.2},{b:.2}) over {count} px"
+        );
+    }
+
+    #[test]
+    fn status_glyph_fills_its_chips_up_to_memory_percent() {
+        let status = make_status_image(30, MemoryTrend::Stable, Accent::Neutral);
+        assert!(status.template, "the calm glyph is a template image");
+        assert!(
+            !make_status_image(30, MemoryTrend::Stable, Accent::Critical).template,
+            "Critical draws its own red; a content tint would leave a template glyph black"
+        );
+
+        let (width, height) = (GLYPH_WIDTH * 2.0, GLYPH_HEIGHT * 2.0);
+        let rep = unsafe {
+            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+                NSBitmapImageRep::alloc(),
+                std::ptr::null_mut(),
+                width as NSInteger,
+                height as NSInteger,
+                8,
+                4,
+                true,
+                false,
+                NSDeviceRGBColorSpace,
+                0,
+                0,
+            )
+        }
+        .expect("bitmap");
+        NSGraphicsContext::saveGraphicsState_class();
+        let ctx =
+            NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep).expect("graphics context");
+        NSGraphicsContext::setCurrentContext(Some(&ctx));
+        status.image.drawInRect_fromRect_operation_fraction(
+            NSRect::new(NSPoint::ZERO, NSSize::new(width, height)),
+            NSRect::ZERO,
+            NSCompositingOperation::SourceOver,
+            1.0,
+        );
+        NSGraphicsContext::restoreGraphicsState_class();
+        let alpha_at = |x: f64, y: f64| {
+            let color = rep
+                .colorAtX_y((x * 2.0) as NSInteger, (y * 2.0) as NSInteger)
+                .expect("pixel");
+            color.alphaComponent()
+        };
+
+        let first_chip = alpha_at(CHIPS_LEFT + CHIP_WIDTH / 2.0, 6.5);
+        let last_chip = alpha_at(
+            CHIPS_LEFT + 3.0 * (CHIP_WIDTH + CHIP_GAP) + CHIP_WIDTH / 2.0,
+            6.5,
+        );
+        assert!(
+            first_chip > 0.9,
+            "30% fills the first chip, got alpha {first_chip:.2}"
+        );
+        assert!(
+            (0.1..0.5).contains(&last_chip),
+            "30% leaves the last chip at the empty step, got alpha {last_chip:.2}"
         );
     }
 }
