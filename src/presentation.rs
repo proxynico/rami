@@ -5,6 +5,7 @@ use objc2_foundation::{NSArray, NSSize};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MenuTypeScale {
+    pub(crate) map_title: f64,
     pub(crate) map_header: f64,
     pub(crate) caption: f64,
     pub(crate) stat_row: f64,
@@ -80,7 +81,8 @@ impl MenuMetrics {
         trailing_inset: 24.0,
         icon_slot: 16.0,
         type_scale: MenuTypeScale {
-            map_header: 12.0,
+            map_title: 15.0,
+            map_header: 13.0,
             caption: 10.0,
             stat_row: 13.0,
         },
@@ -115,18 +117,18 @@ impl MenuMetrics {
     pub(crate) fn map_layout(&self) -> MapLayout {
         MapLayout {
             view_width: self.canvas_width,
-            view_height: 108.0,
+            view_height: 110.0,
             left: self.content_left(),
             right: self.content_right(),
             header_y: 6.0,
-            board_top: 28.0,
+            board_top: 30.0,
             board_padding: 4.0,
             columns: 16,
             rows: 4,
             cell_height: 10.0,
             cell_gap: 2.0,
             strip_height: 4.0,
-            caption_y: 91.0,
+            caption_y: 93.0,
         }
     }
 
