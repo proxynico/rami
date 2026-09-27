@@ -41,13 +41,16 @@ terminated PIDs, the new binary mtime, and the relaunch.
 There is exactly one `NSStatusItem`. Its icon is the memory gauge. The
 dropdown is an `NSMenu` with custom menu-item views, not an `NSPopover`.
 
-CPU and GPU sections can each be hidden in Settings. The original
-memory-only monitor is two toggles away.
+CPU and GPU are one row each after the Memory section. The CPU row
+shows User and System with their busy sum. The GPU row shows Renderer
+and Tiler when the driver reports them, with Device Utilization. Each
+row can be hidden in Settings, so the original memory-only monitor is
+two toggles away. Nico cut the E-core and P-core rows, the busy-process
+list, and its sampler on 2026-09-27.
 
 These are out of scope: CPU frequency, temperatures, per-core rings,
-per-process GPU, and a quit action on ranked app-memory or CPU-process
-rows. rami is a monitor, not a task manager. E-cores and P-cores stay
-as two cluster aggregates.
+per-cluster or per-process CPU, per-process GPU, and a quit action on
+ranked app-memory rows. rami is a monitor, not a task manager.
 
 The Memory section opens the dropdown with the memory map: a header
 with used / total and Memory %, RAM drawn as 64 equal cells on a board
@@ -55,7 +58,7 @@ in category order, a contact strip, and the cell size. The breakdown
 rows follow, then the Pressure meter with ticks at Warning and
 Critical, Swap when nonzero, and the history row.
 
-App-memory and CPU-process rankings show three rows each. Memory
+The app-memory ranking shows three rows. Memory
 history is one row, memory-only, about 36 px, at the end of the Memory
 section. It reuses the 5 s trend window the engine already records,
 including while the menu is closed, so it is warm when the menu opens.

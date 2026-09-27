@@ -3,27 +3,21 @@ mod layout;
 mod render;
 mod style;
 
-use self::layout::{
-    menu_shape_for, settings_menu_projection, AppShape, CpuShape, GpuShape, MenuShape,
-};
+use self::layout::{menu_shape_for, settings_menu_projection, AppShape, MenuShape};
 use self::render::{
     app_row_attributed, legend_row_attributed, stat_row_attributed, RowRenderCache,
 };
-use self::style::{
-    color_for_accent, color_for_accent_alpha, status_tint_for_pressure, DEMOTED_LABEL_ALPHA,
-    ROW_ICON_SIZE,
-};
+use self::style::{color_for_accent, status_tint_for_pressure, ROW_ICON_SIZE};
 use crate::format::{
     dropdown_model_with_sections, gauge_accessibility_label, gauge_symbol_name, gauge_tooltip,
-    placeholder_dropdown_model, Accent, AppSectionDisplay, CpuDisplayState, DropdownModel,
-    GpuModuleDisplay, LegendRow, MemoryMapDisplay, ModuleDisplay, StatRow,
+    placeholder_dropdown_model, Accent, AppSectionDisplay, DropdownModel, LegendRow,
+    MemoryMapDisplay, ModuleDisplay, StatRow,
 };
 use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_map_view::MemoryMapView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
 use crate::pressure_view::PressureView;
-use crate::process_cpu::ProcessCpuSnapshot;
 use crate::process_memory::AppMemorySnapshot;
 #[cfg(test)]
 use crate::status_icon::{badge_for_state, BadgeKind};
@@ -55,14 +49,8 @@ pub struct TrayController {
     app_loading_item: Retained<NSMenuItem>,
     app_unavailable_item: Retained<NSMenuItem>,
     app_items: Vec<Retained<NSMenuItem>>,
-    cpu_title_item: Retained<NSMenuItem>,
-    cpu_loading_item: Retained<NSMenuItem>,
-    cpu_unavailable_item: Retained<NSMenuItem>,
-    cpu_legend_items: Vec<Retained<NSMenuItem>>,
-    cpu_core_items: Vec<Retained<NSMenuItem>>,
-    cpu_process_items: Vec<Retained<NSMenuItem>>,
-    gpu_title_item: Retained<NSMenuItem>,
-    gpu_legend_items: Vec<Retained<NSMenuItem>>,
+    cpu_item: Retained<NSMenuItem>,
+    gpu_item: Retained<NSMenuItem>,
     refresh_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
     show_app_usage_item: Retained<NSMenuItem>,
@@ -88,8 +76,8 @@ pub struct TrayController {
     last_accent: Cell<Accent>,
     last_swap_row: RefCell<Option<StatRow>>,
     last_app_section: RefCell<Option<AppSectionDisplay>>,
-    last_cpu_state: RefCell<Option<CpuDisplayState>>,
-    last_gpu: RefCell<Option<GpuModuleDisplay>>,
+    last_cpu_row: RefCell<Option<StatRow>>,
+    last_gpu_row: RefCell<Option<StatRow>>,
     last_auto_refresh_enabled: Cell<bool>,
     last_tooltip: RefCell<String>,
     last_launch_title: RefCell<String>,
@@ -137,7 +125,6 @@ impl TrayController {
         cpu: crate::model::CpuModuleState,
         gpu: crate::model::GpuModuleState,
         apps: &AppMemorySnapshot,
-        cpu_processes: &ProcessCpuSnapshot,
         history: &[u64],
         launch_at_login_status: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
@@ -151,7 +138,6 @@ impl TrayController {
                     gpu,
                 },
                 apps,
-                cpu_processes,
                 history,
             ),
             launch_at_login_status,
@@ -323,8 +309,8 @@ impl TrayController {
             self.last_breakdown.borrow_mut().take();
             self.last_swap_row.borrow_mut().take();
             self.last_app_section.borrow_mut().take();
-            self.last_cpu_state.borrow_mut().take();
-            self.last_gpu.borrow_mut().take();
+            self.last_cpu_row.borrow_mut().take();
+            self.last_gpu_row.borrow_mut().take();
         }
 
         if let DropdownModel::Loaded { accent, modules } = model {
@@ -367,17 +353,20 @@ impl TrayController {
                 }
                 *self.last_swap_row.borrow_mut() = memory.swap.clone();
             }
-            if let Some(cpu) = modules.iter().find_map(|module| match module {
-                ModuleDisplay::Cpu(cpu) => Some(cpu),
-                ModuleDisplay::Memory(_) | ModuleDisplay::Gpu(_) => None,
-            }) {
-                self.update_cpu_module(&cpu.state, *accent, accent_changed);
-            }
-            if let Some(gpu) = modules.iter().find_map(|module| match module {
-                ModuleDisplay::Gpu(gpu) => Some(gpu),
-                ModuleDisplay::Memory(_) | ModuleDisplay::Cpu(_) => None,
-            }) {
-                self.update_gpu_module(gpu, *accent, accent_changed);
+            for module in modules.iter().skip(1) {
+                let (item, last, row) = match module {
+                    ModuleDisplay::Memory(_) => continue,
+                    ModuleDisplay::Cpu(row) => (&self.cpu_item, &self.last_cpu_row, row),
+                    ModuleDisplay::Gpu(row) => (&self.gpu_item, &self.last_gpu_row, row),
+                };
+                if accent_changed || last.borrow().as_ref() != Some(row) {
+                    item.setAttributedTitle(Some(&stat_row_attributed(
+                        row,
+                        accent_color.clone(),
+                        &self.row_render_cache,
+                    )));
+                    *last.borrow_mut() = Some(row.clone());
+                }
             }
             self.last_accent.set(*accent);
         }
@@ -404,52 +393,6 @@ impl TrayController {
         *self.last_app_section.borrow_mut() = Some(apps.clone());
     }
 
-    fn update_cpu_module(&self, cpu: &CpuDisplayState, accent_kind: Accent, accent_changed: bool) {
-        if !accent_changed && self.last_cpu_state.borrow().as_ref() == Some(cpu) {
-            return;
-        }
-
-        if let CpuDisplayState::Available(available) = cpu {
-            update_legend_items(
-                &self.cpu_legend_items,
-                &available.utilization,
-                accent_kind,
-                &self.row_render_cache,
-            );
-            for (item, row) in self.cpu_core_items.iter().zip(&available.cores) {
-                // Row hierarchy (#23): per-cluster splits are derived detail,
-                // demoted below the User total and the per-process rows.
-                item.setAttributedTitle(Some(&stat_row_attributed(
-                    row,
-                    color_for_accent_alpha(accent_kind, DEMOTED_LABEL_ALPHA),
-                    &self.row_render_cache,
-                )));
-            }
-            for (item, row) in self.cpu_process_items.iter().zip(&available.processes) {
-                item.setAttributedTitle(Some(&stat_row_attributed(
-                    row,
-                    color_for_accent_alpha(accent_kind, 1.0),
-                    &self.row_render_cache,
-                )));
-            }
-        }
-        *self.last_cpu_state.borrow_mut() = Some(cpu.clone());
-    }
-
-    fn update_gpu_module(&self, gpu: &GpuModuleDisplay, accent_kind: Accent, accent_changed: bool) {
-        if !accent_changed && self.last_gpu.borrow().as_ref() == Some(gpu) {
-            return;
-        }
-
-        update_legend_items(
-            &self.gpu_legend_items,
-            &gpu.rows,
-            accent_kind,
-            &self.row_render_cache,
-        );
-        *self.last_gpu.borrow_mut() = Some(gpu.clone());
-    }
-
     fn rebuild_menu(&self, shape: MenuShape, mtm: MainThreadMarker) {
         self.menu.removeAllItems();
         match shape {
@@ -461,8 +404,8 @@ impl TrayController {
                 breakdown_rows,
                 apps,
                 show_swap,
-                cpu,
-                gpu,
+                show_cpu,
+                show_gpu,
             } => {
                 self.menu.addItem(&self.map_item);
                 for item in self.legend_items.iter().take(breakdown_rows) {
@@ -490,41 +433,14 @@ impl TrayController {
                         }
                     }
                 }
-                match cpu {
-                    CpuShape::Hidden => {}
-                    CpuShape::Loading => {
-                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        self.menu.addItem(&self.cpu_title_item);
-                        self.menu.addItem(&self.cpu_loading_item);
-                    }
-                    CpuShape::Unavailable => {
-                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        self.menu.addItem(&self.cpu_title_item);
-                        self.menu.addItem(&self.cpu_unavailable_item);
-                    }
-                    CpuShape::Available { cores, processes } => {
-                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        self.menu.addItem(&self.cpu_title_item);
-                        for item in &self.cpu_legend_items {
-                            self.menu.addItem(item);
-                        }
-                        for item in self.cpu_core_items.iter().take(cores) {
-                            self.menu.addItem(item);
-                        }
-                        for item in self.cpu_process_items.iter().take(processes) {
-                            self.menu.addItem(item);
-                        }
-                    }
+                if show_cpu || show_gpu {
+                    self.menu.addItem(&NSMenuItem::separatorItem(mtm));
                 }
-                match gpu {
-                    GpuShape::Hidden => {}
-                    GpuShape::Available { rows } => {
-                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        self.menu.addItem(&self.gpu_title_item);
-                        for item in self.gpu_legend_items.iter().take(rows) {
-                            self.menu.addItem(item);
-                        }
-                    }
+                if show_cpu {
+                    self.menu.addItem(&self.cpu_item);
+                }
+                if show_gpu {
+                    self.menu.addItem(&self.gpu_item);
                 }
             }
         }

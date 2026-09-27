@@ -51,35 +51,29 @@ Bytes of swap in use. Shown conditionally, only when non-zero.
 
 ### CPU
 
-**User / System / Idle**:
-The three-way CPU split (per `host_processor_info` ticks). Nice ticks fold
-into User. Rendered with the same legend component as the memory breakdown.
-User is the primary row; System and Idle are derived.
-_Avoid_: load average, per-core rings, a combined "CPU %" that restates
-100 − Idle
-
-**E-cores / P-cores**:
-Aggregate utilization per Apple Silicon core cluster (efficiency /
-performance), shown as two rows, never per-core rings.
+**CPU row**:
+One dropdown row. User and System (per `host_processor_info` ticks; nice
+ticks fold into User) as detail, their busy sum as the value.
+_Avoid_: load average, per-core rings, per-cluster or per-process CPU
 
 ### GPU
 
 **GPU Utilization**:
 `Device Utilization %` from the IORegistry `IOAccelerator` `PerformanceStatistics`
-dictionary. The GPU section hides itself entirely if this read fails.
+dictionary. The value of the GPU row, which hides itself if this read fails.
 
 **Renderer / Tiler**:
 `Renderer Utilization %` and `Tiler Utilization %` from the same dictionary.
-Optional legend rows under GPU Utilization; omit a row when that key is
-absent. Same opacity ramp as the memory breakdown.
+Optional detail on the GPU row; each is omitted when its key is absent.
 _Avoid_: GPU memory (`Alloc system memory`, `In use system memory`). Unified
 memory makes those figures misleading.
 
 ### Presentation
 
 **Module**:
-One monitored subsystem (Memory, CPU, GPU). Each renders as one dropdown
-section; CPU and GPU can be hidden via Settings toggles.
+One monitored subsystem (Memory, CPU, GPU). Memory is the dropdown's main
+section; CPU and GPU are one row each, sharing a separator after it, and
+can be hidden via Settings toggles.
 
 **Accent**:
 The single hue the whole dropdown inherits, driven by pressure state.
@@ -97,7 +91,7 @@ swatches, the pressure meter, the history sparkline, the contact strip.
 How multi-category displays encode categories in one hue: stepped
 opacities, plus a hatch and a neutral gray where a category needs one
 (App Memory 100% / Wired 62% / Compressed 36% / Cached hatched / Other
-gray / Free empty; User 100% / System 50%).
+gray / Free empty).
 _Avoid_: multi-hue palettes (Activity Monitor colors)
 
 **Memory map**:

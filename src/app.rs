@@ -9,15 +9,14 @@
 use crate::cpu::CpuSampler;
 use crate::diagnostics::{build_diagnostic_report, current_report_input};
 use crate::engine::{
-    AppScanResult, CpuProcessScanResult, Effect, Event, LaunchAtLogin, RefreshEngine, Render,
-    Samplers, ScanRunner, Setting, SettingChange, REFRESH_TICK_SECONDS,
+    AppScanResult, Effect, Event, LaunchAtLogin, RefreshEngine, Render, Samplers, ScanRunner,
+    Setting, SettingChange, REFRESH_TICK_SECONDS,
 };
 use crate::gpu::GpuSampler;
 use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
 use crate::model::{CpuSnapshot, GpuSnapshot, MemorySnapshot};
-use crate::process_cpu::{ProcessCpuSampler, PROCESS_CPU_ROW_LIMIT};
 use crate::process_memory::ProcessMemorySampler;
 use crate::settings::SettingsStore;
 use crate::tray::TrayController;
@@ -76,19 +75,14 @@ impl Samplers for SystemSamplers {
 struct ThreadScanRunner {
     app_sender: Sender<AppScanResult>,
     app_receiver: Receiver<AppScanResult>,
-    cpu_sender: Sender<CpuProcessScanResult>,
-    cpu_receiver: Receiver<CpuProcessScanResult>,
 }
 
 impl ThreadScanRunner {
     fn new() -> Self {
         let (app_sender, app_receiver) = mpsc::channel();
-        let (cpu_sender, cpu_receiver) = mpsc::channel();
         Self {
             app_sender,
             app_receiver,
-            cpu_sender,
-            cpu_receiver,
         }
     }
 }
@@ -110,22 +104,8 @@ impl ScanRunner for ThreadScanRunner {
         });
     }
 
-    fn start_cpu_process_scan(&mut self, generation: u64) {
-        let sender = self.cpu_sender.clone();
-        thread::spawn(move || {
-            // SAFETY: this only changes the current worker thread's QoS preference.
-            unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0) };
-            let rows = ProcessCpuSampler::new().sample(PROCESS_CPU_ROW_LIMIT);
-            let _ = sender.send(CpuProcessScanResult { generation, rows });
-        });
-    }
-
     fn poll_app_scan(&mut self) -> Option<AppScanResult> {
         self.app_receiver.try_recv().ok()
-    }
-
-    fn poll_cpu_process_scan(&mut self) -> Option<CpuProcessScanResult> {
-        self.cpu_receiver.try_recv().ok()
     }
 }
 
@@ -218,7 +198,6 @@ impl AppState {
                 cpu,
                 gpu,
                 apps,
-                cpu_processes,
                 history,
                 launch_at_login,
                 auto_refresh_enabled,
@@ -227,7 +206,6 @@ impl AppState {
                 cpu,
                 gpu,
                 &apps,
-                &cpu_processes,
                 &history,
                 launch_at_login,
                 auto_refresh_enabled,
