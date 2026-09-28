@@ -57,7 +57,7 @@ RAMI_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 ## Previewing the pressure accents
 
 The dropdown inherits one accent from the current memory pressure: label-color
-text and gold marks under Normal, alert red under Warning (>= 88%) and
+text and orange marks under Normal, alert red under Warning (>= 88%) and
 Critical (>= 95%). Those elevated states are
 unreachable in normal use without genuinely exhausting memory, so
 `RAMI_FORCE_PRESSURE` overrides the reading:

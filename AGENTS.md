@@ -80,14 +80,14 @@ did not show where RAM goes.
 ### Pressure-driven accent
 
 Under Normal pressure, dropdown text stays monochrome in the adaptive
-label color. Every mark uses one gold hue: map cells, legend swatches,
+label color. Every mark uses one orange hue: map cells, legend swatches,
 the pressure meter, the history sparkline, and the contact strip. App
 Memory, Wired, and Compressed step down at 100%, 62%, and 36%. Cached
-is a gold hatch, Other is neutral gray, and Free is the empty track.
-`mark_color` in `src/presentation.rs` picks light or dark gold while
+is an orange hatch, Other is neutral gray, and Free is the empty track.
+`mark_color` in `src/presentation.rs` picks light or dark orange while
 drawing.
 
-The accent is semantic. Warning and Critical turn the gold marks and the
+The accent is semantic. Warning and Critical turn the orange marks and the
 accent chrome, including row labels, system red. Other and Free stay
 neutral gray in every state. The user's macOS accent color is ignored.
 
@@ -102,7 +102,8 @@ an upward badge in `status_icon.rs`.
 Rejected alternatives were multi-hue category palettes, the user's
 macOS accent, a fixed accent with pressure tint only on the gauge, and
 gray marks with orange rings. Nico chose gold on 2026-09-27 to match the
-icon's contacts.
+app icon's contacts, then orange on 2026-09-28. The app icon's contacts
+stay gold.
 
 A future category or module must fit the one-hue ramp. If a display
 cannot be read in one hue, simplify the display.
