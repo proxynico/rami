@@ -30,13 +30,17 @@ pub(crate) struct StatusImage {
 
 /// The status glyph's design grid in points: a RAM stick whose four chips
 /// fill left to right with Memory %, over four short legs.
-const GLYPH_WIDTH: f64 = 28.0;
+const GLYPH_WIDTH: f64 = 22.0;
 const GLYPH_HEIGHT: f64 = 16.0;
-const CHIPS_LEFT: f64 = 3.2;
-const CHIP_WIDTH: f64 = 4.2;
-const CHIP_GAP: f64 = 1.6;
-const LEG_CENTERS: [f64; 4] = [5.2, 11.0, 17.0, 22.8];
+const CHIPS_LEFT: f64 = 3.0;
+const CHIP_WIDTH: f64 = 3.1;
+const CHIP_GAP: f64 = 1.2;
+const LEG_WIDTH: f64 = 1.6;
 const EMPTY_CHIP_ALPHA: f64 = 0.3;
+
+fn chip_left(k: u8) -> f64 {
+    CHIPS_LEFT + f64::from(k) * (CHIP_WIDTH + CHIP_GAP)
+}
 
 pub(crate) fn make_status_image(
     used_percent: u8,
@@ -65,7 +69,7 @@ pub(crate) fn make_status_image(
         };
 
         let body = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-            at(1.1, 2.1, 25.8, 8.8),
+            at(1.1, 2.1, GLYPH_WIDTH - 2.2, 8.8),
             2.0 * scale,
             2.0 * scale,
         );
@@ -74,14 +78,7 @@ pub(crate) fn make_status_image(
         body.stroke();
 
         let chips: Vec<NSRect> = (0..4)
-            .map(|k| {
-                at(
-                    CHIPS_LEFT + f64::from(k) * (CHIP_WIDTH + CHIP_GAP),
-                    4.3,
-                    CHIP_WIDTH,
-                    4.4,
-                )
-            })
+            .map(|k| at(chip_left(k), 4.3, CHIP_WIDTH, 4.4))
             .collect();
         ink.colorWithAlphaComponent(EMPTY_CHIP_ALPHA).setFill();
         for chip in &chips {
@@ -107,9 +104,10 @@ pub(crate) fn make_status_image(
         NSGraphicsContext::restoreGraphicsState_class();
 
         ink.setFill();
-        for center in LEG_CENTERS {
+        for k in 0..4 {
+            let center = chip_left(k) + CHIP_WIDTH / 2.0;
             NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-                at(center - 1.1, 11.2, 2.2, 3.0),
+                at(center - LEG_WIDTH / 2.0, 11.2, LEG_WIDTH, 3.0),
                 0.5 * scale,
                 0.5 * scale,
             )
@@ -117,7 +115,7 @@ pub(crate) fn make_status_image(
         }
 
         if rising {
-            draw_rising_badge(at(21.8, -0.2, 6.8, 6.8), accent);
+            draw_rising_badge(at(GLYPH_WIDTH - 6.2, -0.2, 6.8, 6.8), accent);
         }
         Bool::YES
     });
@@ -342,11 +340,8 @@ mod tests {
             color.alphaComponent()
         };
 
-        let first_chip = alpha_at(CHIPS_LEFT + CHIP_WIDTH / 2.0, 6.5);
-        let last_chip = alpha_at(
-            CHIPS_LEFT + 3.0 * (CHIP_WIDTH + CHIP_GAP) + CHIP_WIDTH / 2.0,
-            6.5,
-        );
+        let first_chip = alpha_at(chip_left(0) + CHIP_WIDTH / 2.0, 6.5);
+        let last_chip = alpha_at(chip_left(3) + CHIP_WIDTH / 2.0, 6.5);
         assert!(
             first_chip > 0.9,
             "30% fills the first chip, got alpha {first_chip:.2}"
