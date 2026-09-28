@@ -105,9 +105,9 @@ mod tests {
     use objc2_foundation::NSInteger;
 
     #[test]
-    fn gold_swatch_resolves_to_dark_gold_in_a_dark_menu() {
+    fn orange_swatch_resolves_to_dark_orange_in_a_dark_menu() {
         // A mark color resolved outside the draw keeps whichever mode was
-        // active then. The swatch must pick gold for the drawing appearance.
+        // active then. The swatch must pick orange for the drawing appearance.
         let rep = unsafe {
             NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
                 NSBitmapImageRep::alloc(),
@@ -145,8 +145,8 @@ mod tests {
             color.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
         }
         assert!(
-            r > 0.8 && g > 0.6 && b < 0.4,
-            "dark menu must draw the dark-mode gold, got rgba({r:.2},{g:.2},{b:.2},{a:.2})"
+            r > 0.8 && (0.45..0.65).contains(&g) && b < 0.4,
+            "dark menu must draw the dark-mode orange, got rgba({r:.2},{g:.2},{b:.2},{a:.2})"
         );
     }
 }

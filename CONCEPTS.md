@@ -77,8 +77,8 @@ can be hidden via Settings toggles.
 
 **Accent**:
 The single hue the whole dropdown inherits, driven by pressure state.
-Under Normal, text uses the adaptive label color and marks use gold. Under
-Warning and Critical, gold marks and accent chrome use system red; Other and
+Under Normal, text uses the adaptive label color and marks use orange. Under
+Warning and Critical, orange marks and accent chrome use system red; Other and
 Free stay neutral gray. The user's
 macOS accent color is deliberately ignored so a bright personal accent does
 not dominate routine telemetry.

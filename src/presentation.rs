@@ -200,17 +200,17 @@ pub(crate) fn color_for_accent(accent: Accent) -> Retained<NSColor> {
 }
 
 /// The hue of every mark: map cells, swatches, the meter, the sparkline, and
-/// the contact strip. Gold under Neutral, red under Warning and Critical.
+/// the contact strip. Orange under Neutral, red under Warning and Critical.
 ///
-/// Call it while drawing. Gold is picked for the current drawing appearance,
+/// Call it while drawing. Orange is picked for the current drawing appearance,
 /// so a color resolved outside a draw keeps whichever mode was active then.
 pub(crate) fn mark_color(accent: Accent) -> Retained<NSColor> {
     match accent_paint(accent) {
         AccentPaint::Label => {
             if drawing_in_dark_mode() {
-                NSColor::colorWithSRGBRed_green_blue_alpha(0.957, 0.706, 0.243, 1.0)
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.961, 0.553, 0.239, 1.0)
             } else {
-                NSColor::colorWithSRGBRed_green_blue_alpha(0.718, 0.467, 0.059, 1.0)
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.702, 0.337, 0.059, 1.0)
             }
         }
         AccentPaint::AlertRed => NSColor::systemRedColor(),
