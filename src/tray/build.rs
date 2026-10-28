@@ -19,8 +19,6 @@ use objc2_app_kit::{NSCellImagePosition, NSMenu, NSMenuItem, NSStatusBar, NSView
 use objc2_foundation::NSString;
 use std::cell::{Cell, RefCell};
 
-/// One enabled command row: title and optional selector/target. No image:
-/// NSMenu draws none.
 fn make_command_item(
     mtm: MainThreadMarker,
     title: &str,
@@ -83,8 +81,6 @@ pub(super) fn build_controller(
 
     let refresh_item = make_command_item(mtm, "Refresh", Some(sel!(refreshNow:)), target);
 
-    // States and titles are set by the first `set_settings_state`, which
-    // runs before the menu can open.
     let auto_refresh_item =
         make_command_item(mtm, "Auto-Refresh", Some(sel!(toggleAutoRefresh:)), target);
     let show_app_usage_item =
