@@ -123,7 +123,7 @@ pub(crate) enum Render {
         gpu: GpuModuleState,
         apps: AppMemorySnapshot,
         /// The trend window for the memory-history sparkline. Recorded every
-        /// real refresh regardless of menu state, so it is warm on open.
+        /// timer tick regardless of menu state, so it is warm on open.
         history: Vec<u64>,
         launch_at_login: LaunchAtLoginStatus,
         auto_refresh_enabled: bool,
@@ -318,12 +318,13 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             }
             Event::Toggle(setting) => self.toggle(setting, &mut out),
             Event::ReopenMenuTimerFired => {
+                // No refresh here: popping the menu up delivers
+                // `MenuWillOpen`, which refreshes.
                 if self
                     .menu_reopen_for
                     .take()
                     .is_some_and(|setting| self.shows(setting))
                 {
-                    self.refresh(true, &mut out);
                     out.push(Effect::PopUpMenu);
                 }
             }
@@ -345,6 +346,9 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 out.push(Effect::PersistSetting(SettingChange::AutoRefresh(
                     self.auto_refresh_enabled,
                 )));
+                // Ticks stop or restart here, so the samples so far no longer
+                // describe the last two minutes.
+                self.trend_tracker.clear();
                 self.sync_auto_refresh_timer(out);
                 self.refresh(true, out);
             }
@@ -408,7 +412,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         match self.samplers.sample_memory() {
             Ok(snapshot) => {
                 self.last_snapshot = Some(snapshot);
-                let trend = self.trend_tracker.record(snapshot.used_bytes);
+                let trend = self.update_trend(manual, snapshot.used_bytes);
                 if self.show_app_usage {
                     let (should_scan, next_ticks) =
                         app_scan_decision(self.menu_open, manual, self.ticks_until_app_refresh);
@@ -435,6 +439,18 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                     launch_at_login: self.launch_at_login_status,
                 }));
             }
+        }
+    }
+
+    /// The trend window holds 5 s timer ticks, so its 25 samples span about
+    /// 125 s. Menu opens, Refresh, and toggles read the trend without adding
+    /// to it; they only seed an empty window while Auto-Refresh is on.
+    fn update_trend(&mut self, manual: bool, used_bytes: u64) -> MemoryTrend {
+        let advances = !manual || self.trend_tracker.is_empty();
+        if self.auto_refresh_enabled && advances {
+            self.trend_tracker.record(used_bytes)
+        } else {
+            self.trend_tracker.classify(used_bytes)
         }
     }
 

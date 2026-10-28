@@ -35,12 +35,24 @@ impl MemoryTrendTracker {
         while self.samples.len() > MEMORY_WINDOW_SAMPLES {
             self.samples.pop_front();
         }
+        self.classify(used_bytes)
+    }
 
-        let Some(oldest) = self.samples.front() else {
-            return MemoryTrend::Stable;
-        };
-        let delta = used_bytes as i64 - *oldest as i64;
-        classify_memory_trend(delta)
+    /// The trend of `used_bytes` against the oldest sample, without adding
+    /// it to the window. Stable while the window is empty.
+    pub fn classify(&self, used_bytes: u64) -> MemoryTrend {
+        match self.samples.front() {
+            Some(&oldest) => classify_memory_trend(used_bytes as i64 - oldest as i64),
+            None => MemoryTrend::Stable,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.samples.clear();
     }
 }
 
