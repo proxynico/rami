@@ -3,7 +3,6 @@ use libc::{
     boolean_t, c_void, host_statistics64, mach_msg_type_number_t, size_t, sysctlbyname,
     vm_page_size, vm_statistics64, HOST_VM_INFO64, HOST_VM_INFO64_COUNT,
 };
-use std::cell::Cell;
 use std::io;
 use std::mem::{size_of, MaybeUninit};
 use std::sync::OnceLock;
@@ -225,8 +224,8 @@ pub struct MemorySampler {
     host_port: libc::mach_port_t,
     total_bytes: u64,
     page_size: u64,
-    cached_swap_used_bytes: Cell<u64>,
-    ticks_until_swap_refresh: Cell<u8>,
+    cached_swap_used_bytes: u64,
+    ticks_until_swap_refresh: u8,
 }
 
 impl MemorySampler {
@@ -241,12 +240,12 @@ impl MemorySampler {
             host_port,
             total_bytes,
             page_size,
-            cached_swap_used_bytes: Cell::new(0),
-            ticks_until_swap_refresh: Cell::new(0),
+            cached_swap_used_bytes: 0,
+            ticks_until_swap_refresh: 0,
         })
     }
 
-    pub fn sample(&self) -> io::Result<MemorySnapshot> {
+    pub fn sample(&mut self) -> io::Result<MemorySnapshot> {
         let mut stats = unsafe { std::mem::zeroed::<vm_statistics64>() };
         let mut count = HOST_VM_INFO64_COUNT;
 
@@ -300,18 +299,14 @@ impl MemorySampler {
         })
     }
 
-    fn swap_used_bytes(&self) -> io::Result<u64> {
-        if self.ticks_until_swap_refresh.get() == 0 {
-            let swap_used_bytes = read_swap_used_bytes()?;
-            self.cached_swap_used_bytes.set(swap_used_bytes);
-            self.ticks_until_swap_refresh
-                .set(Self::SWAP_REFRESH_INTERVAL_TICKS.saturating_sub(1));
-            return Ok(swap_used_bytes);
+    fn swap_used_bytes(&mut self) -> io::Result<u64> {
+        if self.ticks_until_swap_refresh == 0 {
+            self.cached_swap_used_bytes = read_swap_used_bytes()?;
+            self.ticks_until_swap_refresh = Self::SWAP_REFRESH_INTERVAL_TICKS - 1;
+        } else {
+            self.ticks_until_swap_refresh -= 1;
         }
-
-        self.ticks_until_swap_refresh
-            .set(self.ticks_until_swap_refresh.get() - 1);
-        Ok(self.cached_swap_used_bytes.get())
+        Ok(self.cached_swap_used_bytes)
     }
 }
 
