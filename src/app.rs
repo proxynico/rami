@@ -199,34 +199,14 @@ impl AppState {
                 gpu,
                 apps,
                 history,
-                launch_at_login,
-                auto_refresh_enabled,
-            } => self.tray.set_menu_snapshot(
-                snapshot,
-                cpu,
-                gpu,
-                &apps,
-                &history,
-                launch_at_login,
-                auto_refresh_enabled,
-                mtm,
-            ),
+            } => self
+                .tray
+                .set_menu_snapshot(snapshot, cpu, gpu, &apps, &history, mtm),
             Render::SettingsState {
+                settings,
                 launch_at_login,
-                auto_refresh_enabled,
-                show_app_usage,
-                show_cpu,
-                show_gpu,
-            } => self.tray.set_settings_state(
-                launch_at_login,
-                auto_refresh_enabled,
-                show_app_usage,
-                show_cpu,
-                show_gpu,
-            ),
-            Render::Placeholder { launch_at_login } => {
-                self.tray.set_placeholder(launch_at_login, mtm)
-            }
+            } => self.tray.set_settings_state(settings, launch_at_login),
+            Render::Placeholder => self.tray.set_placeholder(mtm),
         }
     }
 

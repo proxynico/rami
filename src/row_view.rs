@@ -133,7 +133,14 @@ impl RowView {
         view
     }
 
+    /// Show `content`, redrawing only when it or the accent changed.
     pub fn update(&self, content: &RowContent, accent: Accent) {
+        {
+            let state = self.ivars().state.borrow();
+            if state.accent == accent && state.content.as_ref() == Some(content) {
+                return;
+            }
+        }
         let spoken: Vec<&str> = [content.detail.as_deref(), content.value.as_deref()]
             .into_iter()
             .flatten()

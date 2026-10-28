@@ -577,7 +577,7 @@ fn memory_sample_failure_renders_the_placeholder() {
     let effects = engine.step(Event::Tick { manual: true });
     assert!(effects
         .iter()
-        .any(|e| matches!(e, Effect::Render(Render::Placeholder { .. }))));
+        .any(|e| matches!(e, Effect::Render(Render::Placeholder))));
     assert_eq!(menu_renders(&effects), 0);
 }
 
