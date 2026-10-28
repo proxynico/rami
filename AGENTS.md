@@ -88,8 +88,9 @@ is an orange hatch, Other is neutral gray, and Free is the empty track.
 drawing.
 
 The accent is semantic. Warning and Critical turn the orange marks and the
-accent chrome, including row labels, system red. Other and Free stay
-neutral gray in every state. The user's macOS accent color is ignored.
+accent chrome, including row labels, system red. Other and Free marks,
+labels, and readings stay neutral gray in every state. The user's macOS
+accent color is ignored.
 
 The normal status gauge stays an untinted template image so macOS
 picks black or white for the menu bar. Warning and Critical draw the
