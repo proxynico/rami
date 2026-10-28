@@ -1,5 +1,5 @@
 use crate::format::Accent;
-use crate::presentation::{color_for_accent, rising_fast_badge_color};
+use crate::presentation::color_for_accent;
 use crate::trend::MemoryTrend;
 use block2::RcBlock;
 use objc2::rc::Retained;
@@ -49,11 +49,7 @@ pub(crate) fn make_status_image(
 ) -> StatusImage {
     let level = f64::from(used_percent.min(100)) / 100.0;
     let rising = badge_for_state(trend) == BadgeKind::RisingFast;
-    // Only the calm, steady glyph is a template: macOS picks black or white
-    // for it from its alpha. The status button's content tint does not
-    // recolor a template image in the menu bar, so Warning, Critical, and
-    // RisingFast draw their own colors, resolved against the appearance here.
-    let tinted = rising || accent != Accent::Neutral;
+    let tinted = accent != Accent::Neutral;
     let handler = RcBlock::new(move |rect: NSRect| -> Bool {
         let scale = rect.size.width / GLYPH_WIDTH;
         let at = |x: f64, y: f64, w: f64, h: f64| {
@@ -115,7 +111,7 @@ pub(crate) fn make_status_image(
         }
 
         if rising {
-            draw_rising_badge(at(GLYPH_WIDTH - 6.2, -0.2, 6.8, 6.8), accent);
+            draw_rising_badge(at(GLYPH_WIDTH - 6.2, -0.2, 6.8, 6.8), &ink);
         }
         Bool::YES
     });
@@ -132,7 +128,7 @@ pub(crate) fn make_status_image(
 
 /// The RisingFast badge in the glyph's top-right corner, cut out of the
 /// stick so the two shapes stay distinct.
-fn draw_rising_badge(rect: NSRect, accent: Accent) {
+fn draw_rising_badge(rect: NSRect, ink: &NSColor) {
     let symbol_name = NSString::from_str("arrow.up.right.circle.fill");
     let desc = NSString::from_str("");
     let Some(badge) =
@@ -140,9 +136,7 @@ fn draw_rising_badge(rect: NSRect, accent: Accent) {
             .and_then(|symbol| {
                 let scale =
                     NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Small);
-                let tint = NSImageSymbolConfiguration::configurationWithHierarchicalColor(
-                    &rising_fast_badge_color(accent),
-                );
+                let tint = NSImageSymbolConfiguration::configurationWithHierarchicalColor(ink);
                 symbol.imageWithSymbolConfiguration(
                     &scale.configurationByApplyingConfiguration(&tint),
                 )

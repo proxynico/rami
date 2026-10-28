@@ -59,6 +59,8 @@ RAMI_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 The dropdown inherits one accent from the current memory pressure: label-color
 text and orange marks under Normal, alert red under Warning (>= 88%) and
 Critical (>= 95%). Other and Free marks, labels, and readings stay neutral gray.
+The status gauge and its rising-memory badge share full-strength ink: a single
+untinted template under Normal and red under Warning/Critical.
 Those elevated states are
 unreachable in normal use without genuinely exhausting memory, so
 `RAMI_FORCE_PRESSURE` overrides the reading:
