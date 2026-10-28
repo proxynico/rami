@@ -53,8 +53,14 @@ unsafe extern "C" {
 pub(crate) struct IoObject(IoObjectId);
 
 impl IoObject {
+    // Not `then_some`: it builds the wrapper eagerly, and dropping the
+    // unused one would release a null handle.
     pub(crate) fn new(id: IoObjectId) -> Option<Self> {
-        (id != 0).then_some(Self(id))
+        if id == 0 {
+            None
+        } else {
+            Some(Self(id))
+        }
     }
 
     pub(crate) fn id(&self) -> IoObjectId {
@@ -71,8 +77,13 @@ impl Drop for IoObject {
 pub(crate) struct CfObject(CfTypeRef);
 
 impl CfObject {
+    // Not `then_some`, for the same reason: CFRelease(NULL) traps.
     pub(crate) fn new(value: CfTypeRef) -> Option<Self> {
-        (!value.is_null()).then_some(Self(value))
+        if value.is_null() {
+            None
+        } else {
+            Some(Self(value))
+        }
     }
 
     pub(crate) fn get(&self) -> CfTypeRef {
@@ -83,5 +94,16 @@ impl CfObject {
 impl Drop for CfObject {
     fn drop(&mut self) {
         unsafe { CFRelease(self.0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn null_handles_build_no_wrapper() {
+        assert!(CfObject::new(std::ptr::null()).is_none());
+        assert!(IoObject::new(0).is_none());
     }
 }
