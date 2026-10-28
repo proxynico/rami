@@ -170,6 +170,10 @@ impl RowView {
             });
         let text_y = (metrics.row_height - 16.0) / 2.0;
         let mut label_x = metrics.content_left();
+        let text_accent = match content.swatch {
+            Some(Swatch::Neutral | Swatch::Empty) => Accent::Neutral,
+            _ => state.accent,
+        };
 
         if let Some(swatch) = content.swatch {
             let swatch_rect = NSRect::new(
@@ -187,7 +191,7 @@ impl RowView {
                 right,
                 text_y,
                 &font,
-                &color_for_accent_alpha(state.accent, 1.0),
+                &color_for_accent_alpha(text_accent, 1.0),
             );
             right -= text_width(value, &font) + VALUE_GAP;
         }
@@ -197,14 +201,14 @@ impl RowView {
                 right,
                 text_y,
                 &font,
-                &color_for_accent_alpha(state.accent, DEMOTED_ALPHA),
+                &color_for_accent_alpha(text_accent, DEMOTED_ALPHA),
             );
             right -= text_width(detail, &font) + VALUE_GAP;
         }
 
         let label_color = match content.strength {
-            RowStrength::Primary => color_for_accent_alpha(state.accent, 1.0),
-            RowStrength::Demoted => color_for_accent_alpha(state.accent, DEMOTED_ALPHA),
+            RowStrength::Primary => color_for_accent_alpha(text_accent, 1.0),
+            RowStrength::Demoted => color_for_accent_alpha(text_accent, DEMOTED_ALPHA),
             RowStrength::Muted => NSColor::secondaryLabelColor(),
         };
         let label = fit_text(&content.label, &font, right - label_x);
