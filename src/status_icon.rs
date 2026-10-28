@@ -269,12 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn rising_fast_icon_created_in_light_mode_stays_visible_in_dark_menu_bars() {
-        // The RisingFast composite carries the Neutral accent (labelColor).
-        // Hierarchical SF Symbol tints bake the creation-time appearance, so
-        // the tinted glyph must be drawn inside the drawing handler — an
-        // icon created under a light appearance must still draw light glyphs
-        // when the menu bar is dark.
+    fn normal_rising_icon_remains_a_template_mask_across_appearances() {
         let light = appearance(unsafe { NSAppearanceNameAqua });
         let dark = appearance(unsafe { NSAppearanceNameDarkAqua });
 
@@ -290,19 +285,19 @@ mod tests {
             light.performAsCurrentDrawingAppearance(&build);
         }
         let status = built.into_inner().expect("status image");
-        assert!(!status.template, "RisingFast icon is a colored composite");
+        assert!(
+            status.template,
+            "Normal rising icons follow menu-bar contrast"
+        );
 
-        // Rasterize under light first — the real-world sequence is "drawn in
-        // a light menu bar, then the appearance flips" — so a cached
-        // light-baked rendering would be reused by the dark draw below.
         let (_, _, _, light_count) = sample_opaque_average(&status.image, &light);
-        assert!(light_count > 0, "composite drew nothing under light");
+        assert!(light_count > 0, "template mask drew nothing under light");
 
         let (r, g, b, count) = sample_opaque_average(&status.image, &dark);
-        assert!(count > 0, "composite drew no opaque pixels");
+        assert!(count > 0, "template mask drew no opaque pixels");
         assert!(
-            r > 0.5 && g > 0.5 && b > 0.5,
-            "dark menu bar must not keep a light-baked black glyph, got avg rgba({r:.2},{g:.2},{b:.2}) over {count} px"
+            r < 0.05 && g < 0.05 && b < 0.05,
+            "template mask must stay untinted, got avg rgb({r:.2},{g:.2},{b:.2}) over {count} px"
         );
     }
 
