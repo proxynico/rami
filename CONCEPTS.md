@@ -79,7 +79,9 @@ can be hidden via Settings toggles.
 The single hue the whole dropdown inherits, driven by pressure state.
 Under Normal, text uses the adaptive label color and marks use orange. Under
 Warning and Critical, orange marks and accent chrome use system red; Other and
-Free marks, labels, and readings stay neutral gray. The user's
+Free marks, labels, and readings stay neutral gray. The status gauge and its
+rising-memory badge share full-strength ink; under Normal they form one template
+image so macOS controls menu-bar contrast. The user's
 macOS accent color is deliberately ignored so a bright personal accent does
 not dominate routine telemetry.
 
@@ -112,5 +114,6 @@ so macOS renders it black or white for the current menu bar; Warning and
 Critical pressure draw it red; severity between them is carried
 numerically (pressure meter %, tooltip, VoiceOver), not by hue. RisingFast is
 trend-driven at any pressure. When memory is climbing fast, the icon adds an
-upward badge composite. There is exactly one status item regardless of how
-many modules the dropdown shows.
+upward badge with the stick's full-strength ink. Under Normal the whole image
+remains a template, so the badge follows menu-bar contrast too. There is exactly
+one status item regardless of how many modules the dropdown shows.

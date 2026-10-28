@@ -239,10 +239,6 @@ pub(crate) fn color_for_accent_alpha(accent: Accent, alpha: f64) -> Retained<NSC
     }
 }
 
-pub(crate) fn rising_fast_badge_color(accent: Accent) -> Retained<NSColor> {
-    color_for_accent_alpha(accent, 0.65)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{color_for_accent_alpha, MenuMetrics};

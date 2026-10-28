@@ -1,12 +1,13 @@
 use crate::format::Accent;
-use crate::presentation::{color_for_accent, rising_fast_badge_color};
+use crate::presentation::color_for_accent;
 use crate::trend::MemoryTrend;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::Bool;
+use objc2::Message;
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSCompositingOperation, NSGraphicsContext, NSImage,
-    NSImageSymbolConfiguration, NSImageSymbolScale,
+    NSImageSymbolConfiguration, NSImageSymbolScale, NSRectFillUsingOperation,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -49,11 +50,7 @@ pub(crate) fn make_status_image(
 ) -> StatusImage {
     let level = f64::from(used_percent.min(100)) / 100.0;
     let rising = badge_for_state(trend) == BadgeKind::RisingFast;
-    // Only the calm, steady glyph is a template: macOS picks black or white
-    // for it from its alpha. The status button's content tint does not
-    // recolor a template image in the menu bar, so Warning, Critical, and
-    // RisingFast draw their own colors, resolved against the appearance here.
-    let tinted = rising || accent != Accent::Neutral;
+    let tinted = accent != Accent::Neutral;
     let handler = RcBlock::new(move |rect: NSRect| -> Bool {
         let scale = rect.size.width / GLYPH_WIDTH;
         let at = |x: f64, y: f64, w: f64, h: f64| {
@@ -115,7 +112,7 @@ pub(crate) fn make_status_image(
         }
 
         if rising {
-            draw_rising_badge(at(GLYPH_WIDTH - 6.2, -0.2, 6.8, 6.8), accent);
+            draw_rising_badge(at(GLYPH_WIDTH - 6.2, -0.2, 6.8, 6.8), &ink);
         }
         Bool::YES
     });
@@ -132,7 +129,7 @@ pub(crate) fn make_status_image(
 
 /// The RisingFast badge in the glyph's top-right corner, cut out of the
 /// stick so the two shapes stay distinct.
-fn draw_rising_badge(rect: NSRect, accent: Accent) {
+fn draw_rising_badge(rect: NSRect, ink: &NSColor) {
     let symbol_name = NSString::from_str("arrow.up.right.circle.fill");
     let desc = NSString::from_str("");
     let Some(badge) =
@@ -140,16 +137,25 @@ fn draw_rising_badge(rect: NSRect, accent: Accent) {
             .and_then(|symbol| {
                 let scale =
                     NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Small);
-                let tint = NSImageSymbolConfiguration::configurationWithHierarchicalColor(
-                    &rising_fast_badge_color(accent),
-                );
-                symbol.imageWithSymbolConfiguration(
-                    &scale.configurationByApplyingConfiguration(&tint),
-                )
+                symbol.imageWithSymbolConfiguration(&scale)
             })
     else {
         return;
     };
+    let size = rect.size;
+    let ink = ink.retain();
+    let handler = RcBlock::new(move |bounds: NSRect| -> Bool {
+        badge.drawInRect_fromRect_operation_fraction(
+            bounds,
+            NSRect::ZERO,
+            NSCompositingOperation::SourceOver,
+            1.0,
+        );
+        ink.setFill();
+        NSRectFillUsingOperation(bounds, NSCompositingOperation::SourceIn);
+        Bool::YES
+    });
+    let badge = NSImage::imageWithSize_flipped_drawingHandler(size, false, &handler);
     let cutout = NSRect::new(
         NSPoint::new(rect.origin.x - 0.8, rect.origin.y - 0.8),
         NSSize::new(rect.size.width + 1.6, rect.size.height + 1.6),
@@ -269,12 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn rising_fast_icon_created_in_light_mode_stays_visible_in_dark_menu_bars() {
-        // The RisingFast composite carries the Neutral accent (labelColor).
-        // Hierarchical SF Symbol tints bake the creation-time appearance, so
-        // the tinted glyph must be drawn inside the drawing handler — an
-        // icon created under a light appearance must still draw light glyphs
-        // when the menu bar is dark.
+    fn normal_rising_icon_remains_a_template_mask_across_appearances() {
         let light = appearance(unsafe { NSAppearanceNameAqua });
         let dark = appearance(unsafe { NSAppearanceNameDarkAqua });
 
@@ -290,19 +291,19 @@ mod tests {
             light.performAsCurrentDrawingAppearance(&build);
         }
         let status = built.into_inner().expect("status image");
-        assert!(!status.template, "RisingFast icon is a colored composite");
+        assert!(
+            status.template,
+            "Normal rising icons follow menu-bar contrast"
+        );
 
-        // Rasterize under light first — the real-world sequence is "drawn in
-        // a light menu bar, then the appearance flips" — so a cached
-        // light-baked rendering would be reused by the dark draw below.
         let (_, _, _, light_count) = sample_opaque_average(&status.image, &light);
-        assert!(light_count > 0, "composite drew nothing under light");
+        assert!(light_count > 0, "template mask drew nothing under light");
 
         let (r, g, b, count) = sample_opaque_average(&status.image, &dark);
-        assert!(count > 0, "composite drew no opaque pixels");
+        assert!(count > 0, "template mask drew no opaque pixels");
         assert!(
-            r > 0.5 && g > 0.5 && b > 0.5,
-            "dark menu bar must not keep a light-baked black glyph, got avg rgba({r:.2},{g:.2},{b:.2}) over {count} px"
+            r < 0.05 && g < 0.05 && b < 0.05,
+            "template mask must stay untinted, got avg rgb({r:.2},{g:.2},{b:.2}) over {count} px"
         );
     }
 
@@ -359,6 +360,22 @@ mod tests {
         assert!(
             (0.1..0.5).contains(&last_chip),
             "30% leaves the last chip at the empty step, got alpha {last_chip:.2}"
+        );
+
+        let rising = make_status_image(30, MemoryTrend::RisingFast, Accent::Neutral);
+        NSGraphicsContext::saveGraphicsState_class();
+        NSGraphicsContext::setCurrentContext(Some(&ctx));
+        rising.image.drawInRect_fromRect_operation_fraction(
+            NSRect::new(NSPoint::ZERO, NSSize::new(width, height)),
+            NSRect::ZERO,
+            NSCompositingOperation::Copy,
+            1.0,
+        );
+        NSGraphicsContext::restoreGraphicsState_class();
+        let badge_disc = alpha_at(17.8, 1.8);
+        assert!(
+            badge_disc > 0.9,
+            "rising badge disc must use full-strength ink, got alpha {badge_disc:.2}"
         );
     }
 }

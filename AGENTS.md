@@ -92,9 +92,10 @@ accent chrome, including row labels, system red. Other and Free marks,
 labels, and readings stay neutral gray in every state. The user's macOS
 accent color is ignored.
 
-The normal status gauge stays an untinted template image so macOS
-picks black or white for the menu bar. Warning and Critical draw the
-gauge in red; the button's content tint does not recolor a template image
+The normal status gauge, including its rising-memory badge, stays an
+untinted template image so macOS picks black or white for the menu bar.
+The badge uses the same full-strength ink as the stick. Warning and Critical
+draw the gauge in red; the button's content tint does not recolor a template image
 in the menu bar. Severity between those two states is numeric (pressure
 meter %, tooltip, VoiceOver), not a second hue. RisingFast is
 trend-driven at any pressure. When memory climbs fast, the icon adds
