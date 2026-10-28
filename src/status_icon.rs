@@ -349,5 +349,21 @@ mod tests {
             (0.1..0.5).contains(&last_chip),
             "30% leaves the last chip at the empty step, got alpha {last_chip:.2}"
         );
+
+        let rising = make_status_image(30, MemoryTrend::RisingFast, Accent::Neutral);
+        NSGraphicsContext::saveGraphicsState_class();
+        NSGraphicsContext::setCurrentContext(Some(&ctx));
+        rising.image.drawInRect_fromRect_operation_fraction(
+            NSRect::new(NSPoint::ZERO, NSSize::new(width, height)),
+            NSRect::ZERO,
+            NSCompositingOperation::Copy,
+            1.0,
+        );
+        NSGraphicsContext::restoreGraphicsState_class();
+        let badge_disc = alpha_at(17.8, 1.8);
+        assert!(
+            badge_disc > 0.9,
+            "rising badge disc must use full-strength ink, got alpha {badge_disc:.2}"
+        );
     }
 }
