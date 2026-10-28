@@ -181,7 +181,7 @@ cmd_restore_defaults() {
   local existed
   existed="$(tr -d '[:space:]' <"$DEFAULTS_EXISTED_FILE")"
   if [ "$existed" = "yes" ] && [ -f "$DEFAULTS_FILE" ]; then
-    plutil -lint "$DEFAULTS_FILE" >/dev/null || return
+    defaults import "$DEFAULTS_DOMAIN" "$DEFAULTS_FILE" || return
     defaults delete "$DEFAULTS_DOMAIN" 2>/dev/null || true
     defaults import "$DEFAULTS_DOMAIN" "$DEFAULTS_FILE"
   elif [ "$existed" = "no" ]; then
