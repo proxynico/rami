@@ -431,6 +431,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             }
             Err(err) => {
                 eprintln!("memory sample failed: {err}");
+                self.last_snapshot = None;
                 out.push(Effect::Render(Render::Placeholder));
             }
         }
