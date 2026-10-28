@@ -254,6 +254,16 @@ fn scheduled_drains(effects: &[Effect]) -> Vec<Duration> {
         .collect()
 }
 
+fn menu_history(effects: &[Effect]) -> Vec<u64> {
+    effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Render(Render::Menu { history, .. }) => Some(history.clone()),
+            _ => None,
+        })
+        .expect("a menu render")
+}
+
 fn menu_renders(effects: &[Effect]) -> usize {
     effects
         .iter()
@@ -492,6 +502,66 @@ fn app_deltas_use_the_previous_scan_only_while_fresh() {
     )));
 }
 
+// --- trend window ------------------------------------------------------
+
+#[test]
+fn only_timer_ticks_grow_the_history_window() {
+    let (mut engine, _, _) = engine_on();
+    engine.step(Event::Startup); // seeds the window
+    engine.step(Event::MenuWillOpen);
+    engine.step(Event::Toggle(Setting::ShowGpu));
+    engine.step(Event::ReopenMenuTimerFired);
+    let effects = engine.step(Event::Tick { manual: true });
+    assert_eq!(
+        menu_history(&effects).len(),
+        1,
+        "a menu open, toggle, or Refresh shrank the two-minute window"
+    );
+
+    let effects = engine.step(Event::Tick { manual: false });
+    assert_eq!(menu_history(&effects).len(), 2);
+}
+
+#[test]
+fn manual_refreshes_read_the_trend_without_recording_it() {
+    let (samplers, _, used_bytes) = FakeSamplers::healthy();
+    let mut engine = RefreshEngine::new(
+        samplers,
+        FakeScans::default(),
+        FakeLaunch,
+        Settings::default(),
+    );
+    engine.step(Event::Startup); // 1 GB seeds the window
+
+    used_bytes.set(2_100_000_000);
+    let effects = engine.step(Event::Tick { manual: true });
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::Render(Render::Gauge {
+            trend: MemoryTrend::RisingFast,
+            ..
+        })
+    )));
+}
+
+#[test]
+fn toggling_auto_refresh_restarts_the_history() {
+    let (mut engine, _, _) = engine_on();
+    engine.step(Event::Startup);
+    engine.step(Event::MenuWillOpen);
+    for _ in 0..3 {
+        engine.step(Event::Tick { manual: false });
+    }
+
+    let effects = engine.step(Event::Toggle(Setting::AutoRefresh)); // off
+    assert!(menu_history(&effects).is_empty());
+    let effects = engine.step(Event::Tick { manual: true });
+    assert!(menu_history(&effects).is_empty(), "no ticks, no history");
+
+    let effects = engine.step(Event::Toggle(Setting::AutoRefresh)); // on
+    assert_eq!(menu_history(&effects).len(), 1);
+}
+
 // --- error paths -----------------------------------------------------
 
 #[test]
@@ -536,8 +606,9 @@ fn enabling_cpu_or_gpu_reopens_the_menu_once() {
     for setting in [Setting::ShowCpu, Setting::ShowGpu] {
         let effects = engine.step(Event::Toggle(setting));
         assert_eq!(effects.last(), Some(&Effect::ScheduleMenuReopen));
+        // The popped-up menu refreshes itself through `MenuWillOpen`.
         let effects = engine.step(Event::ReopenMenuTimerFired);
-        assert_eq!(effects.last(), Some(&Effect::PopUpMenu));
+        assert_eq!(effects, vec![Effect::PopUpMenu]);
         assert!(engine.step(Event::ReopenMenuTimerFired).is_empty());
     }
 }
