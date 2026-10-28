@@ -1,3 +1,4 @@
+use crate::engine::REFRESH_TICK_SECONDS;
 use crate::model::{
     classify_pressure, CpuModuleState, GpuModuleState, MemoryPressure, MemorySnapshot,
     SystemSnapshot,
@@ -57,13 +58,20 @@ pub fn share_of_total(bytes: u64, total_bytes: u64) -> u8 {
     percent.min(100) as u8
 }
 
-/// Caption for the memory-history row: the window and its used-percent
-/// range, e.g. ("2 min", "71–75% used"). `None` while fewer than two samples
-/// are available.
+/// Caption for the memory-history row: the span the samples cover and their
+/// used-percent range, e.g. ("2 min", "71–75% used"). Samples are timer
+/// ticks, so a window still filling after launch or a resume reads in
+/// seconds. `None` while fewer than two samples are available.
 pub fn history_caption(samples: &[u64], total_bytes: u64) -> Option<(String, String)> {
     if samples.len() < 2 {
         return None;
     }
+    let seconds = (samples.len() - 1) as u64 * REFRESH_TICK_SECONDS as u64;
+    let window = if seconds < 120 {
+        format!("{seconds} s")
+    } else {
+        format!("{} min", seconds / 60)
+    };
     let low = share_of_total(*samples.iter().min()?, total_bytes);
     let high = share_of_total(*samples.iter().max()?, total_bytes);
     let range = if low == high {
@@ -71,7 +79,7 @@ pub fn history_caption(samples: &[u64], total_bytes: u64) -> Option<(String, Str
     } else {
         format!("{low}–{high}% used")
     };
-    Some(("2 min".to_string(), range))
+    Some((window, range))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -472,15 +480,19 @@ mod tests {
     }
 
     #[test]
-    fn history_caption_reports_the_window_and_used_range() {
+    fn history_caption_reports_the_span_and_used_range() {
         assert_eq!(history_caption(&[], SIXTEEN_GIB), None);
         assert_eq!(history_caption(&[ONE_GIB_BYTES], SIXTEEN_GIB), None);
         assert_eq!(
             history_caption(&[12 * ONE_GIB_BYTES, 8 * ONE_GIB_BYTES], SIXTEEN_GIB),
-            Some(("2 min".into(), "50–75% used".into()))
+            Some(("5 s".into(), "50–75% used".into()))
         );
         assert_eq!(
-            history_caption(&[8 * ONE_GIB_BYTES, 8 * ONE_GIB_BYTES], SIXTEEN_GIB),
+            history_caption(&[8 * ONE_GIB_BYTES; 24], SIXTEEN_GIB),
+            Some(("115 s".into(), "50% used".into()))
+        );
+        assert_eq!(
+            history_caption(&[8 * ONE_GIB_BYTES; 25], SIXTEEN_GIB),
             Some(("2 min".into(), "50% used".into()))
         );
     }
