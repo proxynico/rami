@@ -23,8 +23,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{msg_send, MainThreadMarker};
 use objc2_app_kit::{
-    NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuDelegate, NSMenuItem,
-    NSStatusItem,
+    NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusItem,
 };
 use objc2_foundation::NSString;
 use std::cell::{Cell, RefCell};
@@ -57,8 +56,6 @@ pub struct TrayController {
     show_cpu_item: Retained<NSMenuItem>,
     show_gpu_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
-    pause_icon: Option<Retained<NSImage>>,
-    play_icon: Option<Retained<NSImage>>,
     shape: Cell<Option<MenuShape>>,
     last_gauge: Cell<Option<(u8, MemoryTrend, MemoryPressure)>>,
     last_tooltip: RefCell<String>,
@@ -128,12 +125,6 @@ impl TrayController {
             return;
         }
         set_checked(&self.auto_refresh_item, settings.auto_refresh_enabled);
-        let icon = if settings.auto_refresh_enabled {
-            &self.pause_icon
-        } else {
-            &self.play_icon
-        };
-        self.auto_refresh_item.setImage(icon.as_deref());
         // "Show Apps" follows the macOS convention: checked when the app list is visible.
         set_checked(&self.show_app_usage_item, settings.show_app_usage);
         set_checked(&self.show_cpu_item, settings.show_cpu);
