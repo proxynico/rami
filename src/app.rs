@@ -428,7 +428,6 @@ pub struct App {
     app: Retained<NSApplication>,
     _lock: AppLock,
     _state: Rc<AppState>,
-    _refresh_target: Retained<AnyObject>,
 }
 
 impl App {
@@ -442,8 +441,8 @@ impl App {
         let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         let refresh_target = RefreshTarget::new(mtm);
         let tray = TrayController::new(mtm, refresh_target.clone().into());
-        // NSMenu holds its delegate weakly; `App` retains the target for the
-        // app lifetime, so the delegate stays valid.
+        // NSMenu holds its delegate weakly; `AppState` retains the target for
+        // the app lifetime, so the delegate stays valid.
         tray.set_menu_delegate(ProtocolObject::from_ref(&*refresh_target));
         let refresh_target: Retained<AnyObject> = refresh_target.into();
         let settings_store = SettingsStore::new();
@@ -462,7 +461,7 @@ impl App {
             engine: RefCell::new(engine),
             tray,
             settings: settings_store,
-            refresh_target: refresh_target.clone(),
+            refresh_target,
             menu_open_drain_timer: RefCell::new(None),
             refresh_timer: RefCell::new(None),
         });
@@ -474,7 +473,6 @@ impl App {
             app,
             _lock: lock,
             _state: state,
-            _refresh_target: refresh_target,
         }))
     }
 

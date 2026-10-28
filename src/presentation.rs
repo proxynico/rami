@@ -179,23 +179,12 @@ impl HistoryLayout {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AccentPaint {
-    Label,
-    AlertRed,
-}
-
-fn accent_paint(accent: Accent) -> AccentPaint {
-    match accent {
-        Accent::Neutral => AccentPaint::Label,
-        Accent::Warning | Accent::Critical => AccentPaint::AlertRed,
-    }
-}
-
+/// Warning and Critical share one alert red; severity between them is
+/// numeric, not a second hue.
 pub(crate) fn color_for_accent(accent: Accent) -> Retained<NSColor> {
-    match accent_paint(accent) {
-        AccentPaint::Label => NSColor::labelColor(),
-        AccentPaint::AlertRed => NSColor::systemRedColor(),
+    match accent {
+        Accent::Neutral => NSColor::labelColor(),
+        Accent::Warning | Accent::Critical => NSColor::systemRedColor(),
     }
 }
 
@@ -205,15 +194,15 @@ pub(crate) fn color_for_accent(accent: Accent) -> Retained<NSColor> {
 /// Call it while drawing. Orange is picked for the current drawing appearance,
 /// so a color resolved outside a draw keeps whichever mode was active then.
 pub(crate) fn mark_color(accent: Accent) -> Retained<NSColor> {
-    match accent_paint(accent) {
-        AccentPaint::Label => {
+    match accent {
+        Accent::Neutral => {
             if drawing_in_dark_mode() {
                 NSColor::colorWithSRGBRed_green_blue_alpha(0.961, 0.553, 0.239, 1.0)
             } else {
                 NSColor::colorWithSRGBRed_green_blue_alpha(0.702, 0.337, 0.059, 1.0)
             }
         }
-        AccentPaint::AlertRed => NSColor::systemRedColor(),
+        Accent::Warning | Accent::Critical => NSColor::systemRedColor(),
     }
 }
 
@@ -256,7 +245,7 @@ pub(crate) fn rising_fast_badge_color(accent: Accent) -> Retained<NSColor> {
 
 #[cfg(test)]
 mod tests {
-    use super::{accent_paint, color_for_accent_alpha, AccentPaint, MenuMetrics};
+    use super::{color_for_accent_alpha, MenuMetrics};
     use crate::format::Accent;
     use block2::RcBlock;
     use objc2::rc::Retained;
@@ -370,33 +359,5 @@ mod tests {
         assert_eq!(grid, m.content_right() - m.content_left());
         assert!(map.board_bottom() + map.strip_height <= map.caption_y);
         assert!(map.caption_y + 13.0 <= map.view_height);
-    }
-
-    #[test]
-    fn warning_and_critical_share_the_alert_red_accent_path() {
-        assert_eq!(
-            accent_paint(crate::format::Accent::Warning),
-            AccentPaint::AlertRed
-        );
-        assert_eq!(
-            accent_paint(crate::format::Accent::Critical),
-            AccentPaint::AlertRed
-        );
-    }
-
-    #[test]
-    fn accent_paint_warning_matches_critical_alert_red() {
-        assert_eq!(
-            accent_paint(crate::format::Accent::Warning),
-            AccentPaint::AlertRed
-        );
-        assert_eq!(
-            accent_paint(crate::format::Accent::Critical),
-            AccentPaint::AlertRed
-        );
-        assert_eq!(
-            accent_paint(crate::format::Accent::Neutral),
-            AccentPaint::Label
-        );
     }
 }

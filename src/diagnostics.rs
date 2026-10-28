@@ -7,7 +7,7 @@ use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 pub(crate) struct DiagnosticReportInput<'a> {
     pub(crate) version: String,
     pub(crate) bundle_identifier: String,
-    pub(crate) bundle_path: Option<String>,
+    pub(crate) bundle_path: String,
     pub(crate) process_path: String,
     pub(crate) architecture: String,
     pub(crate) launch_at_login: LaunchAtLoginStatus,
@@ -31,7 +31,7 @@ pub(crate) fn current_report_input<'a>(
     DiagnosticReportInput {
         version: env!("CARGO_PKG_VERSION").to_string(),
         bundle_identifier: BUNDLE_IDENTIFIER.to_string(),
-        bundle_path: Some(bundle_path),
+        bundle_path,
         process_path,
         architecture: std::env::consts::ARCH.to_string(),
         launch_at_login,
@@ -45,10 +45,7 @@ pub(crate) fn build_diagnostic_report(input: DiagnosticReportInput<'_>) -> Strin
     out.push_str("rami diagnostics\n");
     out.push_str(&format!("Version: {}\n", input.version));
     out.push_str(&format!("Bundle ID: {}\n", input.bundle_identifier));
-    out.push_str(&format!(
-        "Bundle path: {}\n",
-        input.bundle_path.as_deref().unwrap_or("<unknown>")
-    ));
+    out.push_str(&format!("Bundle path: {}\n", input.bundle_path));
     out.push_str(&format!("Process path: {}\n", input.process_path));
     out.push_str(&format!("Architecture: {}\n", input.architecture));
     out.push_str(&format!(
@@ -151,7 +148,7 @@ mod tests {
         let report = build_diagnostic_report(DiagnosticReportInput {
             version: "0.1.0".to_string(),
             bundle_identifier: "com.nicomontero.rami".to_string(),
-            bundle_path: Some("/Applications/rami.app".to_string()),
+            bundle_path: "/Applications/rami.app".to_string(),
             process_path: "/Applications/rami.app/Contents/MacOS/rami".to_string(),
             architecture: "aarch64".to_string(),
             launch_at_login: LaunchAtLoginStatus::Enabled,
