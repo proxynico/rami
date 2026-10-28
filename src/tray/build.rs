@@ -15,21 +15,15 @@ use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{msg_send, sel, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{
-    NSCellImagePosition, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale, NSMenu,
-    NSMenuItem, NSStatusBar, NSView,
-};
+use objc2_app_kit::{NSCellImagePosition, NSMenu, NSMenuItem, NSStatusBar, NSView};
 use objc2_foundation::NSString;
 use std::cell::{Cell, RefCell};
 
-/// One enabled command row: title, optional selector/target, optional
-/// SF Symbol icon.
 fn make_command_item(
     mtm: MainThreadMarker,
     title: &str,
     action: Option<Sel>,
     target: Option<&AnyObject>,
-    icon: Option<&str>,
 ) -> Retained<NSMenuItem> {
     let item = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -45,26 +39,12 @@ fn make_command_item(
         }
     }
     item.setEnabled(true);
-    if let Some(image) = icon.and_then(make_action_icon) {
-        item.setImage(Some(&image));
-    }
     item
-}
-
-fn make_action_icon(name: &str) -> Option<Retained<NSImage>> {
-    let base = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        &NSString::from_str(name),
-        Some(&NSString::from_str("")),
-    )?;
-    let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Small);
-    let image = base.imageWithSymbolConfiguration(&config)?;
-    image.setTemplate(true);
-    Some(image)
 }
 
 /// An untitled, enabled item that shows `view` instead of a title.
 fn make_view_item(mtm: MainThreadMarker, view: &NSView) -> Retained<NSMenuItem> {
-    let item = make_command_item(mtm, "", None, None, None);
+    let item = make_command_item(mtm, "", None, None);
     unsafe {
         let _: () = msg_send![&item, setView: view];
     }
@@ -99,61 +79,37 @@ pub(super) fn build_controller(
     let pressure_view = PressureView::new(mtm, metrics);
     let history_view = MemoryHistoryView::new(mtm, metrics);
 
-    let refresh_item = make_command_item(
-        mtm,
-        "Refresh",
-        Some(sel!(refreshNow:)),
-        target,
-        Some("arrow.clockwise"),
-    );
+    let refresh_item = make_command_item(mtm, "Refresh", Some(sel!(refreshNow:)), target);
 
-    // States, titles, and the pause/play icon are set by the first
-    // `set_settings_state`, which runs before the menu can open.
-    let auto_refresh_item = make_command_item(
-        mtm,
-        "Auto-Refresh",
-        Some(sel!(toggleAutoRefresh:)),
-        target,
-        None,
-    );
-    let show_app_usage_item = make_command_item(
-        mtm,
-        "Show Apps",
-        Some(sel!(toggleShowAppUsage:)),
-        target,
-        None,
-    );
-    let show_cpu_item =
-        make_command_item(mtm, "Show CPU", Some(sel!(toggleShowCpu:)), target, None);
-    let show_gpu_item =
-        make_command_item(mtm, "Show GPU", Some(sel!(toggleShowGpu:)), target, None);
+    let auto_refresh_item =
+        make_command_item(mtm, "Auto-Refresh", Some(sel!(toggleAutoRefresh:)), target);
+    let show_app_usage_item =
+        make_command_item(mtm, "Show Apps", Some(sel!(toggleShowAppUsage:)), target);
+    let show_cpu_item = make_command_item(mtm, "Show CPU", Some(sel!(toggleShowCpu:)), target);
+    let show_gpu_item = make_command_item(mtm, "Show GPU", Some(sel!(toggleShowGpu:)), target);
     let launch_at_login_item = make_command_item(
         mtm,
         "Launch at Login",
         Some(sel!(toggleLaunchAtLogin:)),
         target,
-        None,
     );
     let diagnostics_item = make_command_item(
         mtm,
         "Copy Diagnostics",
         Some(sel!(copyDiagnostics:)),
         target,
-        Some("doc.on.doc"),
     );
     let check_updates_item = make_command_item(
         mtm,
         "Check for Updates",
         Some(sel!(checkForUpdates:)),
         target,
-        Some("arrow.up.circle"),
     );
     let about_item = make_command_item(
         mtm,
         &format!("rami {}", env!("CARGO_PKG_VERSION")),
         None,
         None,
-        Some("info.circle"),
     );
     about_item.setEnabled(false);
 
@@ -174,10 +130,10 @@ pub(super) fn build_controller(
     settings_menu.addItem(&check_updates_item);
     settings_menu.addItem(&about_item);
 
-    let settings_item = make_command_item(mtm, "Settings", None, None, Some("gearshape"));
+    let settings_item = make_command_item(mtm, "Settings", None, None);
     settings_item.setSubmenu(Some(&settings_menu));
 
-    let quit_item = make_command_item(mtm, "Quit", Some(sel!(terminate:)), None, None);
+    let quit_item = make_command_item(mtm, "Quit", Some(sel!(terminate:)), None);
 
     status_item.setMenu(Some(&menu));
     if let Some(button) = status_item.button(mtm) {
@@ -212,8 +168,6 @@ pub(super) fn build_controller(
         show_cpu_item,
         show_gpu_item,
         launch_at_login_item,
-        pause_icon: make_action_icon("pause.fill"),
-        play_icon: make_action_icon("play.fill"),
         shape: Cell::new(None),
         last_gauge: Cell::new(None),
         last_tooltip: RefCell::new(String::new()),

@@ -8,7 +8,7 @@ Settings in the dropdown hides or shows CPU, GPU, and the app list, and pauses A
 - `settings-cpu` shows or hides the CPU module.
 - `settings-gpu` shows or hides the GPU module. GPU stays hidden if the IORegistry read fails even when the toggle is on.
 - `settings-apps` shows or hides the top-apps rows under Memory.
-- `settings-auto-refresh` checks or unchecks Auto-Refresh (pause/play icon follows the state).
+- `settings-auto-refresh` checks or unchecks Auto-Refresh.
 
 ## How to get to it (user POV)
 
