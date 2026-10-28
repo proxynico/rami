@@ -73,7 +73,14 @@ impl MemoryMapView {
         view
     }
 
+    /// Show `map`, redrawing only when it or the accent changed.
     pub fn update(&self, map: &MemoryMapDisplay, accent: Accent) {
+        {
+            let state = self.ivars().state.borrow();
+            if state.accent == accent && state.map.as_ref() == Some(map) {
+                return;
+            }
+        }
         let value = NSString::from_str(&format!(
             "{} percent, {} used, {}",
             map.used_percent, map.used_of_total, map.cell_caption

@@ -1,25 +1,22 @@
 mod build;
 mod layout;
-mod render;
-mod style;
 
-use self::layout::{menu_shape_for, settings_menu_projection, AppShape, MenuShape};
-use self::render::make_stat_item;
+use self::layout::{menu_shape_for, menu_slots, MenuShape, Slot};
 use crate::format::{
-    dropdown_model_with_sections, gauge_accessibility_label, gauge_tooltip,
-    placeholder_dropdown_model, Accent, AppSectionDisplay, DropdownModel, LegendRow,
-    MemoryMapDisplay, ModuleDisplay, StatRow,
+    dropdown_model, gauge_accessibility_label, gauge_tooltip, Accent, AppSectionDisplay,
+    DropdownModel,
 };
 use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_map_view::MemoryMapView;
-use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
-use crate::presentation::MenuMetrics;
+use crate::model::{
+    classify_pressure, CpuModuleState, GpuModuleState, MemoryPressure, MemorySnapshot,
+    SystemSnapshot,
+};
 use crate::pressure_view::PressureView;
 use crate::process_memory::AppMemorySnapshot;
 use crate::row_view::{RowContent, RowView};
-#[cfg(test)]
-use crate::status_icon::{badge_for_state, BadgeKind};
+use crate::settings::Settings;
 use crate::status_icon::{make_status_image, StatusImage};
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
@@ -32,6 +29,9 @@ use objc2_app_kit::{
 use objc2_foundation::NSString;
 use std::cell::{Cell, RefCell};
 
+/// The status item and its dropdown. Data views skip redraws when their
+/// content is unchanged, so this only remembers what AppKit would otherwise
+/// redo: the menu's shape, the gauge, the tooltip, and the Settings states.
 pub struct TrayController {
     status_item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
@@ -50,62 +50,25 @@ pub struct TrayController {
     cpu_item: RowItem,
     gpu_item: RowItem,
     refresh_item: Retained<NSMenuItem>,
+    settings_item: Retained<NSMenuItem>,
+    quit_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
     show_app_usage_item: Retained<NSMenuItem>,
     show_cpu_item: Retained<NSMenuItem>,
     show_gpu_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
-    _diagnostics_item: Retained<NSMenuItem>,
-    _about_item: Retained<NSMenuItem>,
-    _check_updates_item: Retained<NSMenuItem>,
-    settings_item: Retained<NSMenuItem>,
-    quit_item: Retained<NSMenuItem>,
     pause_icon: Option<Retained<NSImage>>,
     play_icon: Option<Retained<NSImage>>,
-    last_gauge_percent: Cell<Option<u8>>,
-    last_trend: Cell<MemoryTrend>,
-    last_pressure: Cell<MemoryPressure>,
-    shape: Cell<MenuShape>,
-    last_map: RefCell<Option<MemoryMapDisplay>>,
-    last_pressure_percent: Cell<Option<u8>>,
-    last_history: RefCell<Option<Vec<u64>>>,
-    last_breakdown: RefCell<Option<Vec<LegendRow>>>,
-    last_accent: Cell<Accent>,
-    last_swap_row: RefCell<Option<StatRow>>,
-    last_app_section: RefCell<Option<AppSectionDisplay>>,
-    last_cpu_row: RefCell<Option<StatRow>>,
-    last_gpu_row: RefCell<Option<StatRow>>,
-    last_auto_refresh_enabled: Cell<bool>,
+    shape: Cell<Option<MenuShape>>,
+    last_gauge: Cell<Option<(u8, MemoryTrend, MemoryPressure)>>,
     last_tooltip: RefCell<String>,
-    last_launch_title: RefCell<String>,
-    last_launch_checked: Cell<bool>,
-    last_launch_enabled: Cell<bool>,
-    last_show_app_usage: Cell<bool>,
-    last_show_cpu: Cell<bool>,
-    last_show_gpu: Cell<bool>,
+    last_settings: Cell<Option<(Settings, LaunchAtLoginStatus)>>,
 }
 
 /// A data row: a menu item carrying a `RowView`.
 struct RowItem {
     item: Retained<NSMenuItem>,
     view: Retained<RowView>,
-}
-
-impl RowItem {
-    fn new(mtm: MainThreadMarker, metrics: MenuMetrics) -> Self {
-        let item = make_stat_item(mtm);
-        let view = RowView::new(mtm, metrics);
-        unsafe {
-            let _: () = msg_send![&item, setView: &*view];
-        }
-        Self { item, view }
-    }
-
-    fn muted(mtm: MainThreadMarker, metrics: MenuMetrics, label: &str) -> Self {
-        let row = Self::new(mtm, metrics);
-        row.view.update(&RowContent::muted(label), Accent::Neutral);
-        row
-    }
 }
 
 impl TrayController {
@@ -136,32 +99,21 @@ impl TrayController {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn set_menu_snapshot(
         &self,
         snapshot: MemorySnapshot,
-        cpu: crate::model::CpuModuleState,
-        gpu: crate::model::GpuModuleState,
+        cpu: CpuModuleState,
+        gpu: GpuModuleState,
         apps: &AppMemorySnapshot,
         history: &[u64],
-        launch_at_login_status: LaunchAtLoginStatus,
-        auto_refresh_enabled: bool,
         mtm: MainThreadMarker,
     ) {
-        self.apply_model(
-            &dropdown_model_with_sections(
-                SystemSnapshot {
-                    memory: snapshot,
-                    cpu,
-                    gpu,
-                },
-                apps,
-                history,
-            ),
-            launch_at_login_status,
-            auto_refresh_enabled,
-            mtm,
-        );
+        let system = SystemSnapshot {
+            memory: snapshot,
+            cpu,
+            gpu,
+        };
+        self.apply_model(Some(&dropdown_model(system, apps, history)), mtm);
     }
 
     /// Attach the open/close delegate to the main tray menu only: the root
@@ -171,63 +123,30 @@ impl TrayController {
         self.menu.setDelegate(Some(delegate));
     }
 
-    pub fn set_show_app_usage(&self, enabled: bool) {
+    pub fn set_settings_state(&self, settings: Settings, launch_at_login: LaunchAtLoginStatus) {
+        if self.last_settings.get() == Some((settings, launch_at_login)) {
+            return;
+        }
+        set_checked(&self.auto_refresh_item, settings.auto_refresh_enabled);
+        let icon = if settings.auto_refresh_enabled {
+            &self.pause_icon
+        } else {
+            &self.play_icon
+        };
+        self.auto_refresh_item.setImage(icon.as_deref());
         // "Show Apps" follows the macOS convention: checked when the app list is visible.
-        if self.last_show_app_usage.get() == enabled {
-            return;
-        }
-        self.show_app_usage_item.setState(if enabled {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        self.last_show_app_usage.set(enabled);
-    }
-
-    pub fn set_show_cpu(&self, enabled: bool) {
-        if self.last_show_cpu.get() == enabled {
-            return;
-        }
-        self.show_cpu_item.setState(if enabled {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        self.last_show_cpu.set(enabled);
-    }
-
-    pub fn set_show_gpu(&self, enabled: bool) {
-        if self.last_show_gpu.get() == enabled {
-            return;
-        }
-        self.show_gpu_item.setState(if enabled {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        self.last_show_gpu.set(enabled);
-    }
-
-    pub fn set_settings_state(
-        &self,
-        launch_at_login: LaunchAtLoginStatus,
-        auto_refresh_enabled: bool,
-        show_app_usage: bool,
-        show_cpu: bool,
-        show_gpu: bool,
-    ) {
-        let projection = settings_menu_projection(
-            launch_at_login,
-            auto_refresh_enabled,
-            show_app_usage,
-            show_cpu,
-            show_gpu,
+        set_checked(&self.show_app_usage_item, settings.show_app_usage);
+        set_checked(&self.show_cpu_item, settings.show_cpu);
+        set_checked(&self.show_gpu_item, settings.show_gpu);
+        self.launch_at_login_item
+            .setTitle(&NSString::from_str(launch_at_login.menu_title()));
+        set_checked(
+            &self.launch_at_login_item,
+            launch_at_login.should_show_checked_state(),
         );
-        self.update_auto_refresh(projection.auto_refresh_enabled);
-        self.set_show_app_usage(projection.show_app_usage);
-        self.set_show_cpu(projection.show_cpu);
-        self.set_show_gpu(projection.show_gpu);
-        self.update_launch_at_login(projection.launch_at_login);
+        self.launch_at_login_item
+            .setEnabled(launch_at_login.should_enable_menu_item());
+        self.last_settings.set(Some((settings, launch_at_login)));
     }
 
     #[allow(deprecated)]
@@ -235,19 +154,10 @@ impl TrayController {
         self.status_item.popUpStatusItemMenu(&self.menu);
     }
 
-    pub fn set_placeholder(
-        &self,
-        launch_at_login_status: LaunchAtLoginStatus,
-        mtm: MainThreadMarker,
-    ) {
+    pub fn set_placeholder(&self, mtm: MainThreadMarker) {
         self.set_gauge(0, MemoryTrend::Stable, MemoryPressure::Normal, mtm);
         self.set_button_help("rami — memory unavailable", "rami, memory unavailable", mtm);
-        self.apply_model(
-            &placeholder_dropdown_model(),
-            launch_at_login_status,
-            true,
-            mtm,
-        );
+        self.apply_model(None, mtm);
     }
 
     /// Set the menu-bar button's hover tooltip and VoiceOver label so the current
@@ -275,224 +185,86 @@ impl TrayController {
         pressure: MemoryPressure,
         mtm: MainThreadMarker,
     ) {
-        let percent_unchanged = self.last_gauge_percent.get() == Some(percent);
-        let trend_unchanged = self.last_trend.get() == trend;
-        let pressure_unchanged = self.last_pressure.get() == pressure;
-        if percent_unchanged && trend_unchanged && pressure_unchanged {
+        let gauge = (percent, trend, pressure);
+        if self.last_gauge.get() == Some(gauge) {
             return;
         }
-
         if let Some(button) = self.status_item.button(mtm) {
             let StatusImage { image, template } =
                 make_status_image(percent, trend, Accent::from(pressure));
             image.setTemplate(template);
             button.setImage(Some(&image));
-            self.last_gauge_percent.set(Some(percent));
-            self.last_trend.set(trend);
-            self.last_pressure.set(pressure);
+            self.last_gauge.set(Some(gauge));
         }
     }
 
-    fn apply_model(
-        &self,
-        model: &DropdownModel,
-        launch_at_login_status: LaunchAtLoginStatus,
-        auto_refresh_enabled: bool,
-        mtm: MainThreadMarker,
-    ) {
-        let new_shape = menu_shape_for(model);
-        let shape_changed = self.shape.get() != new_shape;
-        if shape_changed {
-            self.rebuild_menu(new_shape, mtm);
-            self.shape.set(new_shape);
-            self.last_map.borrow_mut().take();
-            self.last_pressure_percent.set(None);
-            self.last_history.borrow_mut().take();
-            self.last_breakdown.borrow_mut().take();
-            self.last_swap_row.borrow_mut().take();
-            self.last_app_section.borrow_mut().take();
-            self.last_cpu_row.borrow_mut().take();
-            self.last_gpu_row.borrow_mut().take();
+    /// Rebuild the menu if its shape changed, then hand each view its
+    /// content. `None` is the Loading menu.
+    fn apply_model(&self, model: Option<&DropdownModel>, mtm: MainThreadMarker) {
+        let shape = menu_shape_for(model);
+        if self.shape.get() != Some(shape) {
+            self.rebuild_menu(shape, mtm);
+            self.shape.set(Some(shape));
         }
-
-        if let DropdownModel::Loaded { accent, modules } = model {
-            let Some(ModuleDisplay::Memory(memory)) = modules.first() else {
-                return;
-            };
-            let accent_changed = self.last_accent.get() != *accent;
-            if accent_changed || self.last_map.borrow().as_ref() != Some(&memory.map) {
-                self.map_view.update(&memory.map, *accent);
-                *self.last_map.borrow_mut() = Some(memory.map.clone());
-            }
-            if accent_changed || self.last_pressure_percent.get() != Some(memory.pressure_percent) {
-                self.pressure_view.update(memory.pressure_percent, *accent);
-                self.last_pressure_percent
-                    .set(Some(memory.pressure_percent));
-            }
-            if accent_changed || self.last_history.borrow().as_ref() != Some(&memory.history) {
-                self.history_view
-                    .update(&memory.history, memory.total_bytes, *accent);
-                *self.last_history.borrow_mut() = Some(memory.history.clone());
-            }
-            if accent_changed || self.last_breakdown.borrow().as_ref() != Some(&memory.breakdown) {
-                for (row_item, row) in self.legend_items.iter().zip(&memory.breakdown) {
-                    row_item.view.update(&RowContent::legend(row), *accent);
-                }
-                *self.last_breakdown.borrow_mut() = Some(memory.breakdown.clone());
-            }
-            self.update_app_section(&memory.apps, *accent, accent_changed);
-            if accent_changed || self.last_swap_row.borrow().as_ref() != memory.swap.as_ref() {
-                if let Some(swap_row) = &memory.swap {
-                    self.swap_item
-                        .view
-                        .update(&RowContent::stat(swap_row), *accent);
-                }
-                *self.last_swap_row.borrow_mut() = memory.swap.clone();
-            }
-            for module in modules.iter().skip(1) {
-                let (item, last, row) = match module {
-                    ModuleDisplay::Memory(_) => continue,
-                    ModuleDisplay::Cpu(row) => (&self.cpu_item, &self.last_cpu_row, row),
-                    ModuleDisplay::Gpu(row) => (&self.gpu_item, &self.last_gpu_row, row),
-                };
-                if accent_changed || last.borrow().as_ref() != Some(row) {
-                    item.view.update(&RowContent::stat(row), *accent);
-                    *last.borrow_mut() = Some(row.clone());
-                }
-            }
-            self.last_accent.set(*accent);
-        }
-
-        self.update_auto_refresh(auto_refresh_enabled);
-        self.update_launch_at_login(launch_at_login_status);
-    }
-
-    fn update_app_section(&self, apps: &AppSectionDisplay, accent: Accent, accent_changed: bool) {
-        if !accent_changed && self.last_app_section.borrow().as_ref() == Some(apps) {
+        let Some(model) = model else {
             return;
+        };
+        let accent = model.accent;
+        self.map_view.update(&model.map, accent);
+        self.pressure_view.update(model.pressure_percent, accent);
+        self.history_view
+            .update(&model.history, model.total_bytes, accent);
+        for (row_item, row) in self.legend_items.iter().zip(&model.breakdown) {
+            row_item.view.update(&RowContent::legend(row), accent);
         }
-        if let AppSectionDisplay::Rows { rows } = apps {
-            for (row_item, row) in self.app_items.iter().zip(rows.iter()) {
+        if let AppSectionDisplay::Rows { rows } = &model.apps {
+            for (row_item, row) in self.app_items.iter().zip(rows) {
                 row_item.view.update(&RowContent::stat(row), accent);
             }
         }
-        *self.last_app_section.borrow_mut() = Some(apps.clone());
+        for (row_item, row) in [
+            (&self.swap_item, &model.swap),
+            (&self.cpu_item, &model.cpu),
+            (&self.gpu_item, &model.gpu),
+        ] {
+            if let Some(row) = row {
+                row_item.view.update(&RowContent::stat(row), accent);
+            }
+        }
     }
 
     fn rebuild_menu(&self, shape: MenuShape, mtm: MainThreadMarker) {
         self.menu.removeAllItems();
-        match shape {
-            MenuShape::Uninitialized => {}
-            MenuShape::Loading => {
-                self.menu.addItem(&self.loading_item.item);
-            }
-            MenuShape::Loaded {
-                breakdown_rows,
-                apps,
-                show_swap,
-                show_cpu,
-                show_gpu,
-            } => {
-                self.menu.addItem(&self.map_item);
-                for row in self.legend_items.iter().take(breakdown_rows) {
-                    self.menu.addItem(&row.item);
-                }
-                self.menu.addItem(&self.pressure_item);
-                if show_swap {
-                    self.menu.addItem(&self.swap_item.item);
-                }
-                self.menu.addItem(&self.history_item);
-                match apps {
-                    AppShape::Hidden => {}
-                    AppShape::Loading => {
-                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        self.menu.addItem(&self.app_loading_item.item);
-                    }
-                    AppShape::Unavailable => {
-                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        self.menu.addItem(&self.app_unavailable_item.item);
-                    }
-                    AppShape::Rows { rows } => {
-                        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-                        for row in self.app_items.iter().take(rows) {
-                            self.menu.addItem(&row.item);
-                        }
-                    }
-                }
-                if show_cpu || show_gpu {
+        for slot in menu_slots(shape) {
+            let item = match slot {
+                Slot::Separator => {
                     self.menu.addItem(&NSMenuItem::separatorItem(mtm));
+                    continue;
                 }
-                if show_cpu {
-                    self.menu.addItem(&self.cpu_item.item);
-                }
-                if show_gpu {
-                    self.menu.addItem(&self.gpu_item.item);
-                }
-            }
-        }
-        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-        self.menu.addItem(&self.refresh_item);
-        self.menu.addItem(&self.settings_item);
-        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-        self.menu.addItem(&self.quit_item);
-    }
-
-    fn update_auto_refresh(&self, enabled: bool) {
-        if self.last_auto_refresh_enabled.get() == enabled
-            && !matches!(self.shape.get(), MenuShape::Uninitialized)
-        {
-            return;
-        }
-        self.auto_refresh_item.setState(if enabled {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        let icon = if enabled {
-            self.pause_icon.as_ref()
-        } else {
-            self.play_icon.as_ref()
-        };
-        self.auto_refresh_item.setImage(icon.map(|r| r.as_ref()));
-        self.last_auto_refresh_enabled.set(enabled);
-    }
-
-    fn update_launch_at_login(&self, status: LaunchAtLoginStatus) {
-        let title = status.menu_title();
-        if self.last_launch_title.borrow().as_str() != title {
-            self.launch_at_login_item
-                .setTitle(&NSString::from_str(title));
-            *self.last_launch_title.borrow_mut() = title.to_string();
-        }
-        let checked = status.should_show_checked_state();
-        if self.last_launch_checked.get() != checked {
-            self.launch_at_login_item.setState(if checked {
-                NSControlStateValueOn
-            } else {
-                NSControlStateValueOff
-            });
-            self.last_launch_checked.set(checked);
-        }
-        let enabled = status.should_enable_menu_item();
-        if self.last_launch_enabled.get() != enabled {
-            self.launch_at_login_item.setEnabled(enabled);
-            self.last_launch_enabled.set(enabled);
+                Slot::Loading => &self.loading_item.item,
+                Slot::Map => &self.map_item,
+                Slot::Legend(index) => &self.legend_items[index].item,
+                Slot::Pressure => &self.pressure_item,
+                Slot::Swap => &self.swap_item.item,
+                Slot::History => &self.history_item,
+                Slot::AppLoading => &self.app_loading_item.item,
+                Slot::AppUnavailable => &self.app_unavailable_item.item,
+                Slot::App(index) => &self.app_items[index].item,
+                Slot::Cpu => &self.cpu_item.item,
+                Slot::Gpu => &self.gpu_item.item,
+                Slot::Refresh => &self.refresh_item,
+                Slot::Settings => &self.settings_item,
+                Slot::Quit => &self.quit_item,
+            };
+            self.menu.addItem(item);
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{badge_for_state, BadgeKind};
-    use crate::trend::MemoryTrend;
-
-    #[test]
-    fn badge_uses_trend_only() {
-        assert_eq!(badge_for_state(MemoryTrend::Stable), BadgeKind::None);
-        assert_eq!(badge_for_state(MemoryTrend::Rising), BadgeKind::None);
-        assert_eq!(
-            badge_for_state(MemoryTrend::RisingFast),
-            BadgeKind::RisingFast
-        );
-    }
+fn set_checked(item: &NSMenuItem, checked: bool) {
+    item.setState(if checked {
+        NSControlStateValueOn
+    } else {
+        NSControlStateValueOff
+    });
 }

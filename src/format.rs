@@ -181,8 +181,11 @@ pub struct LegendRow {
     pub primary: bool,
 }
 
+/// Everything the loaded dropdown shows: the Memory section, then one row
+/// each for CPU and GPU when they are shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemoryModuleDisplay {
+pub struct DropdownModel {
+    pub accent: Accent,
     pub map: MemoryMapDisplay,
     pub pressure_percent: u8,
     pub total_bytes: u64,
@@ -192,44 +195,18 @@ pub struct MemoryModuleDisplay {
     pub breakdown: Vec<LegendRow>,
     pub swap: Option<StatRow>,
     pub apps: AppSectionDisplay,
+    pub cpu: Option<StatRow>,
+    pub gpu: Option<StatRow>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModuleDisplay {
-    Memory(Box<MemoryModuleDisplay>),
-    Cpu(StatRow),
-    Gpu(StatRow),
-}
-
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DropdownModel {
-    Loading,
-    Loaded {
-        accent: Accent,
-        modules: Vec<ModuleDisplay>,
-    },
-}
-
-pub fn dropdown_model(snapshot: SystemSnapshot) -> DropdownModel {
-    dropdown_model_with_apps(snapshot, &AppMemorySnapshot::Hidden)
-}
-
-pub fn dropdown_model_with_apps(
-    snapshot: SystemSnapshot,
-    apps: &AppMemorySnapshot,
-) -> DropdownModel {
-    dropdown_model_with_sections(snapshot, apps, &[])
-}
-
-pub(crate) fn dropdown_model_with_sections(
+pub(crate) fn dropdown_model(
     snapshot: SystemSnapshot,
     apps: &AppMemorySnapshot,
     history: &[u64],
 ) -> DropdownModel {
     let memory = snapshot.memory;
-    let accent = Accent::from(classify_pressure(memory.pressure_percent));
-    let mut modules = vec![ModuleDisplay::Memory(Box::new(MemoryModuleDisplay {
+    DropdownModel {
+        accent: Accent::from(classify_pressure(memory.pressure_percent)),
         map: memory_map(&memory),
         pressure_percent: memory.pressure_percent,
         total_bytes: memory.total_bytes,
@@ -240,14 +217,9 @@ pub(crate) fn dropdown_model_with_sections(
             tail: Some(mem_text(memory.swap_used_bytes)),
         }),
         apps: app_section_display(apps),
-    }))];
-    if let Some(row) = cpu_row(snapshot.cpu) {
-        modules.push(ModuleDisplay::Cpu(row));
+        cpu: cpu_row(snapshot.cpu),
+        gpu: gpu_row(snapshot.gpu),
     }
-    if let Some(row) = gpu_row(snapshot.gpu) {
-        modules.push(ModuleDisplay::Gpu(row));
-    }
-    DropdownModel::Loaded { accent, modules }
 }
 
 /// RAM split into categories in map order. Other appears only when its share
@@ -367,10 +339,6 @@ fn gpu_row(state: GpuModuleState) -> Option<StatRow> {
     })
 }
 
-pub fn placeholder_dropdown_model() -> DropdownModel {
-    DropdownModel::Loading
-}
-
 fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
     match apps {
         AppMemorySnapshot::Hidden => AppSectionDisplay::Hidden,
@@ -441,14 +409,8 @@ mod tests {
         }
     }
 
-    fn memory_module(model: &DropdownModel) -> &MemoryModuleDisplay {
-        let DropdownModel::Loaded { modules, .. } = model else {
-            panic!("expected loaded model");
-        };
-        let Some(ModuleDisplay::Memory(memory)) = modules.first() else {
-            panic!("expected memory module");
-        };
-        memory
+    fn model_with_apps(snapshot: SystemSnapshot, apps: AppMemorySnapshot) -> DropdownModel {
+        dropdown_model(snapshot, &apps, &[])
     }
 
     const SIXTEEN_GIB: u64 = 17_179_869_184;
@@ -540,21 +502,20 @@ mod tests {
 
     #[test]
     fn dropdown_model_default_apps_hidden() {
-        let model = dropdown_model(snapshot(SIXTEEN_GIB));
-        assert_eq!(memory_module(&model).apps, AppSectionDisplay::Hidden);
+        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Hidden);
+        assert_eq!(model.apps, AppSectionDisplay::Hidden);
     }
 
     #[test]
     fn dropdown_model_with_apps_loading() {
-        let model = dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loading);
-        assert_eq!(memory_module(&model).apps, AppSectionDisplay::Loading);
+        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Loading);
+        assert_eq!(model.apps, AppSectionDisplay::Loading);
     }
 
     #[test]
     fn dropdown_model_with_apps_unavailable() {
-        let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Unavailable);
-        assert_eq!(memory_module(&model).apps, AppSectionDisplay::Unavailable);
+        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Unavailable);
+        assert_eq!(model.apps, AppSectionDisplay::Unavailable);
     }
 
     #[test]
@@ -565,9 +526,8 @@ mod tests {
             footprint_bytes: 2_147_483_648,
             delta_bytes: None,
         }];
-        let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
-        let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
+        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Loaded(usage));
+        let AppSectionDisplay::Rows { rows } = &model.apps else {
             panic!("expected Rows");
         };
         assert_eq!(rows.len(), 1);
@@ -583,9 +543,8 @@ mod tests {
             footprint_bytes: 256_901_120,
             delta_bytes: None,
         }];
-        let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
-        let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
+        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Loaded(usage));
+        let AppSectionDisplay::Rows { rows } = &model.apps else {
             panic!("expected Rows");
         };
         assert_eq!(rows[0].tail.as_deref(), Some("245 MB"));
@@ -599,9 +558,8 @@ mod tests {
             footprint_bytes: 84_934_656,
             delta_bytes: None,
         }];
-        let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
-        let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
+        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Loaded(usage));
+        let AppSectionDisplay::Rows { rows } = &model.apps else {
             panic!("expected Rows");
         };
         assert_eq!(rows[0].primary, "Codex Computer …");
@@ -612,17 +570,15 @@ mod tests {
     fn dropdown_model_memory_map_shows_percent() {
         let mut snapshot = snapshot(SIXTEEN_GIB);
         snapshot.memory.used_percent = 56;
-        let model = dropdown_model(snapshot);
-        assert_eq!(memory_module(&model).map.used_percent, 56);
+        let model = model_with_apps(snapshot, AppMemorySnapshot::Hidden);
+        assert_eq!(model.map.used_percent, 56);
     }
 
     #[test]
     fn row_hierarchy_promotes_totals_and_demotes_derived_breakdowns() {
         // #23: brightness tracks actionability. App Memory is primary; the
         // derived breakdown rows are demoted.
-        let breakdown = memory_module(&dropdown_model(snapshot(SIXTEEN_GIB)))
-            .breakdown
-            .clone();
+        let breakdown = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Hidden).breakdown;
         assert!(breakdown[0].primary, "App Memory is the total");
         assert!(
             breakdown[1..].iter().all(|row| !row.primary),
@@ -678,8 +634,8 @@ mod tests {
             usage("Three", 3, None),
         ];
         rank_app_rows(&mut usage);
-        let model = dropdown_model_with_apps(snapshot(100), &AppMemorySnapshot::Loaded(usage));
-        let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
+        let model = model_with_apps(snapshot(100), AppMemorySnapshot::Loaded(usage));
+        let AppSectionDisplay::Rows { rows } = &model.apps else {
             panic!("expected app rows");
         };
         let names: Vec<_> = rows.iter().map(|row| row.primary.as_str()).collect();
@@ -694,13 +650,98 @@ mod tests {
             usage("Codex", 500_000_000, Some(80_000_000)),
         ];
         rank_app_rows(&mut usage);
-        let model =
-            dropdown_model_with_apps(snapshot(SIXTEEN_GIB), &AppMemorySnapshot::Loaded(usage));
-        let AppSectionDisplay::Rows { rows } = &memory_module(&model).apps else {
+        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Loaded(usage));
+        let AppSectionDisplay::Rows { rows } = &model.apps else {
             panic!("expected app rows");
         };
         assert_eq!(rows[0].primary, "Zen");
         assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB"));
+    }
+
+    #[test]
+    fn dropdown_model_splits_memory_and_swap_rows() {
+        let snapshot = MemorySnapshot {
+            used_bytes: 9 * ONE_GIB_BYTES,
+            total_bytes: SIXTEEN_GIB,
+            used_percent: 53,
+            pressure_percent: 96,
+            pressure_source: PressureSource::Kernel,
+            app_memory_bytes: 6 * ONE_GIB_BYTES,
+            wired_bytes: 2 * ONE_GIB_BYTES,
+            compressed_bytes: ONE_GIB_BYTES,
+            free_bytes: 3 * ONE_GIB_BYTES,
+            cached_bytes: 4 * ONE_GIB_BYTES,
+            swap_used_bytes: 4_724_461_226,
+            available_bytes: 8_160_449_024,
+        };
+
+        let memory = model_with_apps(
+            SystemSnapshot {
+                memory: snapshot,
+                cpu: CpuModuleState::Disabled,
+                gpu: GpuModuleState::Disabled,
+            },
+            AppMemorySnapshot::Hidden,
+        );
+
+        assert_eq!(memory.accent, Accent::Critical);
+        assert_eq!(memory.map.used_percent, 53);
+        assert_eq!(memory.map.used_of_total, "9.0 / 16.0 GB");
+        assert_eq!(memory.map.cell_caption, "1 cell = 256 MB");
+        assert_eq!(memory.pressure_percent, 96);
+        assert_eq!(memory.breakdown[0].label, "App Memory");
+        assert_eq!(memory.breakdown[0].value, "6.0 GB · 38%");
+        assert_eq!(memory.breakdown[0].swatch, Swatch::Accent(100));
+        assert_eq!(memory.breakdown[1].label, "Wired");
+        assert_eq!(memory.breakdown[1].value, "2.0 GB · 13%");
+        assert_eq!(memory.breakdown[1].swatch, Swatch::Accent(62));
+        assert_eq!(memory.breakdown[2].label, "Compressed");
+        assert_eq!(memory.breakdown[2].value, "1.0 GB · 6%");
+        assert_eq!(memory.breakdown[2].swatch, Swatch::Accent(36));
+        assert_eq!(memory.breakdown[3].label, "Cached");
+        assert_eq!(memory.breakdown[3].swatch, Swatch::Hatched);
+        assert_eq!(memory.breakdown[3].value, "4.0 GB · 25%");
+        assert_eq!(memory.breakdown[4].label, "Free");
+        assert_eq!(memory.breakdown[4].value, "3.0 GB · 19%");
+        assert_eq!(memory.breakdown[4].swatch, Swatch::Empty);
+        assert_eq!(
+            memory.breakdown.len(),
+            5,
+            "no Other row when rows already sum to total"
+        );
+        let swap = memory.swap.as_ref().expect("swap row present when nonzero");
+        assert_eq!(swap.primary, "Swap");
+        assert_eq!(swap.tail.as_deref(), Some("4.4 GB"));
+    }
+
+    #[test]
+    fn dropdown_model_hides_swap_when_zero() {
+        let snapshot = MemorySnapshot {
+            used_bytes: 5 * ONE_GIB_BYTES,
+            total_bytes: SIXTEEN_GIB,
+            used_percent: 31,
+            pressure_percent: 20,
+            pressure_source: PressureSource::Kernel,
+            app_memory_bytes: 3 * ONE_GIB_BYTES,
+            wired_bytes: ONE_GIB_BYTES,
+            compressed_bytes: ONE_GIB_BYTES,
+            free_bytes: 4 * ONE_GIB_BYTES,
+            cached_bytes: 0,
+            swap_used_bytes: 0,
+            available_bytes: 11 * ONE_GIB_BYTES,
+        };
+
+        let memory = model_with_apps(
+            SystemSnapshot {
+                memory: snapshot,
+                cpu: CpuModuleState::Disabled,
+                gpu: GpuModuleState::Disabled,
+            },
+            AppMemorySnapshot::Hidden,
+        );
+
+        assert_eq!(memory.accent, Accent::Neutral);
+        assert!(memory.swap.is_none());
     }
 
     fn usage(name: &str, footprint_bytes: u64, delta_bytes: Option<i64>) -> AppMemoryUsage {

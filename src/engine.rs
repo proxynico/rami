@@ -125,19 +125,15 @@ pub(crate) enum Render {
         /// The trend window for the memory-history sparkline. Recorded every
         /// timer tick regardless of menu state, so it is warm on open.
         history: Vec<u64>,
-        launch_at_login: LaunchAtLoginStatus,
-        auto_refresh_enabled: bool,
     },
+    /// The Settings submenu's checkmarks and Launch at Login row. Emitted
+    /// before the gauge and menu on every refresh.
     SettingsState {
-        launch_at_login: LaunchAtLoginStatus,
-        auto_refresh_enabled: bool,
-        show_app_usage: bool,
-        show_cpu: bool,
-        show_gpu: bool,
-    },
-    Placeholder {
+        settings: Settings,
         launch_at_login: LaunchAtLoginStatus,
     },
+    /// The memory sample failed: a zero gauge and the Loading menu.
+    Placeholder,
 }
 
 /// Synchronous kernel reads. Stateful and call-counted: `sample_memory`
@@ -435,9 +431,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             }
             Err(err) => {
                 eprintln!("memory sample failed: {err}");
-                out.push(Effect::Render(Render::Placeholder {
-                    launch_at_login: self.launch_at_login_status,
-                }));
+                out.push(Effect::Render(Render::Placeholder));
             }
         }
     }
@@ -607,11 +601,13 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
 
     fn settings_state_render(&self) -> Render {
         Render::SettingsState {
+            settings: Settings {
+                auto_refresh_enabled: self.auto_refresh_enabled,
+                show_app_usage: self.show_app_usage,
+                show_cpu: self.show_cpu,
+                show_gpu: self.show_gpu,
+            },
             launch_at_login: self.launch_at_login_status,
-            auto_refresh_enabled: self.auto_refresh_enabled,
-            show_app_usage: self.show_app_usage,
-            show_cpu: self.show_cpu,
-            show_gpu: self.show_gpu,
         }
     }
 
@@ -627,8 +623,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             gpu,
             apps: self.app_memory.clone(),
             history: self.trend_tracker.window(),
-            launch_at_login: self.launch_at_login_status,
-            auto_refresh_enabled: self.auto_refresh_enabled,
         }
     }
 }

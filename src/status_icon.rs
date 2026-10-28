@@ -259,6 +259,16 @@ mod tests {
     }
 
     #[test]
+    fn badge_uses_trend_only() {
+        assert_eq!(badge_for_state(MemoryTrend::Stable), BadgeKind::None);
+        assert_eq!(badge_for_state(MemoryTrend::Rising), BadgeKind::None);
+        assert_eq!(
+            badge_for_state(MemoryTrend::RisingFast),
+            BadgeKind::RisingFast
+        );
+    }
+
+    #[test]
     fn rising_fast_icon_created_in_light_mode_stays_visible_in_dark_menu_bars() {
         // The RisingFast composite carries the Neutral accent (labelColor).
         // Hierarchical SF Symbol tints bake the creation-time appearance, so

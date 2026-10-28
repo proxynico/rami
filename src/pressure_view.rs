@@ -16,8 +16,7 @@ const TICK_HEIGHT: f64 = 10.0;
 
 pub struct PressureIvars {
     metrics: MenuMetrics,
-    percent: Cell<u8>,
-    accent: Cell<Accent>,
+    reading: Cell<Option<(u8, Accent)>>,
 }
 
 define_class!(
@@ -46,8 +45,7 @@ impl PressureView {
         let frame = NSRect::new(NSPoint::ZERO, metrics.meter_layout().view_size());
         let this = Self::alloc(mtm).set_ivars(PressureIvars {
             metrics,
-            percent: Cell::new(0),
-            accent: Cell::new(Accent::Neutral),
+            reading: Cell::new(None),
         });
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
         let role = NSString::from_str("AXGroup");
@@ -60,9 +58,12 @@ impl PressureView {
         view
     }
 
+    /// Show `percent`, redrawing only when it or the accent changed.
     pub fn update(&self, percent: u8, accent: Accent) {
-        self.ivars().percent.set(percent);
-        self.ivars().accent.set(accent);
+        if self.ivars().reading.get() == Some((percent, accent)) {
+            return;
+        }
+        self.ivars().reading.set(Some((percent, accent)));
         let value = NSString::from_str(&format!("{percent} percent"));
         unsafe {
             let _: () = msg_send![self, setAccessibilityValue: &*value];
@@ -71,9 +72,11 @@ impl PressureView {
     }
 
     fn render(&self) {
+        let Some((percent, accent)) = self.ivars().reading.get() else {
+            return;
+        };
+        let percent = percent.min(100);
         let layout = self.ivars().metrics.meter_layout();
-        let percent = self.ivars().percent.get().min(100);
-        let accent = self.ivars().accent.get();
         let font = NSFont::monospacedDigitSystemFontOfSize_weight(
             self.ivars().metrics.type_scale.stat_row,
             unsafe { NSFontWeightRegular },

@@ -100,7 +100,18 @@ impl MemoryHistoryView {
         view
     }
 
+    /// Show `samples`, redrawing only when they, the total, or the accent
+    /// changed.
     pub fn update(&self, samples: &[u64], total_bytes: u64, accent: Accent) {
+        {
+            let state = self.ivars().state.borrow();
+            if state.accent == accent
+                && state.total_bytes == total_bytes
+                && state.samples == samples
+            {
+                return;
+            }
+        }
         let value = match history_caption(samples, total_bytes) {
             Some((window, range)) => format!("{range} over the last {window}"),
             None => "collecting samples".to_string(),
