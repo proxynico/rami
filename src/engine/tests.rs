@@ -581,6 +581,21 @@ fn memory_sample_failure_renders_the_placeholder() {
     assert_eq!(menu_renders(&effects), 0);
 }
 
+#[test]
+fn a_failed_sample_leaves_no_stale_reading_behind() {
+    let (mut engine, _, _) = engine_on();
+    engine.step(Event::Startup);
+    engine.step(Event::MenuWillOpen);
+
+    engine.samplers.memory_fails = true;
+    engine.step(Event::Tick { manual: true });
+    assert_eq!(menu_renders(&engine.step(Event::DrainTimerFired)), 0);
+    assert!(engine
+        .step(Event::CopyDiagnostics)
+        .iter()
+        .any(|e| matches!(e, Effect::CopyDiagnostics { memory: None, .. })));
+}
+
 // --- toggle flows ----------------------------------------------------
 
 #[test]
