@@ -142,7 +142,7 @@ fn draw_rising_badge(rect: NSRect, ink: &NSColor) {
     else {
         return;
     };
-    let size = badge.size();
+    let size = rect.size;
     let ink = ink.retain();
     let handler = RcBlock::new(move |bounds: NSRect| -> Bool {
         badge.drawInRect_fromRect_operation_fraction(
