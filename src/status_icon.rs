@@ -4,9 +4,10 @@ use crate::trend::MemoryTrend;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::Bool;
+use objc2::Message;
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSCompositingOperation, NSGraphicsContext, NSImage,
-    NSImageSymbolConfiguration, NSImageSymbolScale,
+    NSImageSymbolConfiguration, NSImageSymbolScale, NSRectFillUsingOperation,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -136,14 +137,25 @@ fn draw_rising_badge(rect: NSRect, ink: &NSColor) {
             .and_then(|symbol| {
                 let scale =
                     NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Small);
-                let tint = NSImageSymbolConfiguration::configurationWithHierarchicalColor(ink);
-                symbol.imageWithSymbolConfiguration(
-                    &scale.configurationByApplyingConfiguration(&tint),
-                )
+                symbol.imageWithSymbolConfiguration(&scale)
             })
     else {
         return;
     };
+    let size = badge.size();
+    let ink = ink.retain();
+    let handler = RcBlock::new(move |bounds: NSRect| -> Bool {
+        badge.drawInRect_fromRect_operation_fraction(
+            bounds,
+            NSRect::ZERO,
+            NSCompositingOperation::SourceOver,
+            1.0,
+        );
+        ink.setFill();
+        NSRectFillUsingOperation(bounds, NSCompositingOperation::SourceIn);
+        Bool::YES
+    });
+    let badge = NSImage::imageWithSize_flipped_drawingHandler(size, false, &handler);
     let cutout = NSRect::new(
         NSPoint::new(rect.origin.x - 0.8, rect.origin.y - 0.8),
         NSSize::new(rect.size.width + 1.6, rect.size.height + 1.6),
