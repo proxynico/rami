@@ -179,17 +179,15 @@ Issues from outside reporters take a triage label first.
 
 ## Public release
 
-rami ships through Homebrew without Apple notarization:
-`brew install --cask proxynico/tap/rami`. The release DMG is ad-hoc
-signed, so macOS blocks a downloaded copy's first launch until the user
+rami ships as a DMG on GitHub Releases, ad-hoc signed and not
+notarized. macOS blocks a downloaded copy's first launch until the user
 clicks Open Anyway in System Settings → Privacy & Security. The README
 says so. Settled 2026-10-29 by Nico. Rejected: paying for the Apple
-Developer Program to sign and notarize, and a Homebrew formula that
-builds rami on the user's Mac.
+Developer Program to sign and notarize, a Homebrew tap, and a Homebrew
+formula that builds rami on the user's Mac.
 
-A `v*` tag publishes a public release. After each release, update the
-tap as `BUILDING.md` describes, unless `HOMEBREW_TAP_TOKEN` is set. Do
-not reuse the broad local `gh` token as `HOMEBREW_TAP_TOKEN`.
+A `v*` tag builds the DMG and publishes the release. Nothing else needs
+updating.
 
 ## Notes
 

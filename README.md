@@ -20,14 +20,16 @@ diagnostics copy action.
 
 ## Install
 
-```sh
-brew install --cask proxynico/tap/rami
-```
+rami needs an Apple Silicon Mac with macOS 14 or later.
 
-rami needs an Apple Silicon Mac. It is not notarized by Apple, so macOS blocks
-its first launch. Open rami and close the warning. Then open System Settings →
-Privacy & Security, click Open Anyway, confirm, and enter your Mac's password.
-Do this again after each update.
+1. Download `rami-<version>.dmg` from the
+   [latest release](https://github.com/proxynico/rami/releases/latest).
+2. Open it and drag rami into Applications.
+3. Open rami. It is not notarized by Apple, so macOS blocks the first launch.
+   Close the warning, then open System Settings → Privacy & Security, click
+   Open Anyway, confirm, and enter your Mac's password.
+
+Repeat step 3 after each update.
 
 To build it yourself, see [BUILDING.md](BUILDING.md).
 
