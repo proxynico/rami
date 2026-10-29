@@ -24,9 +24,9 @@ diagnostics copy action.
 brew install --cask proxynico/tap/rami
 ```
 
-rami is not notarized by Apple, so macOS blocks its first launch. Open rami,
-click Done, then open System Settings → Privacy & Security and click Open
-Anyway. Do this again after each update.
+rami needs an Apple Silicon Mac. It is not notarized by Apple, so macOS blocks
+its first launch. Open rami and close the warning, then open System Settings →
+Privacy & Security and click Open Anyway. Do this again after each update.
 
 To build it yourself, see [BUILDING.md](BUILDING.md).
 

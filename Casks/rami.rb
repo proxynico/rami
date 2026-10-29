@@ -26,7 +26,7 @@ cask "rami" do
 
   caveats <<~EOS
     rami is not notarized by Apple, so macOS blocks its first launch.
-    Open rami, click Done, then open System Settings → Privacy & Security
-    and click Open Anyway. Do this again after each update.
+    Open rami and close the warning, then open System Settings → Privacy &
+    Security and click Open Anyway. Do this again after each update.
   EOS
 end

@@ -43,7 +43,8 @@ open rami.app
 ```
 
 `build-app.sh` produces an ad-hoc-signed `rami.app` next to the repo. Fine
-for local use; Gatekeeper will warn first launch (right-click → Open).
+for local use. A local build carries no quarantine flag, so Gatekeeper does not
+check it.
 
 For a Developer ID-signed bundle (no Gatekeeper warning), set the identity:
 
@@ -204,8 +205,8 @@ reuse a broad local `gh` token.
 - `scripts/release.sh` builds the release DMG.
 - `scripts/install.sh` is the `curl | bash` end-user installer (downloads
   the latest GitHub release DMG, verifies it against its published `.sha256`,
-  copies into `/Applications`, ejects the DMG, leaves Gatekeeper quarantine
-  handling intact, launches).
+  copies into `/Applications`, ejects the DMG, launches). curl sets no
+  quarantine flag, so this copy skips the Open Anyway step.
 - `macos/Info.plist` configures accessory-app behavior with `LSUIElement`.
 - `macos/rami.entitlements` disables the App Sandbox (needed for the
   cross-process memory scan); the hardened runtime is enabled by
