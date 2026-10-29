@@ -20,19 +20,16 @@ diagnostics copy action.
 
 ## Install
 
-Public install is not live yet. The Homebrew Cask and notarized DMG flow are
-prepared, but they still need the Apple Developer signing/notarization setup
-before release.
-
-For now, build the local app bundle:
-
 ```sh
-./scripts/build-app.sh
-open rami.app
+brew install --cask proxynico/tap/rami
 ```
 
-Release notes for the future DMG and Homebrew Cask live in
-[BUILDING.md](BUILDING.md).
+rami needs an Apple Silicon Mac. It is not notarized by Apple, so macOS blocks
+its first launch. Open rami and close the warning. Then open System Settings →
+Privacy & Security, click Open Anyway, confirm, and enter your Mac's password.
+Do this again after each update.
+
+To build it yourself, see [BUILDING.md](BUILDING.md).
 
 ## License
 

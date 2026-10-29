@@ -179,13 +179,17 @@ Issues from outside reporters take a triage label first.
 
 ## Public release
 
-Public install is not live. `Cargo.toml` is `0.1.2`. Do not create or
-move tag `v0.1.2` until purpose-specific Apple signing and notary
-secrets are configured and a Release dry run has produced a notarized
-DMG. Do not reuse the broad local `gh` token as `HOMEBREW_TAP_TOKEN`.
+rami ships through Homebrew without Apple notarization:
+`brew install --cask proxynico/tap/rami`. The release DMG is ad-hoc
+signed, so macOS blocks a downloaded copy's first launch until the user
+clicks Open Anyway in System Settings → Privacy & Security. The README
+says so. Settled 2026-10-29 by Nico. Rejected: paying for the Apple
+Developer Program to sign and notarize, and a Homebrew formula that
+builds rami on the user's Mac.
 
-The remaining work is in `BUILDING.md`. Create `proxynico/homebrew-tap`
-if it is absent, set the seven secret names, dry-run Release, then tag.
+A `v*` tag publishes a public release. After each release, update the
+tap as `BUILDING.md` describes, unless `HOMEBREW_TAP_TOKEN` is set. Do
+not reuse the broad local `gh` token as `HOMEBREW_TAP_TOKEN`.
 
 ## Notes
 

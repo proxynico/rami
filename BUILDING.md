@@ -3,13 +3,11 @@
 End-user install lives in [README.md](README.md). This is for contributors
 and the maintainer.
 
-Public install is still gated. `Cargo.toml` is already `0.1.2`. The
-Homebrew Cask template and notarized DMG flow are prepared. Tag `v0.1.2`
-waits on purpose-specific Apple Developer signing and notary secrets, a
-public `proxynico/homebrew-tap` repository, and a Release workflow dry-run
-that produces a notarized artifact. Do not create or move that tag before
-those are in place. Do not reuse a broad local `gh` token as
-`HOMEBREW_TAP_TOKEN`.
+rami ships ad-hoc signed and not notarized, because there is no Apple
+Developer Program membership. macOS blocks a downloaded copy's first launch
+until the user clicks Open Anyway in System Settings → Privacy & Security,
+and again after each update. Signing and notarizing switch on when the
+Developer ID secrets below are set.
 
 ## Prereqs
 
@@ -45,7 +43,8 @@ open rami.app
 ```
 
 `build-app.sh` produces an ad-hoc-signed `rami.app` next to the repo. Fine
-for local use; Gatekeeper will warn first launch (right-click → Open).
+for local use. A local build carries no quarantine flag, so Gatekeeper does not
+check it.
 
 For a Developer ID-signed bundle (no Gatekeeper warning), set the identity:
 
@@ -96,12 +95,19 @@ version, Mac model, enabled modules, Auto-Refresh setting, interval, and action
 between samples with any result; without those conditions, exact figures are
 not comparable.
 
-## Notarized DMG
+## Release DMG
 
-`scripts/release.sh` builds, signs, packages, notarizes, and staples a
-distributable DMG to `dist/rami-<version>.dmg`.
+`scripts/release.sh` builds and packages `dist/rami-<version>.dmg` and its
+`.sha256`. Without `RAMI_SIGNING_IDENTITY` the app is ad-hoc signed and the
+DMG is not notarized. That is how rami ships:
 
-One-time setup:
+```sh
+./scripts/release.sh
+```
+
+### Signing and notarizing
+
+This needs a paid Apple Developer Program membership. One-time setup:
 
 1. Mint a `Developer ID Application` certificate from
    developer.apple.com → Certificates and install it in your login keychain.
@@ -126,8 +132,10 @@ service.
 
 ## Release via GitHub Actions
 
-`.github/workflows/release.yml` builds, signs, notarizes, and uploads a
-DMG to a GitHub Release on every `v*` tag push. Required repo secrets:
+`.github/workflows/release.yml` builds a DMG and uploads it to a GitHub
+Release on every `v*` tag push. It signs and notarizes only when
+`MACOS_CERTIFICATE_P12_BASE64` is set, and then it needs the other five
+`MACOS_*` secrets too:
 
 | Secret | Purpose |
 |---|---|
@@ -156,41 +164,49 @@ git push origin "v${version}"
 ```
 
 Confirm the derived tag matches the intended `Cargo.toml` version before
-pushing it. A `v*` tag starts public release work immediately. For the
-current `0.1.2` line, wait until the public-release gate at the top of
-this file is cleared.
+pushing it. A `v*` tag publishes a public release immediately.
 
 ## Publishing the Homebrew Cask
 
-`Casks/rami.rb` is the source-of-truth template. On every `v*` tag,
-`release.yml`'s `update-tap` job renders it — filling in `version` and the
-published DMG's `sha256` — and pushes it to `proxynico/homebrew-tap`, **if**
-the `HOMEBREW_TAP_TOKEN` secret is set. One-time setup:
-
-1. Create a `proxynico/homebrew-tap` repo on GitHub. It does not exist yet.
-2. Add a `HOMEBREW_TAP_TOKEN` repo secret. Use a fine-grained PAT with
-   contents read/write on `homebrew-tap` only. Do not reuse a broad local
-   `gh` token.
-
-Users then run:
+`Casks/rami.rb` is the source-of-truth template. The tap is
+`proxynico/homebrew-tap`, and users install with:
 
 ```sh
 brew install --cask proxynico/tap/rami
 ```
 
-If `HOMEBREW_TAP_TOKEN` is unset the job no-ops. To render the Cask by hand,
-set `version` to the tag and `sha256` from the release's `.sha256` asset
-(adjust the `zap` paths only if `CFBundleIdentifier` ever changes from
-`com.nicomontero.rami`), then commit it to the tap.
+After each release, render the Cask into the tap: set `version` to the tag
+and `sha256` from the release's `.sha256` asset, then commit and push. Adjust
+the `zap` paths only if `CFBundleIdentifier` ever changes from
+`com.nicomontero.rami`.
+
+```sh
+version="$(awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }' Cargo.toml)"
+sha="$(curl -fsSL "https://github.com/proxynico/rami/releases/download/v${version}/rami-${version}.dmg.sha256" | awk '{print $1}')"
+tap="$(mktemp -d)"
+git clone git@github.com:proxynico/homebrew-tap.git "$tap"
+mkdir -p "$tap/Casks"
+sed -e "s|^  version .*|  version \"${version}\"|" \
+    -e "s|^  sha256 .*|  sha256 \"${sha}\"|" \
+    Casks/rami.rb > "$tap/Casks/rami.rb"
+git -C "$tap" add Casks/rami.rb
+git -C "$tap" commit -m "rami ${version}"
+git -C "$tap" push
+```
+
+`release.yml`'s `update-tap` job does this on every `v*` tag when the
+`HOMEBREW_TAP_TOKEN` secret is set, and no-ops otherwise. That secret must be
+a fine-grained PAT with contents read/write on `homebrew-tap` only. Do not
+reuse a broad local `gh` token.
 
 ## Repo notes
 
 - `scripts/build-app.sh` builds the release binary and assembles `rami.app`.
-- `scripts/release.sh` builds the notarized DMG.
+- `scripts/release.sh` builds the release DMG.
 - `scripts/install.sh` is the `curl | bash` end-user installer (downloads
   the latest GitHub release DMG, verifies it against its published `.sha256`,
-  copies into `/Applications`, ejects the DMG, leaves Gatekeeper quarantine
-  handling intact, launches).
+  copies into `/Applications`, ejects the DMG, launches). curl sets no
+  quarantine flag, so this copy skips the Open Anyway step.
 - `macos/Info.plist` configures accessory-app behavior with `LSUIElement`.
 - `macos/rami.entitlements` disables the App Sandbox (needed for the
   cross-process memory scan); the hardened runtime is enabled by
