@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/proxynico/rami/main/scripts/install.sh | bash
 #
-# Downloads the latest notarized DMG from GitHub Releases, copies rami.app
+# Downloads the latest release DMG from GitHub Releases, copies rami.app
 # into /Applications, ejects the DMG, and launches the app.
 
 set -euo pipefail
@@ -62,7 +62,7 @@ if curl -fsSL -o "$dmg_path.sha256" "$dmg_url.sha256" 2>/dev/null; then
   fi
   echo "    ok ($actual)"
 else
-  echo "    no published checksum for this release; relying on notarization + Gatekeeper." >&2
+  echo "    no published checksum for this release; skipping verification." >&2
 fi
 
 echo "==> Mounting DMG"
