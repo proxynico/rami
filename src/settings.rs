@@ -28,8 +28,7 @@ impl Default for Settings {
 }
 
 /// Thin wrapper over `NSUserDefaults`. For the app bundle this persists to
-/// `~/Library/Preferences/com.nicomontero.rami.plist` — the same file the
-/// Homebrew Cask's `zap` removes on uninstall.
+/// `~/Library/Preferences/com.nicomontero.rami.plist`.
 pub struct SettingsStore {
     defaults: Retained<NSUserDefaults>,
 }

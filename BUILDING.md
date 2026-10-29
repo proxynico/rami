@@ -145,7 +145,6 @@ Release on every `v*` tag push. It signs and notarizes only when
 | `MACOS_NOTARY_APPLE_ID` | Apple ID email |
 | `MACOS_NOTARY_TEAM_ID` | Apple developer team ID |
 | `MACOS_NOTARY_APP_PASSWORD` | app-specific password |
-| `HOMEBREW_TAP_TOKEN` | (optional) PAT with write access to `proxynico/homebrew-tap`; enables the automatic Cask bump |
 
 Export the `.p12` from Keychain Access (right-click cert → Export) and
 encode with `base64 -i cert.p12 | pbcopy`. Workflow runs on `macos-14`, so
@@ -165,39 +164,6 @@ git push origin "v${version}"
 
 Confirm the derived tag matches the intended `Cargo.toml` version before
 pushing it. A `v*` tag publishes a public release immediately.
-
-## Publishing the Homebrew Cask
-
-`Casks/rami.rb` is the source-of-truth template. The tap is
-`proxynico/homebrew-tap`, and users install with:
-
-```sh
-brew install --cask proxynico/tap/rami
-```
-
-After each release, render the Cask into the tap: set `version` to the tag
-and `sha256` from the release's `.sha256` asset, then commit and push. Adjust
-the `zap` paths only if `CFBundleIdentifier` ever changes from
-`com.nicomontero.rami`.
-
-```sh
-version="$(awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }' Cargo.toml)"
-sha="$(curl -fsSL "https://github.com/proxynico/rami/releases/download/v${version}/rami-${version}.dmg.sha256" | awk '{print $1}')"
-tap="$(mktemp -d)"
-git clone git@github.com:proxynico/homebrew-tap.git "$tap"
-mkdir -p "$tap/Casks"
-sed -e "s|^  version .*|  version \"${version}\"|" \
-    -e "s|^  sha256 .*|  sha256 \"${sha}\"|" \
-    Casks/rami.rb > "$tap/Casks/rami.rb"
-git -C "$tap" add Casks/rami.rb
-git -C "$tap" commit -m "rami ${version}"
-git -C "$tap" push
-```
-
-`release.yml`'s `update-tap` job does this on every `v*` tag when the
-`HOMEBREW_TAP_TOKEN` secret is set, and no-ops otherwise. That secret must be
-a fine-grained PAT with contents read/write on `homebrew-tap` only. Do not
-reuse a broad local `gh` token.
 
 ## Repo notes
 
