@@ -72,11 +72,6 @@ it shows the settings beside the dropdown, which stays open. Nico
 replaced the arrowless command on 2026-09-27 because it closed the
 dropdown and left only the settings. Refresh and Quit show no key equivalents.
 
-Rejected alternatives were multiple status items, an `NSPopover` panel,
-and two equal rings for Memory % and Pressure. Nico replaced the rings
-with the map on 2026-09-27: the rings gave both figures equal weight and
-did not show where RAM goes.
-
 ### Pressure-driven accent
 
 Under Normal pressure, dropdown text stays monochrome in the adaptive
@@ -101,11 +96,7 @@ meter %, tooltip, VoiceOver), not a second hue. RisingFast is
 trend-driven at any pressure. When memory climbs fast, the icon adds
 an upward badge in `status_icon.rs`.
 
-Rejected alternatives were multi-hue category palettes, the user's
-macOS accent, a fixed accent with pressure tint only on the gauge, and
-gray marks with orange rings. Nico chose gold on 2026-09-27 to match the
-app icon's contacts, then orange on 2026-09-28. The app icon's contacts
-stay gold.
+The app icon's contacts stay gold.
 
 A future category or module must fit the one-hue ramp. If a display
 cannot be read in one hue, simplify the display.
@@ -182,9 +173,7 @@ Issues from outside reporters take a triage label first.
 rami ships as a DMG on GitHub Releases, ad-hoc signed and not
 notarized. macOS blocks a downloaded copy's first launch until the user
 clicks Open Anyway in System Settings → Privacy & Security. The README
-says so. Settled 2026-10-29 by Nico. Rejected: paying for the Apple
-Developer Program to sign and notarize, a Homebrew tap, and a Homebrew
-formula that builds rami on the user's Mac.
+says so.
 
 A `v*` tag builds the DMG and publishes the release. Nothing else needs
 updating.
