@@ -668,6 +668,18 @@ fn sharing_starts_with_the_app_and_follows_its_toggle() {
     };
     let mut shared = RefreshEngine::new(samplers, FakeScans::default(), FakeLaunch, settings);
     assert!(shared.step(Event::Startup).contains(&Effect::Share(true)));
+
+    let effects = shared.step(Event::ShareFailed);
+    assert!(
+        effects.contains(&Effect::PersistSetting(SettingChange::ShareOverTailscale(
+            false
+        )))
+    );
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::Render(Render::SettingsState { settings, .. }) if !settings.share_over_tailscale
+    )));
+    assert!(shared.step(Event::ShareFailed).is_empty(), "already off");
 }
 
 #[test]

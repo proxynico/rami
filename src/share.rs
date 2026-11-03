@@ -17,11 +17,12 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(crate) const SHARE_PORT: u16 = 47960;
 const SHARE_VERSION: &str = "rami-share 1";
 const IO_TIMEOUT: Duration = Duration::from_secs(1);
+const REQUEST_DEADLINE: Duration = Duration::from_millis(500);
 const MAX_REQUEST_BYTES: usize = 4096;
 
 /// One answer: everything this Mac's dropdown shows except app names.
@@ -145,13 +146,20 @@ fn serve(listener: TcpListener, stop: &AtomicBool) {
     }
 }
 
-/// Read the request head, whatever it asks, then send `response`.
+/// Read the request head, whatever it asks, then send `response`. The whole
+/// exchange is bounded by `REQUEST_DEADLINE`, so a client that drips bytes
+/// can hold the listener, and a stop waiting on it, only that long.
 fn answer(stream: &mut TcpStream, response: &str) -> io::Result<()> {
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    let deadline = Instant::now() + REQUEST_DEADLINE;
+    stream.set_write_timeout(Some(REQUEST_DEADLINE))?;
     let mut request = Vec::new();
     let mut buffer = [0u8; 512];
     while request.len() < MAX_REQUEST_BYTES && !request.windows(4).any(|w| w == b"\r\n\r\n") {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        stream.set_read_timeout(Some(remaining))?;
         match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => request.extend_from_slice(&buffer[..read]),

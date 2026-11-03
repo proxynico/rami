@@ -63,6 +63,8 @@ pub(crate) enum Event {
     /// module on, and clicking it closed the menu.
     ReopenMenuTimerFired,
     CopyDiagnostics,
+    /// Sharing was switched on but the port could not be opened.
+    ShareFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +330,15 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                     .is_some_and(|setting| self.shows(setting))
                 {
                     out.push(Effect::PopUpMenu);
+                }
+            }
+            Event::ShareFailed => {
+                if self.share_over_tailscale {
+                    self.share_over_tailscale = false;
+                    out.push(Effect::PersistSetting(SettingChange::ShareOverTailscale(
+                        false,
+                    )));
+                    out.push(Effect::Render(self.settings_state_render()));
                 }
             }
             Event::CopyDiagnostics => {

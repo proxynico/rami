@@ -245,13 +245,18 @@ impl AppState {
     }
 
     fn set_sharing(&self, on: bool) {
-        let mut server = self.share_server.borrow_mut();
         if !on {
-            server.take();
-        } else if server.is_none() {
-            match ShareServer::start() {
-                Ok(started) => *server = Some(started),
-                Err(err) => eprintln!("share: could not listen: {err}"),
+            self.share_server.borrow_mut().take();
+            return;
+        }
+        if self.share_server.borrow().is_some() {
+            return;
+        }
+        match ShareServer::start() {
+            Ok(started) => *self.share_server.borrow_mut() = Some(started),
+            Err(err) => {
+                eprintln!("share: could not listen: {err}");
+                self.dispatch(Event::ShareFailed);
             }
         }
     }

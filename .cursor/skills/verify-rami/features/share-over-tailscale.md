@@ -30,4 +30,5 @@ Preconditions:
 ## Gotchas
 
 - `tailscale serve` outlives rami. It is the user's one-time setup; leave it in place after a run.
-- Cleanup restores defaults, so the next launch starts with sharing off.
+- Cleanup restores the defaults snapshot from launch, including `shareOverTailscale`, so sharing comes back on next launch if it was on before.
+- If another process holds port 47960, turning sharing on unchecks it again and stores `0`.
