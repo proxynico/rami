@@ -167,8 +167,8 @@ struct ScanState {
     app_starts: Vec<u64>,
     app_results: VecDeque<AppScanResult>,
     shared_configured: bool,
-    shared_starts: usize,
-    shared_results: VecDeque<io::Result<SharedReading>>,
+    shared_starts: Vec<u64>,
+    shared_results: VecDeque<SharedFetchResult>,
 }
 
 #[derive(Clone, Default)]
@@ -193,12 +193,18 @@ impl FakeScans {
         scans
     }
 
-    fn push_shared(&self, result: io::Result<SharedReading>) {
-        self.0.borrow_mut().shared_results.push_back(result);
+    /// Answer the latest ask with `reading`.
+    fn push_shared(&self, reading: io::Result<SharedReading>) {
+        let mut state = self.0.borrow_mut();
+        let generation = *state.shared_starts.last().expect("nothing asked");
+        state.shared_results.push_back(SharedFetchResult {
+            generation,
+            reading,
+        });
     }
 
     fn shared_starts(&self) -> usize {
-        self.0.borrow().shared_starts
+        self.0.borrow().shared_starts.len()
     }
 }
 
@@ -215,11 +221,11 @@ impl ScanRunner for FakeScans {
         self.0.borrow().shared_configured
     }
 
-    fn start_shared_fetch(&mut self) {
-        self.0.borrow_mut().shared_starts += 1;
+    fn start_shared_fetch(&mut self, generation: u64) {
+        self.0.borrow_mut().shared_starts.push(generation);
     }
 
-    fn poll_shared_fetch(&mut self) -> Option<io::Result<SharedReading>> {
+    fn poll_shared_fetch(&mut self) -> Option<SharedFetchResult> {
         self.0.borrow_mut().shared_results.pop_front()
     }
 }
@@ -843,7 +849,13 @@ fn a_failed_ask_shows_offline_with_the_last_title() {
     scans.push_shared(Ok(shared_reading()));
     engine.step(Event::DrainTimerFired);
 
-    engine.step(Event::Tick);
+    let effects = engine.step(Event::Tick);
+    assert!(
+        effects.contains(&Effect::ScheduleDrain {
+            delay: MENU_OPEN_DRAIN_DELAY
+        }),
+        "a tick's ask is picked up within 150 ms, not a tick later"
+    );
     scans.push_shared(Err(io::Error::other("connection refused")));
     let effects = engine.step(Event::DrainTimerFired);
     assert_eq!(
@@ -901,4 +913,20 @@ fn hiding_the_shared_mac_drops_it_and_stops_asking() {
 
     let effects = engine.step(Event::Toggle(Setting::ShowSharedMac)); // on
     assert_eq!(effects.last(), Some(&Effect::ScheduleMenuReopen));
+}
+
+#[test]
+fn an_answer_from_before_the_menu_closed_is_never_shown() {
+    let (mut engine, scans) = shared_engine();
+    engine.step(Event::Startup);
+    engine.step(Event::MenuWillOpen);
+    scans.push_shared(Ok(shared_reading())); // arrives after the close below
+    engine.step(Event::MenuDidClose);
+
+    let effects = engine.step(Event::MenuWillOpen);
+    assert_eq!(
+        menu_shared(&effects),
+        Some(SharedMac::Loading { title: None })
+    );
+    assert_eq!(scans.shared_starts(), 2, "the reopen asks again");
 }

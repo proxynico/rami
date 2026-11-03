@@ -157,6 +157,12 @@ pub(crate) trait Samplers {
     fn reset_cpu(&mut self);
 }
 
+/// A shared Mac's answer, tagged with the menu session that asked for it.
+pub(crate) struct SharedFetchResult {
+    pub(crate) generation: u64,
+    pub(crate) reading: io::Result<SharedReading>,
+}
+
 pub(crate) struct AppScanResult {
     pub(crate) generation: u64,
     pub(crate) completed_at: Instant,
@@ -173,8 +179,8 @@ pub(crate) trait ScanRunner {
     fn poll_app_scan(&mut self) -> Option<AppScanResult>;
     /// Whether a shared Mac's host is set up to ask.
     fn shared_mac_configured(&self) -> bool;
-    fn start_shared_fetch(&mut self);
-    fn poll_shared_fetch(&mut self) -> Option<io::Result<SharedReading>>;
+    fn start_shared_fetch(&mut self, generation: u64);
+    fn poll_shared_fetch(&mut self) -> Option<SharedFetchResult>;
 }
 
 /// Launch-at-login service. `toggle` attempts the flip and returns the
@@ -251,6 +257,9 @@ pub(crate) struct RefreshEngine<S, R, L> {
     shared: SharedMac,
     shared_title: Option<String>,
     shared_fetch_in_flight: bool,
+    /// Bumped when the menu closes, so an answer that arrives later is not
+    /// shown as current on the next open.
+    shared_generation: u64,
     ticks_since_shared_reading: u8,
     menu_open: bool,
     ticks_until_app_refresh: u8,
@@ -293,6 +302,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             shared: SharedMac::Hidden,
             shared_title: None,
             shared_fetch_in_flight: false,
+            shared_generation: 0,
             ticks_since_shared_reading: 0,
             menu_open: false,
             ticks_until_app_refresh: 0,
@@ -345,6 +355,8 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 self.menu_open = false;
                 self.ticks_until_app_refresh = 0;
                 self.samplers.reset_cpu();
+                self.shared_generation = self.shared_generation.wrapping_add(1);
+                self.shared_fetch_in_flight = false;
                 // Nothing to drain into once the dropdown is gone.
                 out.push(Effect::CancelDrain);
             }
@@ -495,7 +507,10 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                     self.drain_shared_fetch();
                     if self.shared_visible() && !self.shared_fetch_in_flight {
                         self.shared_fetch_in_flight = true;
-                        self.scans.start_shared_fetch();
+                        self.scans.start_shared_fetch(self.shared_generation);
+                        out.push(Effect::ScheduleDrain {
+                            delay: MENU_OPEN_DRAIN_DELAY,
+                        });
                     }
                     let cpu = self.sample_cpu_if_visible();
                     self.last_cpu_state = cpu;
@@ -697,11 +712,14 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
 
     fn drain_shared_fetch(&mut self) {
         while let Some(result) = self.scans.poll_shared_fetch() {
+            if result.generation != self.shared_generation {
+                continue;
+            }
             self.shared_fetch_in_flight = false;
             if !self.shared_visible() {
                 continue;
             }
-            self.shared = match result {
+            self.shared = match result.reading {
                 Ok(reading) => {
                     self.shared_title = Some(reading.model.clone());
                     self.ticks_since_shared_reading = 0;

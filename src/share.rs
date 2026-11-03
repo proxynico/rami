@@ -158,23 +158,45 @@ pub(crate) fn fetch(host: &str) -> io::Result<SharedReading> {
         .to_socket_addrs()?
         .next()
         .ok_or_else(|| io::Error::other(format!("{host} did not resolve")))?;
+    let deadline = Instant::now() + FETCH_TIMEOUT;
     let mut stream = TcpStream::connect_timeout(&address, FETCH_TIMEOUT)?;
-    stream.set_read_timeout(Some(FETCH_TIMEOUT))?;
     stream.set_write_timeout(Some(FETCH_TIMEOUT))?;
     stream.write_all(format!("GET / HTTP/1.0\r\nHost: {host}\r\n\r\n").as_bytes())?;
-    let mut response = String::new();
-    stream
-        .take(MAX_REQUEST_BYTES as u64)
-        .read_to_string(&mut response)?;
-    let (head, body) = response
-        .split_once("\r\n\r\n")
-        .ok_or_else(|| io::Error::other("incomplete response"))?;
-    if !head.starts_with("HTTP/1.0 200") {
-        return Err(io::Error::other(
-            head.lines().next().unwrap_or("").to_string(),
-        ));
+    let mut response = Vec::new();
+    let mut buffer = [0u8; 1024];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "answer too slow"));
+        }
+        stream.set_read_timeout(Some(remaining))?;
+        match stream.read(&mut buffer)? {
+            0 => break,
+            read => response.extend_from_slice(&buffer[..read]),
+        }
+        if response.len() > MAX_REQUEST_BYTES {
+            return Err(io::Error::other("answer too long"));
+        }
     }
-    decode(body).ok_or_else(|| io::Error::other("unreadable shared reading"))
+    let response = String::from_utf8(response).map_err(io::Error::other)?;
+    parse_response(&response).ok_or_else(|| io::Error::other("unreadable shared reading"))
+}
+
+/// A whole `200` answer whose body is exactly `Content-Length` bytes, so a
+/// cut-off answer is never read as numbers.
+fn parse_response(response: &str) -> Option<SharedReading> {
+    let (head, body) = response.split_once("\r\n\r\n")?;
+    let mut lines = head.lines();
+    if !lines.next()?.starts_with("HTTP/1.0 200") {
+        return None;
+    }
+    let length = lines.find_map(|line| {
+        line.strip_prefix("Content-Length: ")?
+            .trim()
+            .parse::<usize>()
+            .ok()
+    })?;
+    (body.len() == length).then(|| decode(body)).flatten()
 }
 
 /// The listener thread. Dropping it stops the thread and waits until the port
@@ -428,6 +450,23 @@ mod tests {
         let body = encode(&reading(None, None));
         assert_eq!(decode(&body.replace("rami-share 1", "rami-share 2")), None);
         assert_eq!(decode(&body.replace("used_bytes=", "x=")), None);
+    }
+
+    #[test]
+    fn only_a_whole_ok_answer_parses() {
+        let body = encode(&reading(None, None));
+        let whole = http_response("200 OK", &body);
+        assert!(parse_response(&whole).is_some());
+        assert_eq!(parse_response(&whole[..whole.len() - 3]), None, "cut off");
+        assert_eq!(
+            parse_response(&format!("{whole}extra=1\n")),
+            None,
+            "too long"
+        );
+        assert_eq!(
+            parse_response(&http_response("503 Service Unavailable", &body)),
+            None
+        );
     }
 
     #[test]

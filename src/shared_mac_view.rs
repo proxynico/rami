@@ -3,8 +3,9 @@
 //! the next. It takes the shared Mac's own accent, so only this section turns
 //! red when that Mac is short of memory.
 
-use crate::draw::{draw_text, draw_text_right, fill_swatch};
+use crate::draw::{draw_text, draw_text_right, fill_swatch, text_width};
 use crate::format::{SharedMacDisplay, MAP_CELLS};
+use crate::memory_map_view::{header_figure_font, HEADER_GAP};
 use crate::presentation::{color_for_accent_alpha, MenuMetrics};
 use objc2::rc::Retained;
 use objc2::runtime::NSObjectProtocol;
@@ -102,12 +103,17 @@ impl SharedMacView {
         let title_font = NSFont::systemFontOfSize_weight(size, unsafe { NSFontWeightSemibold });
         let figure_font =
             NSFont::monospacedDigitSystemFontOfSize_weight(size, unsafe { NSFontWeightRegular });
+        let header_figures_font = header_figure_font(
+            &display.figures,
+            size,
+            right - left - text_width(&display.title, &title_font) - HEADER_GAP,
+        );
         draw_text(&display.title, left, HEADER_Y, &title_font, &text);
         draw_text_right(
             &display.figures,
             right,
-            HEADER_Y,
-            &figure_font,
+            HEADER_Y + (size - header_figures_font.pointSize()) / 2.0,
+            &header_figures_font,
             &NSColor::secondaryLabelColor(),
         );
 

@@ -10,7 +10,7 @@ use crate::cpu::CpuSampler;
 use crate::diagnostics::{build_diagnostic_report, current_report_input};
 use crate::engine::{
     AppScanResult, Effect, Event, LaunchAtLogin, RefreshEngine, Render, Samplers, ScanRunner,
-    Setting, SettingChange, REFRESH_TICK_SECONDS,
+    Setting, SettingChange, SharedFetchResult, REFRESH_TICK_SECONDS,
 };
 use crate::gpu::GpuSampler;
 use crate::lock::AppLock;
@@ -19,7 +19,7 @@ use crate::memory::MemorySampler;
 use crate::model::{CpuSnapshot, GpuSnapshot, MemorySnapshot, SystemSnapshot};
 use crate::process_memory::ProcessMemorySampler;
 use crate::settings::SettingsStore;
-use crate::share::{self, ShareServer, SharedReading};
+use crate::share::{self, ShareServer};
 use crate::tray::TrayController;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -77,8 +77,8 @@ struct ThreadScanRunner {
     app_sender: Sender<AppScanResult>,
     app_receiver: Receiver<AppScanResult>,
     shared_host: Option<String>,
-    shared_sender: Sender<io::Result<SharedReading>>,
-    shared_receiver: Receiver<io::Result<SharedReading>>,
+    shared_sender: Sender<SharedFetchResult>,
+    shared_receiver: Receiver<SharedFetchResult>,
 }
 
 impl ThreadScanRunner {
@@ -120,17 +120,20 @@ impl ScanRunner for ThreadScanRunner {
         self.shared_host.is_some()
     }
 
-    fn start_shared_fetch(&mut self) {
+    fn start_shared_fetch(&mut self, generation: u64) {
         let Some(host) = self.shared_host.clone() else {
             return;
         };
         let sender = self.shared_sender.clone();
         thread::spawn(move || {
-            let _ = sender.send(share::fetch(&host));
+            let _ = sender.send(SharedFetchResult {
+                generation,
+                reading: share::fetch(&host),
+            });
         });
     }
 
-    fn poll_shared_fetch(&mut self) -> Option<io::Result<SharedReading>> {
+    fn poll_shared_fetch(&mut self) -> Option<SharedFetchResult> {
         self.shared_receiver.try_recv().ok()
     }
 }
