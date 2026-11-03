@@ -11,6 +11,7 @@ use crate::model::MemoryPressure;
 use crate::presentation::MenuMetrics;
 use crate::pressure_view::PressureView;
 use crate::row_view::{RowContent, RowView};
+use crate::shared_mac_view::SharedMacView;
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
@@ -68,6 +69,7 @@ fn make_muted_row(mtm: MainThreadMarker, metrics: MenuMetrics, label: &str) -> R
 pub(super) fn build_controller(
     mtm: MainThreadMarker,
     refresh_target: Retained<AnyObject>,
+    shared_mac_configured: bool,
 ) -> TrayController {
     let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
     let menu = NSMenu::new(mtm);
@@ -78,6 +80,7 @@ pub(super) fn build_controller(
     let map_view = MemoryMapView::new(mtm, metrics);
     let pressure_view = PressureView::new(mtm, metrics);
     let history_view = MemoryHistoryView::new(mtm, metrics);
+    let shared_view = SharedMacView::new(mtm, metrics);
 
     let auto_refresh_item =
         make_command_item(mtm, "Auto-Refresh", Some(sel!(toggleAutoRefresh:)), target);
@@ -85,6 +88,14 @@ pub(super) fn build_controller(
         make_command_item(mtm, "Show Apps", Some(sel!(toggleShowAppUsage:)), target);
     let show_cpu_item = make_command_item(mtm, "Show CPU", Some(sel!(toggleShowCpu:)), target);
     let show_gpu_item = make_command_item(mtm, "Show GPU", Some(sel!(toggleShowGpu:)), target);
+    let show_shared_mac_item = shared_mac_configured.then(|| {
+        make_command_item(
+            mtm,
+            "Show Shared Mac",
+            Some(sel!(toggleShowSharedMac:)),
+            target,
+        )
+    });
     let share_item = make_command_item(
         mtm,
         "Share over Tailscale",
@@ -125,10 +136,13 @@ pub(super) fn build_controller(
         &show_app_usage_item,
         &show_cpu_item,
         &show_gpu_item,
-        &share_item,
-        &launch_at_login_item,
-        &diagnostics_item,
     ] {
+        settings_menu.addItem(item);
+    }
+    if let Some(item) = &show_shared_mac_item {
+        settings_menu.addItem(item);
+    }
+    for item in [&share_item, &launch_at_login_item, &diagnostics_item] {
         settings_menu.addItem(item);
     }
     settings_menu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -165,6 +179,9 @@ pub(super) fn build_controller(
         app_items: (0..APP_ROW_POOL).map(|_| make_row(mtm, metrics)).collect(),
         cpu_item: make_row(mtm, metrics),
         gpu_item: make_row(mtm, metrics),
+        shared_status_item: make_row(mtm, metrics),
+        shared_item: make_view_item(mtm, &shared_view),
+        shared_view,
         settings_item,
         quit_item,
         auto_refresh_item,
@@ -172,6 +189,7 @@ pub(super) fn build_controller(
         show_cpu_item,
         show_gpu_item,
         share_item,
+        show_shared_mac_item,
         launch_at_login_item,
         shape: Cell::new(None),
         last_gauge: Cell::new(None),

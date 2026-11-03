@@ -137,6 +137,16 @@ show them. rami never listens beyond localhost: `tailscale serve --bg
 The answer carries no app names. The listener samples when asked, so a
 Mac nobody asks does no extra work. `src/share.rs` owns the format.
 
+The Mac that reads shows one shared Mac, set with `defaults write
+com.nicomontero.rami sharedMacHost <host>` and read at launch. Its
+section follows CPU and GPU: the model as title with used / total and
+Memory %, the 64 map cells as a two-row strip, then Pressure and Swap on
+one row and CPU and GPU on the next. It asks only while the menu is
+open, every tick, and shows Offline rather than old numbers when the
+ask fails. The section takes the shared Mac's own pressure accent. The
+status item and its icon stay this Mac's. Show Shared Mac in Settings
+hides the section; it appears only when a host is set.
+
 ### Launch at login
 
 `SMAppService.mainAppService().status` is the only launch-at-login

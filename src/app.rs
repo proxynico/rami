@@ -16,10 +16,10 @@ use crate::gpu::GpuSampler;
 use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
-use crate::model::{CpuSnapshot, GpuSnapshot, MemorySnapshot};
+use crate::model::{CpuSnapshot, GpuSnapshot, MemorySnapshot, SystemSnapshot};
 use crate::process_memory::ProcessMemorySampler;
 use crate::settings::SettingsStore;
-use crate::share::ShareServer;
+use crate::share::{self, ShareServer, SharedReading};
 use crate::tray::TrayController;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -76,14 +76,21 @@ impl Samplers for SystemSamplers {
 struct ThreadScanRunner {
     app_sender: Sender<AppScanResult>,
     app_receiver: Receiver<AppScanResult>,
+    shared_host: Option<String>,
+    shared_sender: Sender<io::Result<SharedReading>>,
+    shared_receiver: Receiver<io::Result<SharedReading>>,
 }
 
 impl ThreadScanRunner {
-    fn new() -> Self {
+    fn new(shared_host: Option<String>) -> Self {
         let (app_sender, app_receiver) = mpsc::channel();
+        let (shared_sender, shared_receiver) = mpsc::channel();
         Self {
             app_sender,
             app_receiver,
+            shared_host,
+            shared_sender,
+            shared_receiver,
         }
     }
 }
@@ -107,6 +114,24 @@ impl ScanRunner for ThreadScanRunner {
 
     fn poll_app_scan(&mut self) -> Option<AppScanResult> {
         self.app_receiver.try_recv().ok()
+    }
+
+    fn shared_mac_configured(&self) -> bool {
+        self.shared_host.is_some()
+    }
+
+    fn start_shared_fetch(&mut self) {
+        let Some(host) = self.shared_host.clone() else {
+            return;
+        };
+        let sender = self.shared_sender.clone();
+        thread::spawn(move || {
+            let _ = sender.send(share::fetch(&host));
+        });
+    }
+
+    fn poll_shared_fetch(&mut self) -> Option<io::Result<SharedReading>> {
+        self.shared_receiver.try_recv().ok()
     }
 }
 
@@ -176,6 +201,7 @@ impl AppState {
                     SettingChange::ShareOverTailscale(value) => {
                         self.settings.set_share_over_tailscale(value)
                     }
+                    SettingChange::ShowSharedMac(value) => self.settings.set_show_shared_mac(value),
                 },
                 Effect::Share(on) => self.set_sharing(on),
                 Effect::ScheduleMenuReopen => self.schedule_one_shot(sel!(reopenMenu:)),
@@ -205,9 +231,18 @@ impl AppState {
                 gpu,
                 apps,
                 history,
-            } => self
-                .tray
-                .set_menu_snapshot(snapshot, cpu, gpu, &apps, &history, mtm),
+                shared,
+            } => self.tray.set_menu_snapshot(
+                SystemSnapshot {
+                    memory: snapshot,
+                    cpu,
+                    gpu,
+                },
+                &apps,
+                &history,
+                &shared,
+                mtm,
+            ),
             Render::SettingsState {
                 settings,
                 launch_at_login,
@@ -383,6 +418,11 @@ define_class!(
             dispatch_event(Event::Toggle(Setting::ShowGpu));
         }
 
+        #[unsafe(method(toggleShowSharedMac:))]
+        fn toggle_show_shared_mac(&self, _sender: &AnyObject) {
+            dispatch_event(Event::Toggle(Setting::ShowSharedMac));
+        }
+
         #[unsafe(method(toggleShareOverTailscale:))]
         fn toggle_share_over_tailscale(&self, _sender: &AnyObject) {
             dispatch_event(Event::Toggle(Setting::ShareOverTailscale));
@@ -443,20 +483,21 @@ impl App {
         let app = NSApplication::sharedApplication(mtm);
         let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         let refresh_target = RefreshTarget::new(mtm);
-        let tray = TrayController::new(mtm, refresh_target.clone().into());
+        let settings_store = SettingsStore::new();
+        let settings = settings_store.load();
+        let shared_host = settings_store.shared_mac_host();
+        let tray = TrayController::new(mtm, refresh_target.clone().into(), shared_host.is_some());
         // NSMenu holds its delegate weakly; `AppState` retains the target for
         // the app lifetime, so the delegate stays valid.
         tray.set_menu_delegate(ProtocolObject::from_ref(&*refresh_target));
         let refresh_target: Retained<AnyObject> = refresh_target.into();
-        let settings_store = SettingsStore::new();
-        let settings = settings_store.load();
         let engine = RefreshEngine::new(
             SystemSamplers {
                 memory: MemorySampler::new()?,
                 cpu: CpuSampler::new(),
                 gpu: GpuSampler::new(),
             },
-            ThreadScanRunner::new(),
+            ThreadScanRunner::new(shared_host),
             LoginItemPort(LaunchAtLoginController::new()),
             settings,
         );

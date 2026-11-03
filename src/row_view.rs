@@ -69,6 +69,17 @@ impl RowContent {
         }
     }
 
+    /// A title with a demoted status, e.g. "Mac mini" and "Offline".
+    pub(crate) fn status(label: &str, status: &str) -> Self {
+        Self {
+            swatch: None,
+            label: label.to_string(),
+            strength: RowStrength::Primary,
+            detail: Some(status.to_string()),
+            value: None,
+        }
+    }
+
     pub(crate) fn muted(label: &str) -> Self {
         Self {
             swatch: None,

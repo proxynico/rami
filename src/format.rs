@@ -4,6 +4,7 @@ use crate::model::{
     SystemSnapshot,
 };
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
+use crate::share::SharedMac;
 use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 
 const APP_NAME_MAX_CHARS: usize = 16;
@@ -209,12 +210,42 @@ pub struct DropdownModel {
     pub apps: AppSectionDisplay,
     pub cpu: Option<StatRow>,
     pub gpu: Option<StatRow>,
+    pub shared: SharedSection,
+}
+
+/// The shared Mac's section, after CPU and GPU.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SharedSection {
+    Hidden,
+    /// One line: the title and "Loading…" or "Offline".
+    Status {
+        title: String,
+        status: &'static str,
+    },
+    Reading(SharedMacDisplay),
+}
+
+/// A shared reading as the section draws it: header, a strip of the 64 map
+/// cells, then Pressure and Swap, CPU and GPU.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedMacDisplay {
+    pub title: String,
+    /// e.g. "10.8 / 16.0 GB · 67%"
+    pub figures: String,
+    pub cells: Vec<MemoryCategory>,
+    /// The shared Mac's own pressure accent, independent of this Mac's.
+    pub accent: Accent,
+    pub pressure: String,
+    pub swap: String,
+    pub cpu: String,
+    pub gpu: String,
 }
 
 pub(crate) fn dropdown_model(
     snapshot: SystemSnapshot,
     apps: &AppMemorySnapshot,
     history: &[u64],
+    shared: &SharedMac,
 ) -> DropdownModel {
     let memory = snapshot.memory;
     DropdownModel {
@@ -231,6 +262,49 @@ pub(crate) fn dropdown_model(
         apps: app_section_display(apps),
         cpu: cpu_row(snapshot.cpu),
         gpu: gpu_row(snapshot.gpu),
+        shared: shared_section(shared),
+    }
+}
+
+const SHARED_TITLE_FALLBACK: &str = "Shared Mac";
+
+fn shared_section(shared: &SharedMac) -> SharedSection {
+    let status = |title: &Option<String>, status| SharedSection::Status {
+        title: title
+            .as_deref()
+            .unwrap_or(SHARED_TITLE_FALLBACK)
+            .to_string(),
+        status,
+    };
+    match shared {
+        SharedMac::Hidden => SharedSection::Hidden,
+        SharedMac::Loading { title } => status(title, "Loading…"),
+        SharedMac::Offline { title } => status(title, "Offline"),
+        SharedMac::Reading(reading) => {
+            let memory = &reading.memory;
+            let missing = || "–".to_string();
+            SharedSection::Reading(SharedMacDisplay {
+                title: reading.model.clone(),
+                figures: format!(
+                    "{} · {}%",
+                    gb_pair(memory.used_bytes, memory.total_bytes),
+                    memory.used_percent
+                ),
+                cells: allocate_cells(&memory_parts(memory), MAP_CELLS),
+                accent: Accent::from(classify_pressure(memory.pressure_percent)),
+                pressure: format!("{}%", memory.pressure_percent),
+                swap: mem_text(memory.swap_used_bytes),
+                cpu: reading.cpu.map_or_else(missing, |cpu| {
+                    format!(
+                        "{}%",
+                        cpu.user_percent.saturating_add(cpu.system_percent).min(100)
+                    )
+                }),
+                gpu: reading.gpu.map_or_else(missing, |gpu| {
+                    format!("{}%", gpu.utilization_percent.min(100))
+                }),
+            })
+        }
     }
 }
 
@@ -423,7 +497,7 @@ mod tests {
     }
 
     fn model_with_apps(snapshot: SystemSnapshot, apps: AppMemorySnapshot) -> DropdownModel {
-        dropdown_model(snapshot, &apps, &[])
+        dropdown_model(snapshot, &apps, &[], &SharedMac::Hidden)
     }
 
     const SIXTEEN_GIB: u64 = 17_179_869_184;
@@ -759,5 +833,35 @@ mod tests {
             footprint_bytes,
             delta_bytes,
         }
+    }
+
+    #[test]
+    fn shared_section_names_the_mac_and_fills_two_rows() {
+        let reading = crate::share::SharedReading {
+            name: "nicomini".to_string(),
+            model: "Mac mini".to_string(),
+            memory: snapshot(SIXTEEN_GIB).memory,
+            cpu: Some(CpuSnapshot {
+                user_percent: 14,
+                system_percent: 7,
+            }),
+            gpu: None,
+        };
+        let SharedSection::Reading(display) = shared_section(&SharedMac::Reading(reading)) else {
+            panic!("expected a reading");
+        };
+        assert_eq!(display.title, "Mac mini");
+        assert_eq!(display.cells.len(), MAP_CELLS);
+        assert_eq!(display.cpu, "21%");
+        assert_eq!(display.gpu, "–");
+
+        assert_eq!(
+            shared_section(&SharedMac::Offline { title: None }),
+            SharedSection::Status {
+                title: "Shared Mac".to_string(),
+                status: "Offline"
+            }
+        );
+        assert_eq!(shared_section(&SharedMac::Hidden), SharedSection::Hidden);
     }
 }

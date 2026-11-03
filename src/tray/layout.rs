@@ -2,7 +2,7 @@
 //! sequence `TrayController::rebuild_menu` adds them in. The menu is built
 //! from `menu_slots`, so the tests below pin the real order.
 
-use crate::format::{AppSectionDisplay, DropdownModel, LEGEND_CATEGORIES};
+use crate::format::{AppSectionDisplay, DropdownModel, SharedSection, LEGEND_CATEGORIES};
 
 pub(super) const APP_ROW_POOL: usize = 3;
 
@@ -12,6 +12,13 @@ pub(super) enum AppShape {
     Loading,
     Unavailable,
     Rows(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SharedShape {
+    Hidden,
+    Status,
+    Reading,
 }
 
 /// What the menu holds, without the values. The menu is rebuilt only when
@@ -25,6 +32,7 @@ pub(super) enum MenuShape {
         show_swap: bool,
         show_cpu: bool,
         show_gpu: bool,
+        shared: SharedShape,
     },
 }
 
@@ -42,6 +50,8 @@ pub(super) enum Slot {
     App(usize),
     Cpu,
     Gpu,
+    SharedStatus,
+    SharedMac,
     Separator,
     Settings,
     Quit,
@@ -61,6 +71,11 @@ pub(super) fn menu_shape_for(model: Option<&DropdownModel>) -> MenuShape {
         show_swap: model.swap.is_some(),
         show_cpu: model.cpu.is_some(),
         show_gpu: model.gpu.is_some(),
+        shared: match model.shared {
+            SharedSection::Hidden => SharedShape::Hidden,
+            SharedSection::Status { .. } => SharedShape::Status,
+            SharedSection::Reading(_) => SharedShape::Reading,
+        },
     }
 }
 
@@ -73,6 +88,7 @@ pub(super) fn menu_slots(shape: MenuShape) -> Vec<Slot> {
             show_swap,
             show_cpu,
             show_gpu,
+            shared,
         } => {
             slots.push(Slot::Map);
             slots.extend((0..LEGEND_CATEGORIES.len()).map(Slot::Legend));
@@ -99,6 +115,11 @@ pub(super) fn menu_slots(shape: MenuShape) -> Vec<Slot> {
             if show_gpu {
                 slots.push(Slot::Gpu);
             }
+            match shared {
+                SharedShape::Hidden => {}
+                SharedShape::Status => slots.extend([Slot::Separator, Slot::SharedStatus]),
+                SharedShape::Reading => slots.extend([Slot::Separator, Slot::SharedMac]),
+            }
         }
     }
     slots.extend([Slot::Separator, Slot::Settings, Slot::Separator, Slot::Quit]);
@@ -115,6 +136,7 @@ mod tests {
         SystemSnapshot,
     };
     use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
+    use crate::share::SharedMac;
 
     const COMMANDS: [Slot; 4] = [Separator, Settings, Separator, Quit];
 
@@ -140,7 +162,7 @@ mod tests {
     }
 
     fn slots(snapshot: SystemSnapshot, apps: AppMemorySnapshot) -> Vec<Slot> {
-        let model = dropdown_model(snapshot, &apps, &[]);
+        let model = dropdown_model(snapshot, &apps, &[], &SharedMac::Hidden);
         menu_slots(menu_shape_for(Some(&model)))
     }
 
@@ -221,6 +243,35 @@ mod tests {
         assert_eq!(
             slots(snapshot, AppMemorySnapshot::Hidden),
             [&MEMORY[..], &[Cpu, Gpu], &COMMANDS].concat()
+        );
+    }
+
+    #[test]
+    fn shared_mac_follows_cpu_and_gpu_behind_its_own_separator() {
+        let model = |shared: &SharedMac| {
+            menu_slots(menu_shape_for(Some(&dropdown_model(
+                snapshot(),
+                &AppMemorySnapshot::Hidden,
+                &[],
+                shared,
+            ))))
+        };
+        assert_eq!(
+            model(&SharedMac::Offline { title: None }),
+            [&MEMORY[..8], &[Separator, SharedStatus], &COMMANDS].concat()
+        );
+        let mut reading_snapshot = snapshot();
+        reading_snapshot.memory.swap_used_bytes = 0;
+        let reading = crate::share::SharedReading {
+            name: "nicomini".to_string(),
+            model: "Mac mini".to_string(),
+            memory: reading_snapshot.memory,
+            cpu: None,
+            gpu: None,
+        };
+        assert_eq!(
+            model(&SharedMac::Reading(reading)),
+            [&MEMORY[..8], &[Separator, SharedMac], &COMMANDS].concat()
         );
     }
 }

@@ -4,19 +4,18 @@ mod layout;
 use self::layout::{menu_shape_for, menu_slots, MenuShape, Slot};
 use crate::format::{
     dropdown_model, gauge_accessibility_label, gauge_tooltip, Accent, AppSectionDisplay,
-    DropdownModel,
+    DropdownModel, SharedSection,
 };
 use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_map_view::MemoryMapView;
-use crate::model::{
-    classify_pressure, CpuModuleState, GpuModuleState, MemoryPressure, MemorySnapshot,
-    SystemSnapshot,
-};
+use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
 use crate::pressure_view::PressureView;
 use crate::process_memory::AppMemorySnapshot;
 use crate::row_view::{RowContent, RowView};
 use crate::settings::Settings;
+use crate::share::SharedMac;
+use crate::shared_mac_view::SharedMacView;
 use crate::status_icon::{make_status_image, StatusImage};
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
@@ -48,6 +47,9 @@ pub struct TrayController {
     app_items: Vec<RowItem>,
     cpu_item: RowItem,
     gpu_item: RowItem,
+    shared_status_item: RowItem,
+    shared_item: Retained<NSMenuItem>,
+    shared_view: Retained<SharedMacView>,
     settings_item: Retained<NSMenuItem>,
     quit_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
@@ -55,6 +57,8 @@ pub struct TrayController {
     show_cpu_item: Retained<NSMenuItem>,
     show_gpu_item: Retained<NSMenuItem>,
     share_item: Retained<NSMenuItem>,
+    /// Present only when a shared Mac's host is set up.
+    show_shared_mac_item: Option<Retained<NSMenuItem>>,
     launch_at_login_item: Retained<NSMenuItem>,
     shape: Cell<Option<MenuShape>>,
     last_gauge: Cell<Option<(u8, MemoryTrend, MemoryPressure)>>,
@@ -69,8 +73,12 @@ struct RowItem {
 }
 
 impl TrayController {
-    pub fn new(mtm: MainThreadMarker, refresh_target: Retained<AnyObject>) -> Self {
-        build::build_controller(mtm, refresh_target)
+    pub fn new(
+        mtm: MainThreadMarker,
+        refresh_target: Retained<AnyObject>,
+        shared_mac_configured: bool,
+    ) -> Self {
+        build::build_controller(mtm, refresh_target, shared_mac_configured)
     }
 
     pub fn set_gauge_snapshot(
@@ -98,19 +106,13 @@ impl TrayController {
 
     pub fn set_menu_snapshot(
         &self,
-        snapshot: MemorySnapshot,
-        cpu: CpuModuleState,
-        gpu: GpuModuleState,
+        system: SystemSnapshot,
         apps: &AppMemorySnapshot,
         history: &[u64],
+        shared: &SharedMac,
         mtm: MainThreadMarker,
     ) {
-        let system = SystemSnapshot {
-            memory: snapshot,
-            cpu,
-            gpu,
-        };
-        self.apply_model(Some(&dropdown_model(system, apps, history)), mtm);
+        self.apply_model(Some(&dropdown_model(system, apps, history, shared)), mtm);
     }
 
     /// Attach the open/close delegate to the main tray menu only: the root
@@ -130,6 +132,9 @@ impl TrayController {
         set_checked(&self.show_cpu_item, settings.show_cpu);
         set_checked(&self.show_gpu_item, settings.show_gpu);
         set_checked(&self.share_item, settings.share_over_tailscale);
+        if let Some(item) = &self.show_shared_mac_item {
+            set_checked(item, settings.show_shared_mac);
+        }
         self.launch_at_login_item
             .setTitle(&NSString::from_str(launch_at_login.menu_title()));
         set_checked(
@@ -223,6 +228,14 @@ impl TrayController {
                 row_item.view.update(&RowContent::stat(row), accent);
             }
         }
+        match &model.shared {
+            SharedSection::Hidden => {}
+            SharedSection::Status { title, status } => self
+                .shared_status_item
+                .view
+                .update(&RowContent::status(title, status), Accent::Neutral),
+            SharedSection::Reading(display) => self.shared_view.update(display),
+        }
     }
 
     fn rebuild_menu(&self, shape: MenuShape, mtm: MainThreadMarker) {
@@ -244,6 +257,8 @@ impl TrayController {
                 Slot::App(index) => &self.app_items[index].item,
                 Slot::Cpu => &self.cpu_item.item,
                 Slot::Gpu => &self.gpu_item.item,
+                Slot::SharedStatus => &self.shared_status_item.item,
+                Slot::SharedMac => &self.shared_item,
                 Slot::Settings => &self.settings_item,
                 Slot::Quit => &self.quit_item,
             };

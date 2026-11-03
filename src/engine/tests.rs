@@ -166,6 +166,9 @@ impl Samplers for FakeSamplers {
 struct ScanState {
     app_starts: Vec<u64>,
     app_results: VecDeque<AppScanResult>,
+    shared_configured: bool,
+    shared_starts: usize,
+    shared_results: VecDeque<io::Result<SharedReading>>,
 }
 
 #[derive(Clone, Default)]
@@ -183,6 +186,20 @@ impl FakeScans {
     fn app_starts(&self) -> Vec<u64> {
         self.0.borrow().app_starts.clone()
     }
+
+    fn with_shared_mac() -> Self {
+        let scans = Self::default();
+        scans.0.borrow_mut().shared_configured = true;
+        scans
+    }
+
+    fn push_shared(&self, result: io::Result<SharedReading>) {
+        self.0.borrow_mut().shared_results.push_back(result);
+    }
+
+    fn shared_starts(&self) -> usize {
+        self.0.borrow().shared_starts
+    }
 }
 
 impl ScanRunner for FakeScans {
@@ -192,6 +209,18 @@ impl ScanRunner for FakeScans {
 
     fn poll_app_scan(&mut self) -> Option<AppScanResult> {
         self.0.borrow_mut().app_results.pop_front()
+    }
+
+    fn shared_mac_configured(&self) -> bool {
+        self.0.borrow().shared_configured
+    }
+
+    fn start_shared_fetch(&mut self) {
+        self.0.borrow_mut().shared_starts += 1;
+    }
+
+    fn poll_shared_fetch(&mut self) -> Option<io::Result<SharedReading>> {
+        self.0.borrow_mut().shared_results.pop_front()
     }
 }
 
@@ -733,4 +762,143 @@ fn copy_diagnostics_carries_the_cached_state() {
             ..
         }]
     ));
+}
+
+// --- shared Mac ------------------------------------------------------
+
+fn shared_reading() -> SharedReading {
+    SharedReading {
+        name: "nicomini".to_string(),
+        model: "Mac mini".to_string(),
+        memory: snapshot(1_000_000_000),
+        cpu: None,
+        gpu: None,
+    }
+}
+
+fn shared_engine() -> (TestEngine, FakeScans) {
+    let (samplers, _, _) = FakeSamplers::healthy();
+    let scans = FakeScans::with_shared_mac();
+    let engine = RefreshEngine::new(samplers, scans.clone(), FakeLaunch, Settings::default());
+    (engine, scans)
+}
+
+fn menu_shared(effects: &[Effect]) -> Option<SharedMac> {
+    effects.iter().rev().find_map(|effect| match effect {
+        Effect::Render(Render::Menu { shared, .. }) => Some(shared.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn shared_mac_stays_hidden_without_a_host() {
+    let (mut engine, _, scans) = engine_on();
+    engine.step(Event::Startup);
+    let effects = engine.step(Event::MenuWillOpen);
+    assert_eq!(menu_shared(&effects), Some(SharedMac::Hidden));
+    assert_eq!(scans.shared_starts(), 0);
+}
+
+#[test]
+fn shared_mac_is_asked_only_while_the_menu_is_open() {
+    let (mut engine, scans) = shared_engine();
+    engine.step(Event::Startup);
+    engine.step(Event::Tick);
+    assert_eq!(scans.shared_starts(), 0, "closed menu asks nothing");
+
+    let effects = engine.step(Event::MenuWillOpen);
+    assert_eq!(scans.shared_starts(), 1);
+    assert_eq!(
+        menu_shared(&effects),
+        Some(SharedMac::Loading { title: None })
+    );
+
+    // Still in flight: the drain keeps polling and does not ask twice.
+    let effects = engine.step(Event::DrainTimerFired);
+    assert!(effects.contains(&Effect::ScheduleDrain {
+        delay: MENU_OPEN_DRAIN_DELAY
+    }));
+    engine.step(Event::Tick);
+    assert_eq!(scans.shared_starts(), 1);
+
+    scans.push_shared(Ok(shared_reading()));
+    let effects = engine.step(Event::DrainTimerFired);
+    assert_eq!(
+        menu_shared(&effects),
+        Some(SharedMac::Reading(shared_reading()))
+    );
+    assert!(!effects
+        .iter()
+        .any(|e| matches!(e, Effect::ScheduleDrain { .. })));
+
+    engine.step(Event::Tick);
+    assert_eq!(scans.shared_starts(), 2, "each open tick asks again");
+}
+
+#[test]
+fn a_failed_ask_shows_offline_with_the_last_title() {
+    let (mut engine, scans) = shared_engine();
+    engine.step(Event::Startup);
+    engine.step(Event::MenuWillOpen);
+    scans.push_shared(Ok(shared_reading()));
+    engine.step(Event::DrainTimerFired);
+
+    engine.step(Event::Tick);
+    scans.push_shared(Err(io::Error::other("connection refused")));
+    let effects = engine.step(Event::DrainTimerFired);
+    assert_eq!(
+        menu_shared(&effects),
+        Some(SharedMac::Offline {
+            title: Some("Mac mini".to_string())
+        })
+    );
+}
+
+#[test]
+fn an_old_reading_shows_as_loading_on_the_next_open() {
+    let (mut engine, scans) = shared_engine();
+    engine.step(Event::Startup);
+    engine.step(Event::MenuWillOpen);
+    scans.push_shared(Ok(shared_reading()));
+    engine.step(Event::DrainTimerFired);
+    engine.step(Event::MenuDidClose);
+
+    let effects = engine.step(Event::MenuWillOpen);
+    assert_eq!(
+        menu_shared(&effects),
+        Some(SharedMac::Reading(shared_reading())),
+        "a fresh reading stays across a reopen"
+    );
+    engine.step(Event::MenuDidClose);
+
+    for _ in 0..SHARED_STALE_TICKS {
+        engine.step(Event::Tick);
+    }
+    let effects = engine.step(Event::MenuWillOpen);
+    assert_eq!(
+        menu_shared(&effects),
+        Some(SharedMac::Loading {
+            title: Some("Mac mini".to_string())
+        })
+    );
+}
+
+#[test]
+fn hiding_the_shared_mac_drops_it_and_stops_asking() {
+    let (mut engine, scans) = shared_engine();
+    engine.step(Event::Startup);
+    engine.step(Event::MenuWillOpen);
+    scans.push_shared(Ok(shared_reading()));
+
+    let effects = engine.step(Event::Toggle(Setting::ShowSharedMac)); // off
+    assert!(effects.contains(&Effect::PersistSetting(SettingChange::ShowSharedMac(false))));
+    assert_eq!(menu_shared(&effects), Some(SharedMac::Hidden));
+    assert!(!effects.contains(&Effect::ScheduleMenuReopen));
+
+    let starts = scans.shared_starts();
+    engine.step(Event::Tick);
+    assert_eq!(scans.shared_starts(), starts);
+
+    let effects = engine.step(Event::Toggle(Setting::ShowSharedMac)); // on
+    assert_eq!(effects.last(), Some(&Effect::ScheduleMenuReopen));
 }

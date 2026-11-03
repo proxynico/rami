@@ -20,6 +20,7 @@ mod process_memory;
 mod row_view;
 mod settings;
 mod share;
+mod shared_mac_view;
 mod status_icon;
 mod tray;
 mod trend;
