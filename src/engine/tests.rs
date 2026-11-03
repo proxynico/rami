@@ -641,6 +641,36 @@ fn hiding_the_module_again_cancels_its_reopen() {
 }
 
 #[test]
+fn sharing_starts_with_the_app_and_follows_its_toggle() {
+    let (mut engine, _, _) = engine_on();
+    assert!(!engine.step(Event::Startup).contains(&Effect::Share(true)));
+
+    let effects = engine.step(Event::Toggle(Setting::ShareOverTailscale)); // on
+    assert!(
+        effects.contains(&Effect::PersistSetting(SettingChange::ShareOverTailscale(
+            true
+        )))
+    );
+    assert!(effects.contains(&Effect::Share(true)));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::Render(Render::SettingsState { settings, .. }) if settings.share_over_tailscale
+    )));
+    assert!(!effects.contains(&Effect::ScheduleMenuReopen));
+
+    let effects = engine.step(Event::Toggle(Setting::ShareOverTailscale)); // off
+    assert!(effects.contains(&Effect::Share(false)));
+
+    let (samplers, _, _) = FakeSamplers::healthy();
+    let settings = Settings {
+        share_over_tailscale: true,
+        ..Settings::default()
+    };
+    let mut shared = RefreshEngine::new(samplers, FakeScans::default(), FakeLaunch, settings);
+    assert!(shared.step(Event::Startup).contains(&Effect::Share(true)));
+}
+
+#[test]
 fn reopen_timer_does_nothing_without_a_pending_reopen() {
     let (mut engine, _, _) = engine_on();
     engine.step(Event::Startup);

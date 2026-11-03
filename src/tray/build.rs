@@ -85,6 +85,12 @@ pub(super) fn build_controller(
         make_command_item(mtm, "Show Apps", Some(sel!(toggleShowAppUsage:)), target);
     let show_cpu_item = make_command_item(mtm, "Show CPU", Some(sel!(toggleShowCpu:)), target);
     let show_gpu_item = make_command_item(mtm, "Show GPU", Some(sel!(toggleShowGpu:)), target);
+    let share_item = make_command_item(
+        mtm,
+        "Share over Tailscale",
+        Some(sel!(toggleShareOverTailscale:)),
+        target,
+    );
     let launch_at_login_item = make_command_item(
         mtm,
         "Launch at Login",
@@ -119,6 +125,7 @@ pub(super) fn build_controller(
         &show_app_usage_item,
         &show_cpu_item,
         &show_gpu_item,
+        &share_item,
         &launch_at_login_item,
         &diagnostics_item,
     ] {
@@ -164,6 +171,7 @@ pub(super) fn build_controller(
         show_app_usage_item,
         show_cpu_item,
         show_gpu_item,
+        share_item,
         launch_at_login_item,
         shape: Cell::new(None),
         last_gauge: Cell::new(None),

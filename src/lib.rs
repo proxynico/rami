@@ -19,6 +19,7 @@ mod proc_list;
 mod process_memory;
 mod row_view;
 mod settings;
+mod share;
 mod status_icon;
 mod tray;
 mod trend;

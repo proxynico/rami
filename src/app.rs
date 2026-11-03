@@ -19,6 +19,7 @@ use crate::memory::MemorySampler;
 use crate::model::{CpuSnapshot, GpuSnapshot, MemorySnapshot};
 use crate::process_memory::ProcessMemorySampler;
 use crate::settings::SettingsStore;
+use crate::share::ShareServer;
 use crate::tray::TrayController;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -142,6 +143,7 @@ struct AppState {
     /// engine's `ScheduleDrain` effect relies on this replace semantics.
     menu_open_drain_timer: RefCell<Option<Retained<NSTimer>>>,
     refresh_timer: RefCell<Option<Retained<NSTimer>>>,
+    share_server: RefCell<Option<ShareServer>>,
 }
 
 impl AppState {
@@ -171,7 +173,11 @@ impl AppState {
                     SettingChange::ShowAppUsage(value) => self.settings.set_show_app_usage(value),
                     SettingChange::ShowCpu(value) => self.settings.set_show_cpu(value),
                     SettingChange::ShowGpu(value) => self.settings.set_show_gpu(value),
+                    SettingChange::ShareOverTailscale(value) => {
+                        self.settings.set_share_over_tailscale(value)
+                    }
                 },
+                Effect::Share(on) => self.set_sharing(on),
                 Effect::ScheduleMenuReopen => self.schedule_one_shot(sel!(reopenMenu:)),
                 Effect::PopUpMenu => self.tray.pop_up_menu(),
                 Effect::CopyDiagnostics {
@@ -235,6 +241,18 @@ impl AppState {
     fn cancel_refresh_timer(&self) {
         if let Some(timer) = self.refresh_timer.borrow_mut().take() {
             timer.invalidate();
+        }
+    }
+
+    fn set_sharing(&self, on: bool) {
+        let mut server = self.share_server.borrow_mut();
+        if !on {
+            server.take();
+        } else if server.is_none() {
+            match ShareServer::start() {
+                Ok(started) => *server = Some(started),
+                Err(err) => eprintln!("share: could not listen: {err}"),
+            }
         }
     }
 
@@ -360,6 +378,11 @@ define_class!(
             dispatch_event(Event::Toggle(Setting::ShowGpu));
         }
 
+        #[unsafe(method(toggleShareOverTailscale:))]
+        fn toggle_share_over_tailscale(&self, _sender: &AnyObject) {
+            dispatch_event(Event::Toggle(Setting::ShareOverTailscale));
+        }
+
         #[unsafe(method(copyDiagnostics:))]
         fn copy_diagnostics(&self, _sender: &AnyObject) {
             dispatch_event(Event::CopyDiagnostics);
@@ -439,6 +462,7 @@ impl App {
             refresh_target,
             menu_open_drain_timer: RefCell::new(None),
             refresh_timer: RefCell::new(None),
+            share_server: RefCell::new(None),
         });
         install_app_state(&state);
         app.finishLaunching();
