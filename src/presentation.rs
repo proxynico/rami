@@ -12,7 +12,7 @@ pub(crate) struct MenuTypeScale {
 }
 
 /// Top-down geometry of the memory map view: header, a 16×4 cell grid on a
-/// board, a contact strip, and a caption.
+/// board, and a contact strip.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MapLayout {
     pub(crate) view_width: f64,
@@ -27,7 +27,6 @@ pub(crate) struct MapLayout {
     pub(crate) cell_height: f64,
     pub(crate) cell_gap: f64,
     pub(crate) strip_height: f64,
-    pub(crate) caption_y: f64,
 }
 
 /// One row: "Pressure", a meter with Warning and Critical ticks, the value.
@@ -101,7 +100,7 @@ impl MenuMetrics {
     pub(crate) fn map_layout(&self) -> MapLayout {
         MapLayout {
             view_width: self.canvas_width,
-            view_height: 110.0,
+            view_height: 94.0,
             left: self.content_left(),
             right: self.content_right(),
             header_y: 6.0,
@@ -112,7 +111,6 @@ impl MenuMetrics {
             cell_height: 10.0,
             cell_gap: 2.0,
             strip_height: 4.0,
-            caption_y: 93.0,
         }
     }
 
@@ -353,7 +351,6 @@ mod tests {
         let map = m.map_layout();
         let grid = map.cell_width() * 16.0 + map.cell_gap * 15.0 + map.board_padding * 2.0;
         assert_eq!(grid, m.content_right() - m.content_left());
-        assert!(map.board_bottom() + map.strip_height <= map.caption_y);
-        assert!(map.caption_y + 13.0 <= map.view_height);
+        assert!(map.board_bottom() + map.strip_height <= map.view_height);
     }
 }

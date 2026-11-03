@@ -35,11 +35,12 @@ reclaims them on demand. Breakdown category.
 
 **Other**:
 Physical RAM the kernel's page counts do not cover: total − used − Cached −
-Free. Breakdown category, shown only when its share rounds to at least 1%.
+Free. Gray map cells, shown only when its share rounds to at least 1%; not
+a breakdown legend row.
 
 **Free**:
-Truly free page count, as Activity Monitor reports it. Breakdown category
-shown in the UI.
+Truly free page count, as Activity Monitor reports it. The map's empty
+cells; not a breakdown legend row.
 _Avoid_: conflating with Available
 
 **Available**:
@@ -79,7 +80,7 @@ can be hidden via Settings toggles.
 The single hue the whole dropdown inherits, driven by pressure state.
 Under Normal, text uses the adaptive label color and marks use orange. Under
 Warning and Critical, orange marks and accent chrome use system red; Other and
-Free marks, labels, and readings stay neutral gray. The status gauge and its
+Free marks stay neutral gray. The status gauge and its
 rising-memory badge share full-strength ink; under Normal they form one template
 image so macOS controls menu-bar contrast. The user's
 macOS accent color is deliberately ignored so a bright personal accent does
@@ -103,9 +104,8 @@ Used categories are solid, Cached is hatched, Other is gray, Free is empty.
 _Avoid_: rings
 
 **Breakdown legend**:
-The monochrome list (App Memory / Wired / Compressed / Other / Cached / Free)
-that partitions RAM. Its rows sum to the total, less any Other too small to
-show.
+The monochrome list under the memory map: App Memory / Wired / Compressed /
+Cached, each with its size. Other and Free appear only as map cells.
 
 **Status gauge**:
 The single menu-bar icon: a RAM stick whose four chips fill left to right

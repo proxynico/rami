@@ -421,7 +421,7 @@ cmd_capture_open_menu() {
     for i in $(seq 1 30); do
       if dump="$(dump_open_menu "$(recorded_pid)" 2>/dev/null)" \
         && printf '%s' "$dump" | grep -q $'\tMemory\t' \
-        && printf '%s' "$dump" | grep -q $'\tRefresh\t'; then
+        && printf '%s' "$dump" | grep -q $'\tSettings\t'; then
         printf '%s\n' "$dump" >"$dump_path"
         screencapture -x "$shot_path"
         cmd_dismiss_menu || true
@@ -437,7 +437,7 @@ cmd_capture_open_menu() {
   wait "$watcher"
   [ -s "$dump_path" ] || die "capture-open-menu wrote no dump"
   grep -q $'\tMemory\t' "$dump_path" || die "capture-open-menu dump missing the Memory map"
-  grep -q $'\tRefresh\t' "$dump_path" || die "capture-open-menu dump missing Refresh"
+  grep -q $'\tSettings\t' "$dump_path" || die "capture-open-menu dump missing Settings"
   [ -f "$shot_path" ] || die "capture-open-menu wrote no screenshot"
   printf 'dump=%s screenshot=%s\n' "$dump_path" "$shot_path"
 }

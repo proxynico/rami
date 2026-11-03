@@ -1,6 +1,6 @@
 //! The memory map: a header, RAM drawn as a board of equal cells in category
-//! order, a contact strip, and the cell size. Used cells are solid, Cached is
-//! hatched, Free is empty.
+//! order, and a contact strip. Used cells are solid, Cached is hatched, Free
+//! is empty. The cell size is spoken to VoiceOver, not drawn.
 
 use crate::draw::{draw_text, draw_text_right, fill_swatch, text_width};
 use crate::format::{Accent, MemoryMapDisplay};
@@ -175,25 +175,6 @@ impl MemoryMapView {
                 NSSize::new(to - from, layout.strip_height),
             ));
         }
-
-        let caption_font = NSFont::monospacedDigitSystemFontOfSize_weight(scale.caption, unsafe {
-            NSFontWeightRegular
-        });
-        let caption_color = NSColor::secondaryLabelColor();
-        draw_text(
-            &map.cell_caption,
-            layout.left,
-            layout.caption_y,
-            &caption_font,
-            &caption_color,
-        );
-        draw_text_right(
-            "hatched = cached",
-            layout.right,
-            layout.caption_y,
-            &caption_font,
-            &caption_color,
-        );
     }
 }
 

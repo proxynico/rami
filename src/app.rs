@@ -325,14 +325,9 @@ define_class!(
     struct RefreshTarget;
 
     impl RefreshTarget {
-        #[unsafe(method(refreshNow:))]
-        fn refresh_now(&self, _sender: &AnyObject) {
-            dispatch_event(Event::Tick { manual: true });
-        }
-
         #[unsafe(method(refreshOnTimer:))]
         fn refresh_on_timer(&self, _sender: &AnyObject) {
-            dispatch_event(Event::Tick { manual: false });
+            dispatch_event(Event::Tick);
         }
 
         #[unsafe(method(drainScanResults:))]
