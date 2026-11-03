@@ -146,6 +146,17 @@ impl MemoryCategory {
         }
     }
 
+    pub fn bytes(self, memory: &MemorySnapshot) -> u64 {
+        match self {
+            Self::App => memory.app_memory_bytes,
+            Self::Wired => memory.wired_bytes,
+            Self::Compressed => memory.compressed_bytes,
+            Self::Other => memory.other_bytes(),
+            Self::Cached => memory.cached_bytes,
+            Self::Free => memory.free_bytes,
+        }
+    }
+
     pub fn swatch(self) -> Swatch {
         match self {
             Self::App => Swatch::Accent(100),
@@ -191,8 +202,9 @@ pub struct DropdownModel {
     pub total_bytes: u64,
     /// Trend-window samples for the one memory-history row, oldest first.
     pub history: Vec<u64>,
-    /// Rows partition physical RAM, less any Other too small to show.
-    pub breakdown: Vec<LegendRow>,
+    /// One row per `LEGEND_CATEGORIES` entry. Other and Free are read from
+    /// the map's gray and empty cells.
+    pub breakdown: [LegendRow; LEGEND_CATEGORIES.len()],
     pub swap: Option<StatRow>,
     pub apps: AppSectionDisplay,
     pub cpu: Option<StatRow>,
@@ -239,20 +251,21 @@ fn memory_parts(memory: &MemorySnapshot) -> Vec<(MemoryCategory, u64)> {
     parts
 }
 
-fn memory_breakdown(memory: &MemorySnapshot) -> Vec<LegendRow> {
-    memory_parts(memory)
-        .into_iter()
-        .map(|(category, bytes)| LegendRow {
-            label: category.label().to_string(),
-            value: format!(
-                "{} · {}%",
-                mem_text(bytes),
-                share_of_total(bytes, memory.total_bytes)
-            ),
-            swatch: category.swatch(),
-            primary: category == MemoryCategory::App,
-        })
-        .collect()
+/// The categories the breakdown legend names, in map order.
+pub const LEGEND_CATEGORIES: [MemoryCategory; 4] = [
+    MemoryCategory::App,
+    MemoryCategory::Wired,
+    MemoryCategory::Compressed,
+    MemoryCategory::Cached,
+];
+
+fn memory_breakdown(memory: &MemorySnapshot) -> [LegendRow; LEGEND_CATEGORIES.len()] {
+    LEGEND_CATEGORIES.map(|category| LegendRow {
+        label: category.label().to_string(),
+        value: mem_text(category.bytes(memory)),
+        swatch: category.swatch(),
+        primary: category == MemoryCategory::App,
+    })
 }
 
 fn memory_map(memory: &MemorySnapshot) -> MemoryMapDisplay {
@@ -582,7 +595,7 @@ mod tests {
         assert!(breakdown[0].primary, "App Memory is the total");
         assert!(
             breakdown[1..].iter().all(|row| !row.primary),
-            "Wired/Compressed/Free are derived"
+            "Wired/Compressed/Cached are derived"
         );
     }
 
@@ -689,25 +702,20 @@ mod tests {
         assert_eq!(memory.map.used_of_total, "9.0 / 16.0 GB");
         assert_eq!(memory.map.cell_caption, "1 cell = 256 MB");
         assert_eq!(memory.pressure_percent, 96);
-        assert_eq!(memory.breakdown[0].label, "App Memory");
-        assert_eq!(memory.breakdown[0].value, "6.0 GB · 38%");
-        assert_eq!(memory.breakdown[0].swatch, Swatch::Accent(100));
-        assert_eq!(memory.breakdown[1].label, "Wired");
-        assert_eq!(memory.breakdown[1].value, "2.0 GB · 13%");
-        assert_eq!(memory.breakdown[1].swatch, Swatch::Accent(62));
-        assert_eq!(memory.breakdown[2].label, "Compressed");
-        assert_eq!(memory.breakdown[2].value, "1.0 GB · 6%");
-        assert_eq!(memory.breakdown[2].swatch, Swatch::Accent(36));
-        assert_eq!(memory.breakdown[3].label, "Cached");
-        assert_eq!(memory.breakdown[3].swatch, Swatch::Hatched);
-        assert_eq!(memory.breakdown[3].value, "4.0 GB · 25%");
-        assert_eq!(memory.breakdown[4].label, "Free");
-        assert_eq!(memory.breakdown[4].value, "3.0 GB · 19%");
-        assert_eq!(memory.breakdown[4].swatch, Swatch::Empty);
+        let legend: Vec<(&str, &str, Swatch)> = memory
+            .breakdown
+            .iter()
+            .map(|row| (row.label.as_str(), row.value.as_str(), row.swatch))
+            .collect();
         assert_eq!(
-            memory.breakdown.len(),
-            5,
-            "no Other row when rows already sum to total"
+            legend,
+            [
+                ("App Memory", "6.0 GB", Swatch::Accent(100)),
+                ("Wired", "2.0 GB", Swatch::Accent(62)),
+                ("Compressed", "1.0 GB", Swatch::Accent(36)),
+                ("Cached", "4.0 GB", Swatch::Hatched),
+            ],
+            "Other and Free stay on the map only"
         );
         let swap = memory.swap.as_ref().expect("swap row present when nonzero");
         assert_eq!(swap.primary, "Swap");

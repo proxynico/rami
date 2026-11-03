@@ -1,6 +1,6 @@
 # Memory dropdown
 
-Clicking the gauge opens one native menu: the memory map (header with used / total and Memory %, 64 cells, cell size), the App Memory / Wired / Compressed / Other / Cached / Free breakdown, the Pressure meter, optional Swap, a two-minute history row, and (when enabled) the top apps.
+Clicking the gauge opens one native menu: the memory map (header with used / total and Memory %, 64 cells), the App Memory / Wired / Compressed / Cached breakdown, the Pressure meter, optional Swap, a two-minute history row, and (when enabled) the top apps.
 
 ## Sub-features
 
@@ -8,14 +8,14 @@ Clicking the gauge opens one native menu: the memory map (header with used / tot
 - `memory-map` exposes an AXGroup named `Memory` whose value includes Memory %, used / total, and the cell size.
 - `memory-pressure` exposes an AXGroup named `Pressure` whose value is the pressure percent.
 - `memory-history` exposes an AXGroup named `Memory history`.
-- `memory-breakdown` lists App Memory, Wired, Compressed, Cached, and Free, plus Other when it rounds to at least 1% of RAM.
+- `memory-breakdown` lists App Memory, Wired, Compressed, and Cached, each with its size and no percent. Other and Free have no rows.
 - `memory-swap` shows a Swap row only when swap is non-zero.
 - `memory-apps` lists top apps when Show Apps is on, or omits them when it is off.
 
 ## How to get to it (user POV)
 
 - Click the menu-bar gauge.
-- Click `Refresh` in the open menu to resample without quitting.
+- Close and reopen the menu to resample.
 
 ## Driving it with control-rami
 
@@ -29,10 +29,10 @@ Preconditions:
 - **Map.** The dump contains a row whose name or description is `Memory` and whose value matches `[0-9]+ percent, .* GB used, 1 cell = .*`.
 - **Pressure.** The dump contains a row named `Pressure` whose value matches `[0-9]+ percent`.
 - **History.** The dump contains `Memory history`.
-- **Breakdown.** The dump contains `App Memory`, `Wired`, `Compressed`, `Cached`, and `Free`.
-- **Commands.** The dump contains `Refresh`, `Settings`, and `Quit`.
-- **Resample.** Run `control-rami click --item "Refresh"`. After the menu reopens, run `capture-open-menu` again to `.cursor/skills/verify-rami/artifacts/memory-dropdown/after-refresh.ax.txt` and `after-refresh.png`. The map and Pressure meter are still present.
-- **Proof.** The screenshot shows the open dropdown under the gauge, and the AX dump lists the map, breakdown, Pressure, history, and the three commands.
+- **Breakdown.** The dump contains `App Memory`, `Wired`, `Compressed`, and `Cached`, each valued as a size with no `%`, and no `Other` or `Free` row.
+- **Commands.** The dump contains `Settings` and `Quit`, and no `Refresh`.
+- **Resample.** Run `capture-open-menu` again to `.cursor/skills/verify-rami/artifacts/memory-dropdown/reopened.ax.txt` and `reopened.png`. The map and Pressure meter are still present.
+- **Proof.** The screenshot shows the open dropdown under the gauge, and the AX dump lists the map, breakdown, Pressure, history, and the two commands.
 
 ## Gotchas
 

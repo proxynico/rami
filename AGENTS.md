@@ -55,8 +55,10 @@ ranked app-memory rows. rami is a monitor, not a task manager.
 
 The Memory section opens the dropdown with the memory map: a header
 with used / total and Memory %, RAM drawn as 64 equal cells on a board
-in category order, a contact strip, and the cell size. The breakdown
-rows follow, then the Pressure meter with ticks at Warning and
+in category order, and a contact strip, with no caption under it. Four
+breakdown rows follow, App Memory, Wired, Compressed, and Cached, each
+showing its size only; Other and Free are read from the map's gray and
+empty cells. Then come the Pressure meter with ticks at Warning and
 Critical, Swap when nonzero, and the history row.
 
 The app-memory ranking shows three rows. Memory
@@ -70,7 +72,8 @@ submenu or hover reveal.
 Memory is the visual anchor. Settings is a standard submenu: hovering
 it shows the settings beside the dropdown, which stays open. Nico
 replaced the arrowless command on 2026-09-27 because it closed the
-dropdown and left only the settings. Refresh and Quit show no key equivalents.
+dropdown and left only the settings. There is no Refresh item: opening
+the menu takes a fresh reading. Quit shows no key equivalent.
 
 ### Pressure-driven accent
 
@@ -83,8 +86,8 @@ is an orange hatch, Other is neutral gray, and Free is the empty track.
 drawing.
 
 The accent is semantic. Warning and Critical turn the orange marks and the
-accent chrome, including row labels, system red. Other and Free marks,
-labels, and readings stay neutral gray in every state. The user's macOS
+accent chrome, including row labels, system red. Other and Free marks
+stay neutral gray in every state. The user's macOS
 accent color is ignored.
 
 The normal status gauge, including its rising-memory badge, stays an
@@ -119,8 +122,8 @@ belongs in a single-glance menu bar monitor, against the one-status-item
 bound and the visual restraint above, and Nico must accept it before
 any implementation starts.
 
-Do not slim the app down either. The full module set is user-hideable
-in Settings. Repeat the runtime health check in `BUILDING.md` before
+Removing behavior also needs Nico's acceptance. The full module set is
+user-hideable in Settings. Repeat the runtime health check in `BUILDING.md` before
 you use performance as a reason to remove behavior. Exact figures
 without the machine, settings, interval, and sampled action are not
 comparable.
@@ -198,8 +201,8 @@ Data rows (breakdown, Swap, apps, CPU, GPU) are `RowView`s
 (`src/row_view.rs`), not titled menu items. Once any item has a submenu,
 NSMenu reserves an arrow column on the right of every titled item, which
 left titled rows short of the custom views' right edge. NSMenu on current
-macOS also draws no menu-item images. Only Refresh, Settings, and Quit
-stay titled items.
+macOS also draws no menu-item images. Only Settings and Quit stay titled
+items.
 
 Warning and Critical accents are unreachable without exhausting real
 memory. Use `RAMI_FORCE_PRESSURE` set to `warning`, `critical`, or `normal`,

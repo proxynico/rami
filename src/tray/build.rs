@@ -2,9 +2,9 @@
 //! dropdown is rebuilt from, and the Settings submenu. Pure construction —
 //! all state updates stay in `tray/mod.rs`.
 
-use super::layout::{APP_ROW_POOL, BREAKDOWN_ROW_POOL};
+use super::layout::APP_ROW_POOL;
 use super::{RowItem, TrayController};
-use crate::format::Accent;
+use crate::format::{Accent, LEGEND_CATEGORIES};
 use crate::history_view::MemoryHistoryView;
 use crate::memory_map_view::MemoryMapView;
 use crate::model::MemoryPressure;
@@ -79,8 +79,6 @@ pub(super) fn build_controller(
     let pressure_view = PressureView::new(mtm, metrics);
     let history_view = MemoryHistoryView::new(mtm, metrics);
 
-    let refresh_item = make_command_item(mtm, "Refresh", Some(sel!(refreshNow:)), target);
-
     let auto_refresh_item =
         make_command_item(mtm, "Auto-Refresh", Some(sel!(toggleAutoRefresh:)), target);
     let show_app_usage_item =
@@ -150,7 +148,7 @@ pub(super) fn build_controller(
         pressure_view,
         history_item: make_view_item(mtm, &history_view),
         history_view,
-        legend_items: (0..BREAKDOWN_ROW_POOL)
+        legend_items: (0..LEGEND_CATEGORIES.len())
             .map(|_| make_row(mtm, metrics))
             .collect(),
         swap_item: make_row(mtm, metrics),
@@ -160,7 +158,6 @@ pub(super) fn build_controller(
         app_items: (0..APP_ROW_POOL).map(|_| make_row(mtm, metrics)).collect(),
         cpu_item: make_row(mtm, metrics),
         gpu_item: make_row(mtm, metrics),
-        refresh_item,
         settings_item,
         quit_item,
         auto_refresh_item,

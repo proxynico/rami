@@ -57,7 +57,7 @@ The harness is `.cursor/skills/verify-rami/bin/control-rami`. Prefer names over 
 |---|---|
 | Read the gauge without opening it | `control-rami status-label` |
 | Open the dropdown and capture it | `control-rami capture-open-menu --dump FILE --screenshot FILE` |
-| Choose a top-level command | `control-rami click --item "Refresh"` |
+| Choose a top-level command | `control-rami click --item "Quit"` |
 | Choose a Settings row | `control-rami click-settings --item "Show CPU"` |
 | Dismiss the open menu | `control-rami dismiss-menu` |
 
@@ -68,7 +68,7 @@ Stable handles (do not invent others):
 - Pressure meter: AXGroup label `Pressure`, value `<p> percent`.
 - History view: AXGroup label `Memory history`.
 - Data rows (breakdown, Swap, apps, CPU, GPU): AXStaticText labeled with the row name (`App Memory`, `Swap`, `CPU`, `GPU`, an app name), the reading as its value.
-- Command items by exact title: `Refresh`, `Settings`, `Quit`.
+- Command items by exact title: `Settings`, `Quit`.
 - Settings items by exact title: `Auto-Refresh`, `Show Apps`, `Show CPU`, `Show GPU`, `Copy Diagnostics`. About is `rami <version>` and is disabled.
 
 `capture-open-menu` exists because clicking the status item blocks AppleScript while the menu stays open. It dumps AX, screenshots, then sends Escape.

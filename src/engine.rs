@@ -35,7 +35,7 @@ use crate::trend::{app_rows_with_deltas, MemoryTrend, MemoryTrendTracker};
 use std::io;
 use std::time::{Duration, Instant};
 
-/// Real-world seconds per `Tick { manual: false }`. The shell's repeating
+/// Real-world seconds per `Tick`. The shell's repeating
 /// timer must use this period: every tick-counted cadence below — the 6-tick
 /// app scan (~30 s), the sampler's swap cadence, and the 25-sample trend
 /// window (~125 s) — encodes wall-clock time as a multiple of it.
@@ -50,11 +50,8 @@ const MENU_OPEN_DRAIN_DELAY: Duration = Duration::from_millis(150);
 pub(crate) enum Event {
     /// App launch, after settings load: first render plus timer reconcile.
     Startup,
-    /// A refresh request: `manual` for the Refresh menu item and internal
-    /// refreshes, non-manual for the 5 s repeating timer.
-    Tick {
-        manual: bool,
-    },
+    /// The 5 s repeating refresh timer fired.
+    Tick,
     /// The one-shot drain timer fired: pick up scan results, re-render from
     /// cache. Samples only to warm a Loading CPU reading; never advances a
     /// cadence.
@@ -291,7 +288,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 self.refresh(true, &mut out);
                 self.sync_auto_refresh_timer(&mut out);
             }
-            Event::Tick { manual } => self.refresh(manual, &mut out),
+            Event::Tick => self.refresh(false, &mut out),
             Event::DrainTimerFired => self.drain_and_rerender(&mut out),
             Event::MenuWillOpen => {
                 self.menu_open = true;
@@ -438,7 +435,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
     }
 
     /// The trend window holds 5 s timer ticks, so its 25 samples span about
-    /// 125 s. Menu opens, Refresh, and toggles read the trend without adding
+    /// 125 s. Menu opens and toggles read the trend without adding
     /// to it; they only seed an empty window while Auto-Refresh is on.
     fn update_trend(&mut self, manual: bool, used_bytes: u64) -> MemoryTrend {
         let advances = !manual || self.trend_tracker.is_empty();

@@ -2,11 +2,9 @@
 //! sequence `TrayController::rebuild_menu` adds them in. The menu is built
 //! from `menu_slots`, so the tests below pin the real order.
 
-use crate::format::{AppSectionDisplay, DropdownModel};
+use crate::format::{AppSectionDisplay, DropdownModel, LEGEND_CATEGORIES};
 
 pub(super) const APP_ROW_POOL: usize = 3;
-/// App Memory, Wired, Compressed, Other, Cached, Free.
-pub(super) const BREAKDOWN_ROW_POOL: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AppShape {
@@ -23,7 +21,6 @@ pub(super) enum MenuShape {
     /// No memory reading yet, or the sample failed.
     Loading,
     Loaded {
-        breakdown_rows: usize,
         apps: AppShape,
         show_swap: bool,
         show_cpu: bool,
@@ -46,7 +43,6 @@ pub(super) enum Slot {
     Cpu,
     Gpu,
     Separator,
-    Refresh,
     Settings,
     Quit,
 }
@@ -56,7 +52,6 @@ pub(super) fn menu_shape_for(model: Option<&DropdownModel>) -> MenuShape {
         return MenuShape::Loading;
     };
     MenuShape::Loaded {
-        breakdown_rows: model.breakdown.len().min(BREAKDOWN_ROW_POOL),
         apps: match &model.apps {
             AppSectionDisplay::Hidden => AppShape::Hidden,
             AppSectionDisplay::Loading => AppShape::Loading,
@@ -74,14 +69,13 @@ pub(super) fn menu_slots(shape: MenuShape) -> Vec<Slot> {
     match shape {
         MenuShape::Loading => slots.push(Slot::Loading),
         MenuShape::Loaded {
-            breakdown_rows,
             apps,
             show_swap,
             show_cpu,
             show_gpu,
         } => {
             slots.push(Slot::Map);
-            slots.extend((0..breakdown_rows).map(Slot::Legend));
+            slots.extend((0..LEGEND_CATEGORIES.len()).map(Slot::Legend));
             slots.push(Slot::Pressure);
             if show_swap {
                 slots.push(Slot::Swap);
@@ -107,13 +101,7 @@ pub(super) fn menu_slots(shape: MenuShape) -> Vec<Slot> {
             }
         }
     }
-    slots.extend([
-        Slot::Separator,
-        Slot::Refresh,
-        Slot::Settings,
-        Slot::Separator,
-        Slot::Quit,
-    ]);
+    slots.extend([Slot::Separator, Slot::Settings, Slot::Separator, Slot::Quit]);
     slots
 }
 
@@ -128,7 +116,7 @@ mod tests {
     };
     use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 
-    const COMMANDS: [Slot; 5] = [Separator, Refresh, Settings, Separator, Quit];
+    const COMMANDS: [Slot; 4] = [Separator, Settings, Separator, Quit];
 
     fn snapshot() -> SystemSnapshot {
         SystemSnapshot {
@@ -156,15 +144,14 @@ mod tests {
         menu_slots(menu_shape_for(Some(&model)))
     }
 
-    /// The Memory section, which every loaded menu opens with: the map, five
-    /// breakdown rows (Other rounds below 1% here), Pressure, Swap, history.
-    const MEMORY: [Slot; 10] = [
+    /// The Memory section, which every loaded menu opens with: the map, four
+    /// breakdown rows, Pressure, Swap, history.
+    const MEMORY: [Slot; 9] = [
         Map,
         Legend(0),
         Legend(1),
         Legend(2),
         Legend(3),
-        Legend(4),
         Pressure,
         Swap,
         History,
@@ -183,7 +170,7 @@ mod tests {
     fn memory_section_ends_with_the_one_history_row() {
         assert_eq!(
             slots(snapshot(), AppMemorySnapshot::Hidden),
-            [&MEMORY[..9], &COMMANDS].concat()
+            [&MEMORY[..8], &COMMANDS].concat()
         );
     }
 

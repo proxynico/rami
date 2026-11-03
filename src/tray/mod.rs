@@ -48,7 +48,6 @@ pub struct TrayController {
     app_items: Vec<RowItem>,
     cpu_item: RowItem,
     gpu_item: RowItem,
-    refresh_item: Retained<NSMenuItem>,
     settings_item: Retained<NSMenuItem>,
     quit_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
@@ -243,7 +242,6 @@ impl TrayController {
                 Slot::App(index) => &self.app_items[index].item,
                 Slot::Cpu => &self.cpu_item.item,
                 Slot::Gpu => &self.gpu_item.item,
-                Slot::Refresh => &self.refresh_item,
                 Slot::Settings => &self.settings_item,
                 Slot::Quit => &self.quit_item,
             };

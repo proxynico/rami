@@ -291,16 +291,16 @@ fn startup_renders_and_arms_the_refresh_timer() {
 }
 
 #[test]
-fn tick_with_auto_refresh_off_is_a_no_op_but_manual_always_runs() {
+fn tick_with_auto_refresh_off_is_a_no_op_but_menu_open_always_samples() {
     let (mut engine, counts, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::Toggle(Setting::AutoRefresh)); // off
 
-    let effects = engine.step(Event::Tick { manual: false });
+    let effects = engine.step(Event::Tick);
     assert!(effects.is_empty());
     let sampled_before = counts.memory.get();
 
-    let effects = engine.step(Event::Tick { manual: true });
+    let effects = engine.step(Event::MenuWillOpen);
     assert!(effects
         .iter()
         .any(|e| matches!(e, Effect::Render(Render::Gauge { .. }))));
@@ -356,7 +356,7 @@ fn menu_close_freezes_the_cadence_and_cancels_the_drain() {
     // work: no CPU/GPU samples, no scans, no menu renders.
     let before = (counts.cpu.get(), counts.gpu.get(), scans.app_starts().len());
     for _ in 0..10 {
-        let effects = engine.step(Event::Tick { manual: false });
+        let effects = engine.step(Event::Tick);
         assert_eq!(menu_renders(&effects), 0);
     }
     assert_eq!(
@@ -408,7 +408,7 @@ fn menu_open_drain_warms_up_the_cpu_split_even_without_auto_refresh() {
     )));
 
     // The 150 ms menu-open drain must deliver the split instead of
-    // leaving the module on Loading until a manual Refresh.
+    // leaving the module on Loading until the next tick.
     let effects = engine.step(Event::DrainTimerFired);
     assert!(effects.iter().any(|e| matches!(
         e,
@@ -458,10 +458,10 @@ fn app_scan_cadence_fires_every_six_open_ticks() {
     assert_eq!(scans.app_starts().len(), 1);
 
     for _ in 0..5 {
-        engine.step(Event::Tick { manual: false });
+        engine.step(Event::Tick);
     }
     assert_eq!(scans.app_starts().len(), 1, "cadence fired early");
-    engine.step(Event::Tick { manual: false });
+    engine.step(Event::Tick);
     assert_eq!(scans.app_starts().len(), 2);
 }
 
@@ -482,7 +482,8 @@ fn app_deltas_use_the_previous_scan_only_while_fresh() {
     // A second scan inside the 90 s window computes a delta.
     let mut second = usage("Zen");
     second.footprint_bytes = 3_000;
-    engine.step(Event::Tick { manual: true }); // restarts the scan
+    engine.step(Event::MenuDidClose);
+    engine.step(Event::MenuWillOpen); // restarts the scan
     scans.push_app(0, base + Duration::from_secs(30), vec![second.clone()]);
     let effects = engine.step(Event::DrainTimerFired);
     assert!(effects.iter().any(|e| matches!(
@@ -492,7 +493,8 @@ fn app_deltas_use_the_previous_scan_only_while_fresh() {
     )));
 
     // A third scan past the window suppresses the stale baseline.
-    engine.step(Event::Tick { manual: true });
+    engine.step(Event::MenuDidClose);
+    engine.step(Event::MenuWillOpen);
     scans.push_app(0, base + Duration::from_secs(200), vec![usage("Zen")]);
     let effects = engine.step(Event::DrainTimerFired);
     assert!(effects.iter().any(|e| matches!(
@@ -511,19 +513,19 @@ fn only_timer_ticks_grow_the_history_window() {
     engine.step(Event::MenuWillOpen);
     engine.step(Event::Toggle(Setting::ShowGpu));
     engine.step(Event::ReopenMenuTimerFired);
-    let effects = engine.step(Event::Tick { manual: true });
+    let effects = engine.step(Event::MenuWillOpen);
     assert_eq!(
         menu_history(&effects).len(),
         1,
-        "a menu open, toggle, or Refresh shrank the two-minute window"
+        "a menu open or toggle shrank the two-minute window"
     );
 
-    let effects = engine.step(Event::Tick { manual: false });
+    let effects = engine.step(Event::Tick);
     assert_eq!(menu_history(&effects).len(), 2);
 }
 
 #[test]
-fn manual_refreshes_read_the_trend_without_recording_it() {
+fn menu_opens_read_the_trend_without_recording_it() {
     let (samplers, _, used_bytes) = FakeSamplers::healthy();
     let mut engine = RefreshEngine::new(
         samplers,
@@ -534,7 +536,7 @@ fn manual_refreshes_read_the_trend_without_recording_it() {
     engine.step(Event::Startup); // 1 GB seeds the window
 
     used_bytes.set(2_100_000_000);
-    let effects = engine.step(Event::Tick { manual: true });
+    let effects = engine.step(Event::MenuWillOpen);
     assert!(effects.iter().any(|e| matches!(
         e,
         Effect::Render(Render::Gauge {
@@ -550,12 +552,12 @@ fn toggling_auto_refresh_restarts_the_history() {
     engine.step(Event::Startup);
     engine.step(Event::MenuWillOpen);
     for _ in 0..3 {
-        engine.step(Event::Tick { manual: false });
+        engine.step(Event::Tick);
     }
 
     let effects = engine.step(Event::Toggle(Setting::AutoRefresh)); // off
     assert!(menu_history(&effects).is_empty());
-    let effects = engine.step(Event::Tick { manual: true });
+    let effects = engine.step(Event::MenuWillOpen);
     assert!(menu_history(&effects).is_empty(), "no ticks, no history");
 
     let effects = engine.step(Event::Toggle(Setting::AutoRefresh)); // on
@@ -574,7 +576,7 @@ fn memory_sample_failure_renders_the_placeholder() {
         Settings::default(),
     );
 
-    let effects = engine.step(Event::Tick { manual: true });
+    let effects = engine.step(Event::Tick);
     assert!(effects
         .iter()
         .any(|e| matches!(e, Effect::Render(Render::Placeholder))));
@@ -588,7 +590,7 @@ fn a_failed_sample_leaves_no_stale_reading_behind() {
     engine.step(Event::MenuWillOpen);
 
     engine.samplers.memory_fails = true;
-    engine.step(Event::Tick { manual: true });
+    engine.step(Event::Tick);
     assert_eq!(menu_renders(&engine.step(Event::DrainTimerFired)), 0);
     assert!(engine
         .step(Event::CopyDiagnostics)
