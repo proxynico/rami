@@ -18,7 +18,7 @@ use std::cell::RefCell;
 const NOTCH_AT: f64 = 0.4;
 const NOTCH_WIDTH: f64 = 6.0;
 const STRIP_INSET: f64 = 10.0;
-const HEADER_GAP: f64 = 8.0;
+pub(crate) const HEADER_GAP: f64 = 8.0;
 const MIN_FIGURE_SIZE: f64 = 10.0;
 
 struct MapState {
@@ -180,7 +180,7 @@ impl MemoryMapView {
 
 /// The header figures at their full size, or smaller when a large machine's
 /// reading (e.g. "123.4 / 128.0 GB · 100%") would run into the title.
-fn header_figure_font(figures: &str, size: f64, available: f64) -> Retained<NSFont> {
+pub(crate) fn header_figure_font(figures: &str, size: f64, available: f64) -> Retained<NSFont> {
     let font =
         |size| NSFont::monospacedDigitSystemFontOfSize_weight(size, unsafe { NSFontWeightRegular });
     let mut size = size;

@@ -78,6 +78,12 @@ CPU is the change since the previous request, so the first answer has none.
 App names are never shared.
 _Avoid_: remote, server, sync
 
+**Shared Mac**:
+The one other Mac whose shared reading this dropdown shows, named by the
+`sharedMacHost` default. Its section is titled with its model, e.g. "Mac
+mini", and takes that Mac's own pressure accent.
+_Avoid_: remote Mac, peer
+
 ### Presentation
 
 **Module**:

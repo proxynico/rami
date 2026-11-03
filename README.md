@@ -40,6 +40,13 @@ setting on, then expose the port to your tailnet once:
 tailscale serve --bg --tcp 47960 tcp://localhost:47960
 ```
 
+On the Mac that should show it, name that Mac once and relaunch rami. Its
+memory, pressure, swap, CPU, and GPU then appear after the CPU and GPU rows:
+
+```sh
+defaults write com.nicomontero.rami sharedMacHost <tailscale-name>
+```
+
 ## Install
 
 rami needs an Apple Silicon Mac with macOS 14 or later.

@@ -25,6 +25,10 @@ unsafe extern "C" {
         options: u32,
     ) -> CfTypeRef;
     pub(crate) fn IOIteratorNext(iterator: IoObjectId) -> IoObjectId;
+    pub(crate) fn IORegistryEntryFromPath(
+        main_port: libc::mach_port_t,
+        path: *const c_char,
+    ) -> IoObjectId;
     pub(crate) fn IOObjectRelease(object: IoObjectId) -> libc::kern_return_t;
 }
 
@@ -47,6 +51,9 @@ unsafe extern "C" {
         number_type: CfIndex,
         value: *mut c_void,
     ) -> u8;
+    pub(crate) fn CFDataGetTypeID() -> CfTypeId;
+    pub(crate) fn CFDataGetBytePtr(data: CfTypeRef) -> *const u8;
+    pub(crate) fn CFDataGetLength(data: CfTypeRef) -> CfIndex;
     pub(crate) fn CFRelease(value: CfTypeRef);
 }
 

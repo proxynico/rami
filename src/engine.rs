@@ -31,6 +31,7 @@ use crate::login_item::LaunchAtLoginStatus;
 use crate::model::{CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot};
 use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::settings::Settings;
+use crate::share::{SharedMac, SharedReading};
 use crate::trend::{app_rows_with_deltas, MemoryTrend, MemoryTrendTracker};
 use std::io;
 use std::time::{Duration, Instant};
@@ -44,6 +45,9 @@ pub(crate) const REFRESH_TICK_SECONDS: f64 = 5.0;
 const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
 const APP_DELTA_BASELINE_MAX_AGE: Duration = Duration::from_secs(90);
 const MENU_OPEN_DRAIN_DELAY: Duration = Duration::from_millis(150);
+/// A shared reading older than this many ticks (~60 s) shows as Loading
+/// when the menu opens, instead of as current.
+const SHARED_STALE_TICKS: u8 = 12;
 
 /// Everything the outside world can tell the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +78,7 @@ pub(crate) enum Setting {
     ShowCpu,
     ShowGpu,
     ShareOverTailscale,
+    ShowSharedMac,
     LaunchAtLogin,
 }
 
@@ -85,6 +90,7 @@ pub(crate) enum SettingChange {
     ShowCpu(bool),
     ShowGpu(bool),
     ShareOverTailscale(bool),
+    ShowSharedMac(bool),
 }
 
 /// Everything the engine can ask the shell to do, in performance order.
@@ -128,6 +134,7 @@ pub(crate) enum Render {
         /// The trend window for the memory-history sparkline. Recorded every
         /// timer tick regardless of menu state, so it is warm on open.
         history: Vec<u64>,
+        shared: SharedMac,
     },
     /// The Settings submenu's checkmarks and Launch at Login row. Emitted
     /// before the gauge and menu on every refresh.
@@ -150,6 +157,12 @@ pub(crate) trait Samplers {
     fn reset_cpu(&mut self);
 }
 
+/// A shared Mac's answer, tagged with the menu session that asked for it.
+pub(crate) struct SharedFetchResult {
+    pub(crate) generation: u64,
+    pub(crate) reading: io::Result<SharedReading>,
+}
+
 pub(crate) struct AppScanResult {
     pub(crate) generation: u64,
     pub(crate) completed_at: Instant,
@@ -164,6 +177,10 @@ pub(crate) struct AppScanResult {
 pub(crate) trait ScanRunner {
     fn start_app_scan(&mut self, generation: u64);
     fn poll_app_scan(&mut self) -> Option<AppScanResult>;
+    /// Whether a shared Mac's host is set up to ask.
+    fn shared_mac_configured(&self) -> bool;
+    fn start_shared_fetch(&mut self, generation: u64);
+    fn poll_shared_fetch(&mut self) -> Option<SharedFetchResult>;
 }
 
 /// Launch-at-login service. `toggle` attempts the flip and returns the
@@ -235,6 +252,15 @@ pub(crate) struct RefreshEngine<S, R, L> {
     show_cpu: bool,
     show_gpu: bool,
     share_over_tailscale: bool,
+    show_shared_mac: bool,
+    shared_mac_configured: bool,
+    shared: SharedMac,
+    shared_title: Option<String>,
+    shared_fetch_in_flight: bool,
+    /// Bumped when the menu closes, so an answer that arrives later is not
+    /// shown as current on the next open.
+    shared_generation: u64,
+    ticks_since_shared_reading: u8,
     menu_open: bool,
     ticks_until_app_refresh: u8,
     app_scan_in_flight: bool,
@@ -256,6 +282,7 @@ pub(crate) struct RefreshEngine<S, R, L> {
 impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
     pub(crate) fn new(samplers: S, scans: R, mut launch: L, settings: Settings) -> Self {
         let launch_at_login_status = launch.status();
+        let shared_mac_configured = scans.shared_mac_configured();
         let app_memory = if settings.show_app_usage {
             AppMemorySnapshot::Loading
         } else {
@@ -270,6 +297,13 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             show_cpu: settings.show_cpu,
             show_gpu: settings.show_gpu,
             share_over_tailscale: settings.share_over_tailscale,
+            show_shared_mac: settings.show_shared_mac,
+            shared_mac_configured,
+            shared: SharedMac::Hidden,
+            shared_title: None,
+            shared_fetch_in_flight: false,
+            shared_generation: 0,
+            ticks_since_shared_reading: 0,
             menu_open: false,
             ticks_until_app_refresh: 0,
             app_scan_in_flight: false,
@@ -299,7 +333,10 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                     out.push(Effect::Share(true));
                 }
             }
-            Event::Tick => self.refresh(false, &mut out),
+            Event::Tick => {
+                self.ticks_since_shared_reading = self.ticks_since_shared_reading.saturating_add(1);
+                self.refresh(false, &mut out);
+            }
             Event::DrainTimerFired => self.drain_and_rerender(&mut out),
             Event::MenuWillOpen => {
                 self.menu_open = true;
@@ -308,6 +345,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 // moment the answer is visible, so it is (re)read here rather
                 // than per tick.
                 self.launch_at_login_status = self.launch.status();
+                self.mark_stale_shared_reading();
                 self.refresh(true, &mut out);
                 out.push(Effect::ScheduleDrain {
                     delay: MENU_OPEN_DRAIN_DELAY,
@@ -317,6 +355,8 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 self.menu_open = false;
                 self.ticks_until_app_refresh = 0;
                 self.samplers.reset_cpu();
+                self.shared_generation = self.shared_generation.wrapping_add(1);
+                self.shared_fetch_in_flight = false;
                 // Nothing to drain into once the dropdown is gone.
                 out.push(Effect::CancelDrain);
             }
@@ -409,6 +449,23 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                     self.schedule_menu_reopen(setting, out);
                 }
             }
+            Setting::ShowSharedMac => {
+                self.show_shared_mac = !self.show_shared_mac;
+                out.push(Effect::PersistSetting(SettingChange::ShowSharedMac(
+                    self.show_shared_mac,
+                )));
+                self.shared = if self.shared_visible() {
+                    SharedMac::Loading {
+                        title: self.shared_title.clone(),
+                    }
+                } else {
+                    SharedMac::Hidden
+                };
+                self.refresh(true, out);
+                if self.shared_visible() {
+                    self.schedule_menu_reopen(setting, out);
+                }
+            }
             Setting::ShareOverTailscale => {
                 self.share_over_tailscale = !self.share_over_tailscale;
                 out.push(Effect::PersistSetting(SettingChange::ShareOverTailscale(
@@ -447,6 +504,14 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
 
                 out.push(Effect::Render(Render::Gauge { snapshot, trend }));
                 if self.menu_open {
+                    self.drain_shared_fetch();
+                    if self.shared_visible() && !self.shared_fetch_in_flight {
+                        self.shared_fetch_in_flight = true;
+                        self.scans.start_shared_fetch(self.shared_generation);
+                        out.push(Effect::ScheduleDrain {
+                            delay: MENU_OPEN_DRAIN_DELAY,
+                        });
+                    }
                     let cpu = self.sample_cpu_if_visible();
                     self.last_cpu_state = cpu;
                     let gpu = self.sample_gpu_if_visible();
@@ -498,6 +563,12 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         }
 
         self.drain_app_scan_results();
+        self.drain_shared_fetch();
+        if self.shared_fetch_in_flight {
+            out.push(Effect::ScheduleDrain {
+                delay: MENU_OPEN_DRAIN_DELAY,
+            });
+        }
 
         if matches!(self.last_cpu_state, CpuModuleState::Loading) {
             self.last_cpu_state = self.sample_cpu_if_visible();
@@ -525,6 +596,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             Setting::ShowAppUsage => self.show_app_usage,
             Setting::ShowCpu => self.show_cpu,
             Setting::ShowGpu => self.show_gpu,
+            Setting::ShowSharedMac => self.shared_visible(),
             Setting::AutoRefresh | Setting::ShareOverTailscale | Setting::LaunchAtLogin => false,
         }
     }
@@ -617,6 +689,52 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         }
     }
 
+    fn shared_visible(&self) -> bool {
+        self.show_shared_mac && self.shared_mac_configured
+    }
+
+    /// Show Loading instead of a reading the dropdown has not refreshed
+    /// for about a minute, and Loading for a first open.
+    fn mark_stale_shared_reading(&mut self) {
+        if !self.shared_visible() {
+            self.shared = SharedMac::Hidden;
+            return;
+        }
+        let stale = self.ticks_since_shared_reading >= SHARED_STALE_TICKS;
+        if matches!(self.shared, SharedMac::Hidden)
+            || (stale && !matches!(self.shared, SharedMac::Offline { .. }))
+        {
+            self.shared = SharedMac::Loading {
+                title: self.shared_title.clone(),
+            };
+        }
+    }
+
+    fn drain_shared_fetch(&mut self) {
+        while let Some(result) = self.scans.poll_shared_fetch() {
+            if result.generation != self.shared_generation {
+                continue;
+            }
+            self.shared_fetch_in_flight = false;
+            if !self.shared_visible() {
+                continue;
+            }
+            self.shared = match result.reading {
+                Ok(reading) => {
+                    self.shared_title = Some(reading.model.clone());
+                    self.ticks_since_shared_reading = 0;
+                    SharedMac::Reading(reading)
+                }
+                Err(err) => {
+                    eprintln!("shared Mac fetch failed: {err}");
+                    SharedMac::Offline {
+                        title: self.shared_title.clone(),
+                    }
+                }
+            };
+        }
+    }
+
     fn clear_app_usage(&mut self) {
         self.app_memory = AppMemorySnapshot::Hidden;
         self.last_app_rows.clear();
@@ -633,6 +751,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 show_cpu: self.show_cpu,
                 show_gpu: self.show_gpu,
                 share_over_tailscale: self.share_over_tailscale,
+                show_shared_mac: self.show_shared_mac,
             },
             launch_at_login: self.launch_at_login_status,
         }
@@ -650,6 +769,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             gpu,
             apps: self.app_memory.clone(),
             history: self.trend_tracker.window(),
+            shared: self.shared.clone(),
         }
     }
 }
