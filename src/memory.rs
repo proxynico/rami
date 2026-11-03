@@ -83,8 +83,8 @@ pub fn snapshot_from_counts(
         .external_pages
         .saturating_add(counts.purgeable_pages)
         .saturating_mul(counts.page_size);
-    // The Free row shows genuinely free pages, so strip the speculative pages that
-    // `free_count` bundles in. Without this the row reads high against Activity
+    // Free counts genuinely free pages, so strip the speculative pages that
+    // `free_count` bundles in. Without this Free reads high against Activity
     // Monitor and `vm_stat` by the speculative count, which on a warm system is
     // routinely larger than free itself.
     let free_bytes = counts

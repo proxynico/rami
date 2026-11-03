@@ -173,7 +173,7 @@ fn snapshot_exposes_breakdown_and_kernel_pressure() {
     assert_eq!(snapshot.app_memory_bytes, 230);
     assert_eq!(snapshot.wired_bytes, 200);
     assert_eq!(snapshot.compressed_bytes, 100);
-    // free_count bundles speculative pages in, so the Free row strips them:
+    // free_count bundles speculative pages in, so Free strips them:
     // (5 - 1) pages * 10 = 40.
     assert_eq!(snapshot.free_bytes, 40);
     assert_eq!(snapshot.pressure_percent, 58);
@@ -190,10 +190,10 @@ fn snapshot_exposes_breakdown_and_kernel_pressure() {
 /// ```
 ///
 /// `free_count` bundles speculative pages in. If a future macOS changes that, the
-/// Free row and Available both silently drift, so the relationship is asserted
+/// Free and Available both silently drift, so the relationship is asserted
 /// here rather than left as a comment.
 #[test]
-fn free_row_strips_the_speculative_pages_that_free_count_bundles_in() {
+fn free_strips_the_speculative_pages_that_free_count_bundles_in() {
     let counts = MemoryCounts {
         total_bytes: 16 * 1024 * 1024 * 1024,
         page_size: 16_384,
