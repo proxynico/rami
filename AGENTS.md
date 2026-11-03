@@ -128,6 +128,15 @@ you use performance as a reason to remove behavior. Exact figures
 without the machine, settings, interval, and sampled action are not
 comparable.
 
+### Sharing over Tailscale
+
+Share over Tailscale, off by default, makes rami answer on
+`127.0.0.1:47960` with this Mac's readings, so another Mac's rami can
+show them. rami never listens beyond localhost: `tailscale serve --bg
+--tcp 47960 tcp://localhost:47960` exposes the port to the tailnet only.
+The answer carries no app names. The listener samples when asked, so a
+Mac nobody asks does no extra work. `src/share.rs` owns the format.
+
 ### Launch at login
 
 `SMAppService.mainAppService().status` is the only launch-at-login

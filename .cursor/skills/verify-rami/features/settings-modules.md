@@ -4,7 +4,7 @@ Settings in the dropdown hides or shows CPU, GPU, and the app list, and pauses A
 
 ## Sub-features
 
-- `settings-open` reveals Auto-Refresh, Show Apps, Show CPU, Show GPU, Copy Diagnostics, and the disabled `rami <version>` row.
+- `settings-open` reveals Auto-Refresh, Show Apps, Show CPU, Show GPU, Share over Tailscale, Copy Diagnostics, and the disabled `rami <version>` row.
 - `settings-cpu` shows or hides the CPU module.
 - `settings-gpu` shows or hides the GPU module. GPU stays hidden if the IORegistry read fails even when the toggle is on.
 - `settings-apps` shows or hides the top-apps rows under Memory.

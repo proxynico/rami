@@ -29,8 +29,16 @@ climbing fast.
 CPU, GPU, and app rows can each be hidden. There is still one status item, no
 dock icon, and no window.
 
-Settings also includes auto-refresh, launch-at-login status, and a local
-diagnostics copy action.
+Settings also includes auto-refresh, launch-at-login status, a local
+diagnostics copy action, and Share over Tailscale.
+
+Share over Tailscale lets another Mac on your tailnet read this Mac's memory,
+CPU, and GPU, without app names. rami listens only on this Mac; turn the
+setting on, then expose the port to your tailnet once:
+
+```sh
+tailscale serve --bg --tcp 47960 tcp://localhost:47960
+```
 
 ## Install
 

@@ -5,7 +5,7 @@ description: Drive rami, the macOS menu-bar memory/CPU/GPU monitor, through its 
 
 # Verify rami
 
-rami is an accessory (`LSUIElement`) menu-bar app. The user touches one status-item gauge and the `NSMenu` it opens. There is no window, dock icon, browser, or HTTP port. Unit tests do not prove this surface.
+rami is an accessory (`LSUIElement`) menu-bar app. The user touches one status-item gauge and the `NSMenu` it opens. There is no window, dock icon, or browser. The only port is the localhost one Share over Tailscale opens, off by default. Unit tests do not prove this surface.
 
 Read `CONCEPTS.md` before naming what you see. Memory % and Pressure are different figures: the map header and the Pressure meter. CPU and GPU are hideable modules.
 
@@ -69,7 +69,7 @@ Stable handles (do not invent others):
 - History view: AXGroup label `Memory history`.
 - Data rows (breakdown, Swap, apps, CPU, GPU): AXStaticText labeled with the row name (`App Memory`, `Swap`, `CPU`, `GPU`, an app name), the reading as its value.
 - Command items by exact title: `Settings`, `Quit`.
-- Settings items by exact title: `Auto-Refresh`, `Show Apps`, `Show CPU`, `Show GPU`, `Copy Diagnostics`. About is `rami <version>` and is disabled.
+- Settings items by exact title: `Auto-Refresh`, `Show Apps`, `Show CPU`, `Show GPU`, `Share over Tailscale`, `Copy Diagnostics`. About is `rami <version>` and is disabled.
 
 `capture-open-menu` exists because clicking the status item blocks AppleScript while the menu stays open. It dumps AX, screenshots, then sends Escape.
 

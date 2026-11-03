@@ -46,3 +46,4 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Settings modules](./settings-modules.md) covers Show CPU, Show GPU, Show Apps, and Auto-Refresh.
 - [CPU module](./cpu-module.md) covers the one-line CPU row.
 - [Copy diagnostics](./copy-diagnostics.md) covers the pasteboard report from Settings.
+- [Share over Tailscale](./share-over-tailscale.md) covers the Settings toggle and the shared reading on port 47960.

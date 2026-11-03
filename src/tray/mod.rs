@@ -54,6 +54,7 @@ pub struct TrayController {
     show_app_usage_item: Retained<NSMenuItem>,
     show_cpu_item: Retained<NSMenuItem>,
     show_gpu_item: Retained<NSMenuItem>,
+    share_item: Retained<NSMenuItem>,
     launch_at_login_item: Retained<NSMenuItem>,
     shape: Cell<Option<MenuShape>>,
     last_gauge: Cell<Option<(u8, MemoryTrend, MemoryPressure)>>,
@@ -128,6 +129,7 @@ impl TrayController {
         set_checked(&self.show_app_usage_item, settings.show_app_usage);
         set_checked(&self.show_cpu_item, settings.show_cpu);
         set_checked(&self.show_gpu_item, settings.show_gpu);
+        set_checked(&self.share_item, settings.share_over_tailscale);
         self.launch_at_login_item
             .setTitle(&NSString::from_str(launch_at_login.menu_title()));
         set_checked(

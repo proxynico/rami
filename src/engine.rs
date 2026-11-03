@@ -63,6 +63,8 @@ pub(crate) enum Event {
     /// module on, and clicking it closed the menu.
     ReopenMenuTimerFired,
     CopyDiagnostics,
+    /// Sharing was switched on but the port could not be opened.
+    ShareFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +73,7 @@ pub(crate) enum Setting {
     ShowAppUsage,
     ShowCpu,
     ShowGpu,
+    ShareOverTailscale,
     LaunchAtLogin,
 }
 
@@ -81,6 +84,7 @@ pub(crate) enum SettingChange {
     ShowAppUsage(bool),
     ShowCpu(bool),
     ShowGpu(bool),
+    ShareOverTailscale(bool),
 }
 
 /// Everything the engine can ask the shell to do, in performance order.
@@ -96,6 +100,8 @@ pub(crate) enum Effect {
     ArmRefreshTimer,
     CancelRefreshTimer,
     PersistSetting(SettingChange),
+    /// Start or stop answering on the share port.
+    Share(bool),
     /// Arm the short one-shot that later delivers `ReopenMenuTimerFired`.
     ScheduleMenuReopen,
     PopUpMenu,
@@ -228,6 +234,7 @@ pub(crate) struct RefreshEngine<S, R, L> {
     show_app_usage: bool,
     show_cpu: bool,
     show_gpu: bool,
+    share_over_tailscale: bool,
     menu_open: bool,
     ticks_until_app_refresh: u8,
     app_scan_in_flight: bool,
@@ -262,6 +269,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             show_app_usage: settings.show_app_usage,
             show_cpu: settings.show_cpu,
             show_gpu: settings.show_gpu,
+            share_over_tailscale: settings.share_over_tailscale,
             menu_open: false,
             ticks_until_app_refresh: 0,
             app_scan_in_flight: false,
@@ -287,6 +295,9 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             Event::Startup => {
                 self.refresh(true, &mut out);
                 self.sync_auto_refresh_timer(&mut out);
+                if self.share_over_tailscale {
+                    out.push(Effect::Share(true));
+                }
             }
             Event::Tick => self.refresh(false, &mut out),
             Event::DrainTimerFired => self.drain_and_rerender(&mut out),
@@ -319,6 +330,15 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                     .is_some_and(|setting| self.shows(setting))
                 {
                     out.push(Effect::PopUpMenu);
+                }
+            }
+            Event::ShareFailed => {
+                if self.share_over_tailscale {
+                    self.share_over_tailscale = false;
+                    out.push(Effect::PersistSetting(SettingChange::ShareOverTailscale(
+                        false,
+                    )));
+                    out.push(Effect::Render(self.settings_state_render()));
                 }
             }
             Event::CopyDiagnostics => {
@@ -388,6 +408,14 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 if self.show_gpu {
                     self.schedule_menu_reopen(setting, out);
                 }
+            }
+            Setting::ShareOverTailscale => {
+                self.share_over_tailscale = !self.share_over_tailscale;
+                out.push(Effect::PersistSetting(SettingChange::ShareOverTailscale(
+                    self.share_over_tailscale,
+                )));
+                out.push(Effect::Share(self.share_over_tailscale));
+                out.push(Effect::Render(self.settings_state_render()));
             }
             Setting::LaunchAtLogin => {
                 self.launch_at_login_status = self.launch.toggle();
@@ -497,7 +525,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             Setting::ShowAppUsage => self.show_app_usage,
             Setting::ShowCpu => self.show_cpu,
             Setting::ShowGpu => self.show_gpu,
-            Setting::AutoRefresh | Setting::LaunchAtLogin => false,
+            Setting::AutoRefresh | Setting::ShareOverTailscale | Setting::LaunchAtLogin => false,
         }
     }
 
@@ -604,6 +632,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 show_app_usage: self.show_app_usage,
                 show_cpu: self.show_cpu,
                 show_gpu: self.show_gpu,
+                share_over_tailscale: self.share_over_tailscale,
             },
             launch_at_login: self.launch_at_login_status,
         }
