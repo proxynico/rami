@@ -10,7 +10,6 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 BINARY_PATH="$ROOT_DIR/target/release/$APP_NAME"
 ICON_PATH="$ROOT_DIR/target/$APP_NAME.icns"
-ENTITLEMENTS_PATH="$ROOT_DIR/macos/$APP_NAME.entitlements"
 MACOSX_DEPLOYMENT_TARGET_VALUE="14.0"
 
 running_pids() {
@@ -100,22 +99,8 @@ cp "$BINARY_PATH" "$MACOS_DIR/$APP_NAME"
 cp "$ICON_PATH" "$RESOURCES_DIR/$APP_NAME.icns"
 chmod +x "$MACOS_DIR/$APP_NAME"
 
-# Sign. If RAMI_SIGNING_IDENTITY is set, sign for distribution (hardened runtime,
-# entitlements, secure timestamp — required for notarization). Otherwise fall
-# back to ad-hoc signing for local development.
-if [ -n "${RAMI_SIGNING_IDENTITY:-}" ]; then
-  if [ ! -f "$ENTITLEMENTS_PATH" ]; then
-    echo "error: entitlements file missing at $ENTITLEMENTS_PATH" >&2
-    exit 1
-  fi
-  codesign --force --options runtime \
-    --entitlements "$ENTITLEMENTS_PATH" \
-    --sign "$RAMI_SIGNING_IDENTITY" \
-    --timestamp \
-    "$APP_DIR"
-else
-  codesign --force --deep --sign - "$APP_DIR"
-fi
+# rami ships ad-hoc signed: there is no Developer ID to sign with.
+codesign --force --deep --sign - "$APP_DIR"
 
 printf '%s\n' "$APP_DIR"
 
@@ -150,7 +135,7 @@ if [ "${RAMI_INSTALL:-0}" = "1" ]; then
   cp -R "$APP_DIR" "$INSTALL_DIR"
   open "$INSTALL_DIR"
   echo "==> Replaced and launched $INSTALL_DIR"
-elif [ -z "${RAMI_SIGNING_IDENTITY:-}" ]; then
+else
   RUNNING_PIDS="$(running_pids)"
   if [ -n "$RUNNING_PIDS" ]; then
     {

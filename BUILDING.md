@@ -6,8 +6,7 @@ and the maintainer.
 rami ships ad-hoc signed and not notarized, because there is no Apple
 Developer Program membership. macOS blocks a downloaded copy's first launch
 until the user clicks Open Anyway in System Settings → Privacy & Security,
-and again after each update. Signing and notarizing switch on when the
-Developer ID secrets below are set.
+and again after each update.
 
 ## Prereqs
 
@@ -45,13 +44,6 @@ open rami.app
 `build-app.sh` produces an ad-hoc-signed `rami.app` next to the repo. Fine
 for local use. A local build carries no quarantine flag, so Gatekeeper does not
 check it.
-
-For a Developer ID-signed bundle (no Gatekeeper warning), set the identity:
-
-```sh
-RAMI_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
-  ./scripts/build-app.sh
-```
 
 ## Previewing the pressure accents
 
@@ -97,58 +89,18 @@ not comparable.
 
 ## Release DMG
 
-`scripts/release.sh` builds and packages `dist/rami-<version>.dmg` and its
-`.sha256`. Without `RAMI_SIGNING_IDENTITY` the app is ad-hoc signed and the
-DMG is not notarized. That is how rami ships:
+`scripts/release.sh` builds the ad-hoc-signed app and packages
+`dist/rami-<version>.dmg` and its `.sha256`:
 
 ```sh
 ./scripts/release.sh
 ```
 
-### Signing and notarizing
-
-This needs a paid Apple Developer Program membership. One-time setup:
-
-1. Mint a `Developer ID Application` certificate from
-   developer.apple.com → Certificates and install it in your login keychain.
-2. Create an app-specific password at appleid.apple.com → Sign-In and Security.
-3. Store credentials for `notarytool`:
-   ```sh
-   xcrun notarytool store-credentials rami-notary \
-     --apple-id <your-apple-id> \
-     --team-id <YOUR_TEAM_ID> \
-     --password <app-specific-password>
-   ```
-
-Build:
-
-```sh
-RAMI_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
-  ./scripts/release.sh
-```
-
-Set `RAMI_SKIP_NOTARIZE=1` to dry-run without contacting Apple's notary
-service.
-
 ## Release via GitHub Actions
 
-`.github/workflows/release.yml` builds a DMG and uploads it to a GitHub
-Release on every `v*` tag push. It signs and notarizes only when
-`MACOS_CERTIFICATE_P12_BASE64` is set, and then it needs the other five
-`MACOS_*` secrets too:
-
-| Secret | Purpose |
-|---|---|
-| `MACOS_CERTIFICATE_P12_BASE64` | base64 of the exported `.p12` (Developer ID cert + private key) |
-| `MACOS_CERTIFICATE_P12_PASSWORD` | password used during the `.p12` export |
-| `MACOS_SIGNING_IDENTITY` | full identity string |
-| `MACOS_NOTARY_APPLE_ID` | Apple ID email |
-| `MACOS_NOTARY_TEAM_ID` | Apple developer team ID |
-| `MACOS_NOTARY_APP_PASSWORD` | app-specific password |
-
-Export the `.p12` from Keychain Access (right-click cert → Export) and
-encode with `base64 -i cert.p12 | pbcopy`. Workflow runs on `macos-14`, so
-the DMG is `arm64`-only.
+`.github/workflows/release.yml` runs `release.sh` and uploads the DMG to a
+GitHub Release on every `v*` tag push. It needs no secrets. The workflow runs
+on `macos-14`, so the DMG is `arm64`-only.
 
 To cut a release:
 
@@ -174,9 +126,6 @@ pushing it. A `v*` tag publishes a public release immediately.
   copies into `/Applications`, ejects the DMG, launches). curl sets no
   quarantine flag, so this copy skips the Open Anyway step.
 - `macos/Info.plist` configures accessory-app behavior with `LSUIElement`.
-- `macos/rami.entitlements` disables the App Sandbox (needed for the
-  cross-process memory scan); the hardened runtime is enabled by
-  `codesign --options runtime` in `build-app.sh`, not by this file.
 - `scripts/generate-icon.swift` draws the app icon and emits the `.icns`.
 - `CFBundleShortVersionString` / `CFBundleVersion` are templated from
   `Cargo.toml` at build time.
