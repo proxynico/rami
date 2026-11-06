@@ -46,7 +46,5 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Settings modules](./settings-modules.md) covers Show CPU, Show GPU, Show Apps, and Auto-Refresh.
 - [CPU module](./cpu-module.md) covers the one-line CPU row.
 - [Copy diagnostics](./copy-diagnostics.md) covers the pasteboard report from Settings.
-- [Share over Tailscale](./share-over-tailscale.md) covers answering another Mac with this Mac's readings.
-- [Shared Mac](./shared-mac.md) covers the section showing another Mac's readings.
 - [Share over Tailscale](./share-over-tailscale.md) covers the Settings toggle and the shared reading on port 47960.
 - [Shared Mac](./shared-mac.md) covers the section that shows another Mac's shared reading.
