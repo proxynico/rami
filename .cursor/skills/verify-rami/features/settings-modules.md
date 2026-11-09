@@ -1,19 +1,18 @@
 # Settings modules
 
-Settings in the dropdown hides or shows CPU, GPU, and the app list, and pauses Auto-Refresh. Each toggle persists across quit and relaunch.
+Settings in the dropdown hides or shows CPU and GPU, and pauses Auto-Refresh. Each toggle persists across quit and relaunch.
 
 ## Sub-features
 
-- `settings-open` reveals Auto-Refresh, Show Apps, Show CPU, Show GPU, Show Shared Mac (only when `sharedMacHost` is set), Share over Tailscale, Copy Diagnostics, and the disabled `rami <version>` row.
+- `settings-open` reveals Auto-Refresh, Show CPU, Show GPU, Show Shared Mac (only when `sharedMacHost` is set), Share over Tailscale, Copy Diagnostics, and the disabled `rami <version>` row.
 - `settings-cpu` shows or hides the CPU module.
 - `settings-gpu` shows or hides the GPU module. GPU stays hidden if the IORegistry read fails even when the toggle is on.
-- `settings-apps` shows or hides the top-apps rows under Memory.
 - `settings-auto-refresh` checks or unchecks Auto-Refresh.
 
 ## How to get to it (user POV)
 
 - Click the gauge, then `Settings`.
-- Choose `Show CPU`, `Show GPU`, `Show Apps`, or `Auto-Refresh`.
+- Choose `Show CPU`, `Show GPU`, or `Auto-Refresh`.
 
 ## Driving it with control-rami
 
@@ -27,13 +26,12 @@ Preconditions:
 - **Toggle CPU on.** Run `control-rami click-settings --item "Show CPU"`. Run `defaults read com.nicomontero.rami showCpu`. For this step the value must be `1`.
 - **See CPU.** Run `control-rami capture-open-menu --dump .cursor/skills/verify-rami/artifacts/settings-modules/cpu-on.ax.txt --screenshot .cursor/skills/verify-rami/artifacts/settings-modules/cpu-on.png`. The dump contains an AXStaticText labeled `CPU`.
 - **Toggle GPU on.** Run `control-rami click-settings --item "Show GPU"`. `defaults read com.nicomontero.rami showGpu` is `1`. Capture to `gpu-on.ax.txt` / `gpu-on.png`. If the dump contains a `GPU` label, the module loaded; if it does not, record that GPU data was unavailable — do not treat a missing row as a toggle failure when `showGpu` is `1`.
-- **Hide apps.** Run `control-rami click-settings --item "Show Apps"`. `defaults read com.nicomontero.rami showAppUsage` is `0`. Capture to `apps-off.ax.txt`. The dump still has the Memory map and has no app-name rows under the breakdown (loading/unavailable placeholders also count as the apps section — they must be gone).
 - **Pause auto-refresh.** Run `control-rami click-settings --item "Auto-Refresh"`. `defaults read com.nicomontero.rami autoRefreshEnabled` is `0`.
 - **Proof.** Keep the AX dumps and the `defaults read` transcripts in `.cursor/skills/verify-rami/artifacts/settings-modules/defaults.txt`. Cleanup must restore the pre-launch domain (this machine's daily driver currently stores `showCpu=0` and `showGpu=0` when those keys exist).
 
 ## Gotchas
 
-- Defaults keys are `showCpu`, `showGpu`, `showAppUsage`, `autoRefreshEnabled`. Unset means the in-app default (CPU on, GPU off, Apps on, Auto-Refresh on), not "false".
+- Defaults keys are `showCpu`, `showGpu`, `autoRefreshEnabled`. Unset means the in-app default (CPU on, GPU off, Auto-Refresh on), not "false".
 - Toggling writes immediately. A crash before cleanup leaves the user's Settings dirty — always cleanup.
 - A GPU row absent after a successful `showGpu=1` means the sampler returned nothing, not that the toggle failed.
 - The menu closes and reopens after each toggle. Capture after that reopen, not during the click.

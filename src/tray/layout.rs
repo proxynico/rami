@@ -2,17 +2,7 @@
 //! sequence `TrayController::rebuild_menu` adds them in. The menu is built
 //! from `menu_slots`, so the tests below pin the real order.
 
-use crate::format::{AppSectionDisplay, DropdownModel, SharedSection, LEGEND_CATEGORIES};
-
-pub(super) const APP_ROW_POOL: usize = 3;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AppShape {
-    Hidden,
-    Loading,
-    Unavailable,
-    Rows(usize),
-}
+use crate::format::{DropdownModel, SharedSection, LEGEND_CATEGORIES};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SharedShape {
@@ -28,7 +18,6 @@ pub(super) enum MenuShape {
     /// No memory reading yet, or the sample failed.
     Loading,
     Loaded {
-        apps: AppShape,
         show_swap: bool,
         show_cpu: bool,
         show_gpu: bool,
@@ -45,9 +34,6 @@ pub(super) enum Slot {
     Pressure,
     Swap,
     History,
-    AppLoading,
-    AppUnavailable,
-    App(usize),
     Cpu,
     Gpu,
     SharedStatus,
@@ -62,12 +48,6 @@ pub(super) fn menu_shape_for(model: Option<&DropdownModel>) -> MenuShape {
         return MenuShape::Loading;
     };
     MenuShape::Loaded {
-        apps: match &model.apps {
-            AppSectionDisplay::Hidden => AppShape::Hidden,
-            AppSectionDisplay::Loading => AppShape::Loading,
-            AppSectionDisplay::Unavailable => AppShape::Unavailable,
-            AppSectionDisplay::Rows { rows } => AppShape::Rows(rows.len().min(APP_ROW_POOL)),
-        },
         show_swap: model.swap.is_some(),
         show_cpu: model.cpu.is_some(),
         show_gpu: model.gpu.is_some(),
@@ -84,7 +64,6 @@ pub(super) fn menu_slots(shape: MenuShape) -> Vec<Slot> {
     match shape {
         MenuShape::Loading => slots.push(Slot::Loading),
         MenuShape::Loaded {
-            apps,
             show_swap,
             show_cpu,
             show_gpu,
@@ -97,15 +76,6 @@ pub(super) fn menu_slots(shape: MenuShape) -> Vec<Slot> {
                 slots.push(Slot::Swap);
             }
             slots.push(Slot::History);
-            match apps {
-                AppShape::Hidden => {}
-                AppShape::Loading => slots.extend([Slot::Separator, Slot::AppLoading]),
-                AppShape::Unavailable => slots.extend([Slot::Separator, Slot::AppUnavailable]),
-                AppShape::Rows(rows) => {
-                    slots.push(Slot::Separator);
-                    slots.extend((0..rows).map(Slot::App));
-                }
-            }
             if show_cpu || show_gpu {
                 slots.push(Slot::Separator);
             }
@@ -135,7 +105,6 @@ mod tests {
         CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot, PressureSource,
         SystemSnapshot,
     };
-    use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
     use crate::share::SharedMac;
 
     const COMMANDS: [Slot; 4] = [Separator, Settings, Separator, Quit];
@@ -161,8 +130,8 @@ mod tests {
         }
     }
 
-    fn slots(snapshot: SystemSnapshot, apps: AppMemorySnapshot) -> Vec<Slot> {
-        let model = dropdown_model(snapshot, &apps, &[], &SharedMac::Hidden);
+    fn slots(snapshot: SystemSnapshot) -> Vec<Slot> {
+        let model = dropdown_model(snapshot, &[], &SharedMac::Hidden);
         menu_slots(menu_shape_for(Some(&model)))
     }
 
@@ -190,42 +159,14 @@ mod tests {
 
     #[test]
     fn memory_section_ends_with_the_one_history_row() {
-        assert_eq!(
-            slots(snapshot(), AppMemorySnapshot::Hidden),
-            [&MEMORY[..8], &COMMANDS].concat()
-        );
+        assert_eq!(slots(snapshot()), [&MEMORY[..8], &COMMANDS].concat());
     }
 
     #[test]
     fn swap_row_is_omitted_when_swap_is_zero() {
         let mut snapshot = snapshot();
         snapshot.memory.swap_used_bytes = 0;
-        assert!(!slots(snapshot, AppMemorySnapshot::Hidden).contains(&Swap));
-    }
-
-    #[test]
-    fn app_section_follows_memory_behind_a_separator() {
-        assert_eq!(
-            slots(snapshot(), AppMemorySnapshot::Loading),
-            [&MEMORY[..], &[AppLoading], &COMMANDS].concat()
-        );
-        assert_eq!(
-            slots(snapshot(), AppMemorySnapshot::Unavailable),
-            [&MEMORY[..], &[AppUnavailable], &COMMANDS].concat()
-        );
-
-        let usage = |name: &str| AppMemoryUsage {
-            name: name.to_string(),
-            group_key: format!("/Applications/{name}.app"),
-            footprint_bytes: 1_288_490_189,
-            delta_bytes: None,
-        };
-        let apps = ["Cursor", "Chrome", "Zen", "Safari"].map(usage).to_vec();
-        assert_eq!(
-            slots(snapshot(), AppMemorySnapshot::Loaded(apps)),
-            [&MEMORY[..], &[App(0), App(1), App(2)], &COMMANDS].concat(),
-            "at most three app rows"
-        );
+        assert!(!slots(snapshot).contains(&Swap));
     }
 
     #[test]
@@ -241,7 +182,7 @@ mod tests {
             tiler_percent: None,
         });
         assert_eq!(
-            slots(snapshot, AppMemorySnapshot::Hidden),
+            slots(snapshot),
             [&MEMORY[..], &[Cpu, Gpu], &COMMANDS].concat()
         );
     }
@@ -251,7 +192,6 @@ mod tests {
         let model = |shared: &SharedMac| {
             menu_slots(menu_shape_for(Some(&dropdown_model(
                 snapshot(),
-                &AppMemorySnapshot::Hidden,
                 &[],
                 shared,
             ))))

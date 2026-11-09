@@ -9,15 +9,14 @@
 use crate::cpu::CpuSampler;
 use crate::diagnostics::{build_diagnostic_report, current_report_input};
 use crate::engine::{
-    AppScanResult, Effect, Event, LaunchAtLogin, RefreshEngine, Render, Samplers, ScanRunner,
-    Setting, SettingChange, SharedFetchResult, REFRESH_TICK_SECONDS,
+    Effect, Event, LaunchAtLogin, RefreshEngine, Render, Samplers, ScanRunner, Setting,
+    SettingChange, SharedFetchResult, REFRESH_TICK_SECONDS,
 };
 use crate::gpu::GpuSampler;
 use crate::lock::AppLock;
 use crate::login_item::{LaunchAtLoginController, LaunchAtLoginStatus};
 use crate::memory::MemorySampler;
 use crate::model::{CpuSnapshot, GpuSnapshot, MemorySnapshot, SystemSnapshot};
-use crate::process_memory::ProcessMemorySampler;
 use crate::settings::SettingsStore;
 use crate::share::{self, ShareServer};
 use crate::tray::TrayController;
@@ -36,14 +35,12 @@ use std::io;
 use std::rc::{Rc, Weak};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Instant;
 
 thread_local! {
     static APP_STATE: RefCell<Option<Weak<AppState>>> = const { RefCell::new(None) };
 }
 
 const MENU_REOPEN_DELAY_SECONDS: f64 = 0.05;
-const APP_BASELINE_ROW_LIMIT: usize = 25;
 
 /// The three synchronous kernel samplers behind the engine's `Samplers` port.
 struct SystemSamplers {
@@ -70,12 +67,10 @@ impl Samplers for SystemSamplers {
     }
 }
 
-/// Worker threads and channels behind the engine's `ScanRunner` port. Results
-/// stay queued in the channels until the engine polls, so nothing is lost
-/// when a refresh is skipped.
+/// Worker threads and a channel behind the engine's `ScanRunner` port.
+/// Results stay queued in the channel until the engine polls, so nothing is
+/// lost when a refresh is skipped.
 struct ThreadScanRunner {
-    app_sender: Sender<AppScanResult>,
-    app_receiver: Receiver<AppScanResult>,
     shared_host: Option<String>,
     shared_sender: Sender<SharedFetchResult>,
     shared_receiver: Receiver<SharedFetchResult>,
@@ -83,11 +78,8 @@ struct ThreadScanRunner {
 
 impl ThreadScanRunner {
     fn new(shared_host: Option<String>) -> Self {
-        let (app_sender, app_receiver) = mpsc::channel();
         let (shared_sender, shared_receiver) = mpsc::channel();
         Self {
-            app_sender,
-            app_receiver,
             shared_host,
             shared_sender,
             shared_receiver,
@@ -96,26 +88,6 @@ impl ThreadScanRunner {
 }
 
 impl ScanRunner for ThreadScanRunner {
-    fn start_app_scan(&mut self, generation: u64) {
-        let sender = self.app_sender.clone();
-        thread::spawn(move || {
-            // Background scan should prefer efficiency cores.
-            // SAFETY: plain FFI call on the current thread; the ignored status
-            // only affects QoS preference, never memory safety.
-            unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0) };
-            let rows = ProcessMemorySampler::new().sample(APP_BASELINE_ROW_LIMIT);
-            let _ = sender.send(AppScanResult {
-                generation,
-                completed_at: Instant::now(),
-                rows,
-            });
-        });
-    }
-
-    fn poll_app_scan(&mut self) -> Option<AppScanResult> {
-        self.app_receiver.try_recv().ok()
-    }
-
     fn shared_mac_configured(&self) -> bool {
         self.shared_host.is_some()
     }
@@ -198,7 +170,6 @@ impl AppState {
                     SettingChange::AutoRefresh(value) => {
                         self.settings.set_auto_refresh_enabled(value)
                     }
-                    SettingChange::ShowAppUsage(value) => self.settings.set_show_app_usage(value),
                     SettingChange::ShowCpu(value) => self.settings.set_show_cpu(value),
                     SettingChange::ShowGpu(value) => self.settings.set_show_gpu(value),
                     SettingChange::ShareOverTailscale(value) => {
@@ -212,13 +183,9 @@ impl AppState {
                 Effect::CopyDiagnostics {
                     launch_at_login,
                     memory,
-                    apps,
                 } => {
-                    let report = build_diagnostic_report(current_report_input(
-                        launch_at_login,
-                        memory,
-                        &apps,
-                    ));
+                    let report =
+                        build_diagnostic_report(current_report_input(launch_at_login, memory));
                     copy_to_pasteboard(&report);
                 }
             }
@@ -232,7 +199,6 @@ impl AppState {
                 snapshot,
                 cpu,
                 gpu,
-                apps,
                 history,
                 shared,
             } => self.tray.set_menu_snapshot(
@@ -241,7 +207,6 @@ impl AppState {
                     cpu,
                     gpu,
                 },
-                &apps,
                 &history,
                 &shared,
                 mtm,
@@ -268,7 +233,7 @@ impl AppState {
         };
         // Let the OS coalesce this timer with other wakeups. Kept to 10%
         // of the interval: the menu-bar gauge updates on every tick, and
-        // the tick also drives the trend window and the app/swap cadences,
+        // the tick also drives the trend window and the swap cadence,
         // so a large tolerance would reintroduce the cadence drift #18
         // fixed — from the other direction.
         timer.setTolerance(0.5);
@@ -299,7 +264,8 @@ impl AppState {
         }
     }
 
-    /// One-shot timer that drains scan results while the menu is still
+    /// One-shot timer that drains the shared Mac's answer and warms the CPU
+    /// reading while the menu is still
     /// tracking. It must live in NSRunLoopCommonModes or it would only fire
     /// after the menu closes. Replaces any pending drain: the engine emits
     /// its schedules in order and the latest must win.
@@ -404,11 +370,6 @@ define_class!(
         #[unsafe(method(toggleAutoRefresh:))]
         fn toggle_auto_refresh(&self, _sender: &AnyObject) {
             dispatch_event(Event::Toggle(Setting::AutoRefresh));
-        }
-
-        #[unsafe(method(toggleShowAppUsage:))]
-        fn toggle_show_app_usage(&self, _sender: &AnyObject) {
-            dispatch_event(Event::Toggle(Setting::ShowAppUsage));
         }
 
         #[unsafe(method(toggleShowCpu:))]

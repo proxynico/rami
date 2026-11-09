@@ -34,7 +34,7 @@ const REQUEST_DEADLINE: Duration = Duration::from_millis(500);
 const MAX_REQUEST_BYTES: usize = 4096;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// One answer: everything this Mac's dropdown shows except app names.
+/// One answer: the memory, CPU, and GPU readings this Mac's dropdown shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SharedReading {
     pub(crate) name: String,

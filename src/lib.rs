@@ -15,7 +15,6 @@ mod login_item;
 mod memory_map_view;
 pub(crate) mod presentation;
 mod pressure_view;
-mod process_memory;
 mod row_view;
 mod settings;
 mod share;

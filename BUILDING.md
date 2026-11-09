@@ -30,9 +30,9 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 CI (`.github/workflows/ci.yml`) runs these same checks, plus `cargo audit`,
-on every push and pull request. The ignored syscall smoke test
-(`cargo test -- --ignored`) is local-only: it needs real `.app` processes,
-which headless CI runners don't have.
+on every push and pull request. The ignored smoke tests
+(`cargo test -- --ignored`) are local-only: they need live processor counters,
+the GPU, and the device tree, which headless CI runners don't have.
 
 ## Local app bundle
 

@@ -17,7 +17,7 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 See `BUILDING.md` for the bundle, signing, and release path. The ignored
-integration tests (`cargo test -- --ignored`) are local-only.
+smoke tests (`cargo test -- --ignored`) are local-only.
 
 To prove a user-visible change, use the `verify-rami` skill on the
 repo-local bundle. It lives at `.cursor/skills/verify-rami/SKILL.md`.
@@ -50,8 +50,8 @@ two toggles away. Nico cut the E-core and P-core rows, the busy-process
 list, and its sampler on 2026-09-27.
 
 These are out of scope: CPU frequency, temperatures, per-core rings,
-per-cluster or per-process CPU, per-process GPU, and a quit action on
-ranked app-memory rows. rami is a monitor, not a task manager.
+per-cluster or per-process CPU, per-process GPU, and per-app memory.
+rami is a monitor, not a task manager.
 
 The Memory section opens the dropdown with the memory map: a header
 with used / total and Memory %, RAM drawn as 64 equal cells on a board
@@ -61,8 +61,7 @@ showing its size only; Other and Free are read from the map's gray and
 empty cells. Then come the Pressure meter with ticks at Warning and
 Critical, Swap when nonzero, and the history row.
 
-The app-memory ranking shows three rows. Memory
-history is one row, memory-only, about 36 px, at the end of the Memory
+Memory history is one row, memory-only, about 36 px, at the end of the Memory
 section. It reuses the 5 s trend window the engine already records,
 including while the menu is closed, so it is warm when the menu opens.
 It renders in the mark color at 12% fill, 65% line, and a 100%
@@ -134,8 +133,7 @@ Share over Tailscale, off by default, makes rami answer on
 `127.0.0.1:47960` with this Mac's readings, so another Mac's rami can
 show them. rami never listens beyond localhost: `tailscale serve --bg
 --tcp 47960 tcp://localhost:47960` exposes the port to the tailnet only.
-The answer carries no app names. The listener samples when asked, so a
-Mac nobody asks does no extra work. `src/share.rs` owns the format.
+The listener samples when asked, so a Mac nobody asks does no extra work. `src/share.rs` owns the format.
 
 The Mac that reads shows one shared Mac, set with `defaults write
 com.nicomontero.rami sharedMacHost <host>` and read at launch. Its
@@ -216,7 +214,7 @@ image ends up. The dropdown's custom views resolve their colors inside
 `src/draw.rs`, and `src/presentation.rs` pin this with appearance-flip
 regression tests.
 
-Data rows (breakdown, Swap, apps, CPU, GPU) are `RowView`s
+Data rows (breakdown, Swap, CPU, GPU) are `RowView`s
 (`src/row_view.rs`), not titled menu items. Once any item has a submenu,
 NSMenu reserves an arrow column on the right of every titled item, which
 left titled rows short of the custom views' right edge. NSMenu on current

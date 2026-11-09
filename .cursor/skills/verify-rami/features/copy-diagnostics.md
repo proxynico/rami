@@ -1,6 +1,6 @@
 # Copy diagnostics
 
-Settings → Copy Diagnostics puts a local text report on the pasteboard so the user can paste rami's version, bundle path, memory snapshot, and top apps.
+Settings → Copy Diagnostics puts a local text report on the pasteboard so the user can paste rami's version, bundle path, and memory snapshot.
 
 ## Sub-features
 

@@ -67,15 +67,15 @@ Stable handles (do not invent others):
 - Memory map: AXGroup label `Memory`, value `<mem%> percent, <used> / <total> GB used, 1 cell = <size>`.
 - Pressure meter: AXGroup label `Pressure`, value `<p> percent`.
 - History view: AXGroup label `Memory history`.
-- Data rows (breakdown, Swap, apps, CPU, GPU): AXStaticText labeled with the row name (`App Memory`, `Swap`, `CPU`, `GPU`, an app name), the reading as its value.
+- Data rows (breakdown, Swap, CPU, GPU): AXStaticText labeled with the row name (`App Memory`, `Swap`, `CPU`, `GPU`), the reading as its value.
 - Command items by exact title: `Settings`, `Quit`.
-- Settings items by exact title: `Auto-Refresh`, `Show Apps`, `Show CPU`, `Show GPU`, `Show Shared Mac` (only when `sharedMacHost` is set), `Share over Tailscale`, `Copy Diagnostics`. About is `rami <version>` and is disabled.
+- Settings items by exact title: `Auto-Refresh`, `Show CPU`, `Show GPU`, `Show Shared Mac` (only when `sharedMacHost` is set), `Share over Tailscale`, `Copy Diagnostics`. About is `rami <version>` and is disabled.
 
 `capture-open-menu` exists because clicking the status item blocks AppleScript while the menu stays open. It dumps AX, screenshots, then sends Escape.
 
 **Do not click** `Launch at Login` (any suffix), or `Check for Updates`. The helper refuses those.
 
-`click-settings --item "Show CPU"` (and Apps / GPU / Auto-Refresh) writes `NSUserDefaults`. Launch already snapshotted the domain; cleanup restores it. Still snapshot before a settings proof if you did not go through `launch`.
+`click-settings --item "Show CPU"` (and GPU / Auto-Refresh) writes `NSUserDefaults`. Launch already snapshotted the domain; cleanup restores it. Still snapshot before a settings proof if you did not go through `launch`.
 
 After a settings toggle the menu reopens on its own (`ScheduleMenuReopen`). Wait ~0.2s, then `capture-open-menu` or `dump-menu`.
 

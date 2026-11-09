@@ -3,15 +3,13 @@ mod layout;
 
 use self::layout::{menu_shape_for, menu_slots, MenuShape, Slot};
 use crate::format::{
-    dropdown_model, gauge_accessibility_label, gauge_tooltip, Accent, AppSectionDisplay,
-    DropdownModel, SharedSection,
+    dropdown_model, gauge_accessibility_label, gauge_tooltip, Accent, DropdownModel, SharedSection,
 };
 use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_map_view::MemoryMapView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
 use crate::pressure_view::PressureView;
-use crate::process_memory::AppMemorySnapshot;
 use crate::row_view::{RowContent, RowView};
 use crate::settings::Settings;
 use crate::share::SharedMac;
@@ -42,9 +40,6 @@ pub struct TrayController {
     legend_items: Vec<RowItem>,
     swap_item: RowItem,
     loading_item: RowItem,
-    app_loading_item: RowItem,
-    app_unavailable_item: RowItem,
-    app_items: Vec<RowItem>,
     cpu_item: RowItem,
     gpu_item: RowItem,
     shared_status_item: RowItem,
@@ -53,7 +48,6 @@ pub struct TrayController {
     settings_item: Retained<NSMenuItem>,
     quit_item: Retained<NSMenuItem>,
     auto_refresh_item: Retained<NSMenuItem>,
-    show_app_usage_item: Retained<NSMenuItem>,
     show_cpu_item: Retained<NSMenuItem>,
     show_gpu_item: Retained<NSMenuItem>,
     share_item: Retained<NSMenuItem>,
@@ -107,12 +101,11 @@ impl TrayController {
     pub fn set_menu_snapshot(
         &self,
         system: SystemSnapshot,
-        apps: &AppMemorySnapshot,
         history: &[u64],
         shared: &SharedMac,
         mtm: MainThreadMarker,
     ) {
-        self.apply_model(Some(&dropdown_model(system, apps, history, shared)), mtm);
+        self.apply_model(Some(&dropdown_model(system, history, shared)), mtm);
     }
 
     /// Attach the open/close delegate to the main tray menu only: the root
@@ -127,8 +120,6 @@ impl TrayController {
             return;
         }
         set_checked(&self.auto_refresh_item, settings.auto_refresh_enabled);
-        // "Show Apps" follows the macOS convention: checked when the app list is visible.
-        set_checked(&self.show_app_usage_item, settings.show_app_usage);
         set_checked(&self.show_cpu_item, settings.show_cpu);
         set_checked(&self.show_gpu_item, settings.show_gpu);
         set_checked(&self.share_item, settings.share_over_tailscale);
@@ -214,11 +205,6 @@ impl TrayController {
         for (row_item, row) in self.legend_items.iter().zip(&model.breakdown) {
             row_item.view.update(&RowContent::legend(row), accent);
         }
-        if let AppSectionDisplay::Rows { rows } = &model.apps {
-            for (row_item, row) in self.app_items.iter().zip(rows) {
-                row_item.view.update(&RowContent::stat(row), accent);
-            }
-        }
         for (row_item, row) in [
             (&self.swap_item, &model.swap),
             (&self.cpu_item, &model.cpu),
@@ -252,9 +238,6 @@ impl TrayController {
                 Slot::Pressure => &self.pressure_item,
                 Slot::Swap => &self.swap_item.item,
                 Slot::History => &self.history_item,
-                Slot::AppLoading => &self.app_loading_item.item,
-                Slot::AppUnavailable => &self.app_unavailable_item.item,
-                Slot::App(index) => &self.app_items[index].item,
                 Slot::Cpu => &self.cpu_item.item,
                 Slot::Gpu => &self.gpu_item.item,
                 Slot::SharedStatus => &self.shared_status_item.item,

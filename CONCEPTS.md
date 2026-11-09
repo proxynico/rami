@@ -75,7 +75,6 @@ memory makes those figures misleading.
 One answer from a Mac with Share over Tailscale on: its host name, memory
 snapshot, CPU User and System, and GPU utilization, as `key=value` lines.
 CPU is the change since the previous request, so the first answer has none.
-App names are never shared.
 _Avoid_: remote, server, sync
 
 **Shared Mac**:

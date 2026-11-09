@@ -1,10 +1,8 @@
-use crate::process_memory::AppMemoryUsage;
 use std::collections::VecDeque;
 
 const RISING_BYTES: i64 = 300_000_000;
 const RISING_FAST_BYTES: i64 = 1_000_000_000;
 const MEMORY_WINDOW_SAMPLES: usize = 25;
-pub(crate) const MEANINGFUL_APP_DELTA_BYTES: i64 = 50_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryTrend {
@@ -66,44 +64,6 @@ pub fn classify_memory_trend(delta_bytes: i64) -> MemoryTrend {
     }
 }
 
-pub fn app_rows_with_deltas(
-    current: Vec<AppMemoryUsage>,
-    previous: &[AppMemoryUsage],
-) -> Vec<AppMemoryUsage> {
-    let mut rows: Vec<AppMemoryUsage> = current
-        .into_iter()
-        .map(|mut row| {
-            row.delta_bytes = previous
-                .iter()
-                .find(|prev| prev.group_key == row.group_key)
-                .map(|prev| row.footprint_bytes as i64 - prev.footprint_bytes as i64);
-            row
-        })
-        .collect();
-    rank_app_rows(&mut rows);
-    rows
-}
-
-pub fn rank_app_rows(rows: &mut [AppMemoryUsage]) {
-    let has_meaningful_delta = rows
-        .iter()
-        .any(|row| row.delta_bytes.unwrap_or(0) >= MEANINGFUL_APP_DELTA_BYTES);
-    rows.sort_by(|a, b| {
-        if has_meaningful_delta {
-            b.delta_bytes
-                .unwrap_or(0)
-                .max(0)
-                .cmp(&a.delta_bytes.unwrap_or(0).max(0))
-                .then_with(|| b.footprint_bytes.cmp(&a.footprint_bytes))
-                .then_with(|| a.name.cmp(&b.name))
-        } else {
-            b.footprint_bytes
-                .cmp(&a.footprint_bytes)
-                .then_with(|| a.name.cmp(&b.name))
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,30 +88,5 @@ mod tests {
             assert_eq!(tracker.record(1_100_000_000), MemoryTrend::Stable);
         }
         assert_eq!(tracker.record(1_350_000_000), MemoryTrend::Rising);
-    }
-
-    #[test]
-    fn app_delta_ranking_prefers_meaningful_positive_delta() {
-        let previous = vec![
-            usage("chrome", "Chrome", 4_000_000_000),
-            usage("zen", "Zen", 400_000_000),
-        ];
-        let current = vec![
-            usage("chrome", "Chrome", 4_100_000_000),
-            usage("zen", "Zen", 700_000_000),
-        ];
-        let ranked = app_rows_with_deltas(current, &previous);
-        assert_eq!(ranked[0].name, "Zen");
-        assert_eq!(ranked[0].delta_bytes, Some(300_000_000));
-        assert_eq!(ranked[1].name, "Chrome");
-    }
-
-    fn usage(group_key: &str, name: &str, footprint_bytes: u64) -> AppMemoryUsage {
-        AppMemoryUsage {
-            name: name.to_string(),
-            group_key: group_key.to_string(),
-            footprint_bytes,
-            delta_bytes: None,
-        }
     }
 }
