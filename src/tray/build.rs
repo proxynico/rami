@@ -2,7 +2,6 @@
 //! dropdown is rebuilt from, and the Settings submenu. Pure construction —
 //! all state updates stay in `tray/mod.rs`.
 
-use super::layout::APP_ROW_POOL;
 use super::{RowItem, TrayController};
 use crate::format::{Accent, LEGEND_CATEGORIES};
 use crate::history_view::MemoryHistoryView;
@@ -84,8 +83,6 @@ pub(super) fn build_controller(
 
     let auto_refresh_item =
         make_command_item(mtm, "Auto-Refresh", Some(sel!(toggleAutoRefresh:)), target);
-    let show_app_usage_item =
-        make_command_item(mtm, "Show Apps", Some(sel!(toggleShowAppUsage:)), target);
     let show_cpu_item = make_command_item(mtm, "Show CPU", Some(sel!(toggleShowCpu:)), target);
     let show_gpu_item = make_command_item(mtm, "Show GPU", Some(sel!(toggleShowGpu:)), target);
     let show_shared_mac_item = shared_mac_configured.then(|| {
@@ -131,12 +128,7 @@ pub(super) fn build_controller(
     // The submenu retains its items, and the Settings item retains it.
     let settings_menu = NSMenu::new(mtm);
     settings_menu.setAutoenablesItems(false);
-    for item in [
-        &auto_refresh_item,
-        &show_app_usage_item,
-        &show_cpu_item,
-        &show_gpu_item,
-    ] {
+    for item in [&auto_refresh_item, &show_cpu_item, &show_gpu_item] {
         settings_menu.addItem(item);
     }
     if let Some(item) = &show_shared_mac_item {
@@ -174,9 +166,6 @@ pub(super) fn build_controller(
             .collect(),
         swap_item: make_row(mtm, metrics),
         loading_item: make_muted_row(mtm, metrics, "Loading…"),
-        app_loading_item: make_muted_row(mtm, metrics, "Loading…"),
-        app_unavailable_item: make_muted_row(mtm, metrics, "Unavailable"),
-        app_items: (0..APP_ROW_POOL).map(|_| make_row(mtm, metrics)).collect(),
         cpu_item: make_row(mtm, metrics),
         gpu_item: make_row(mtm, metrics),
         shared_status_item: make_row(mtm, metrics),
@@ -185,7 +174,6 @@ pub(super) fn build_controller(
         settings_item,
         quit_item,
         auto_refresh_item,
-        show_app_usage_item,
         show_cpu_item,
         show_gpu_item,
         share_item,

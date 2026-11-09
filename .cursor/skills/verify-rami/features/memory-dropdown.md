@@ -1,6 +1,6 @@
 # Memory dropdown
 
-Clicking the gauge opens one native menu: the memory map (header with used / total and Memory %, 64 cells), the App Memory / Wired / Compressed / Cached breakdown, the Pressure meter, optional Swap, a two-minute history row, and (when enabled) the top apps.
+Clicking the gauge opens one native menu: the memory map (header with used / total and Memory %, 64 cells), the App Memory / Wired / Compressed / Cached breakdown, the Pressure meter, optional Swap, and a two-minute history row.
 
 ## Sub-features
 
@@ -10,7 +10,6 @@ Clicking the gauge opens one native menu: the memory map (header with used / tot
 - `memory-history` exposes an AXGroup named `Memory history`.
 - `memory-breakdown` lists App Memory, Wired, Compressed, and Cached, each with its size and no percent. Other and Free have no rows.
 - `memory-swap` shows a Swap row only when swap is non-zero.
-- `memory-apps` lists top apps when Show Apps is on, or omits them when it is off.
 
 ## How to get to it (user POV)
 
@@ -22,7 +21,6 @@ Clicking the gauge opens one native menu: the memory map (header with used / tot
 Preconditions:
 
 - `control-rami doctor` prints `ok=yes`.
-- Show Apps is on (default unless the snapshotted defaults disabled it). If `defaults read com.nicomontero.rami showAppUsage` is `0`, this recipe cannot prove `memory-apps` until Settings modules turns it back on.
 
 - **Read the closed gauge.** Run `control-rami status-label`. Save it to `.cursor/skills/verify-rami/artifacts/memory-dropdown/before-label.txt`.
 - **Open and capture.** Run `control-rami capture-open-menu --dump .cursor/skills/verify-rami/artifacts/memory-dropdown/menu.ax.txt --screenshot .cursor/skills/verify-rami/artifacts/memory-dropdown/menu.png`.
@@ -38,6 +36,5 @@ Preconditions:
 
 - Opening the menu with raw AppleScript blocks until the menu closes. Use `capture-open-menu`, not a bare `open-menu` plus a later dump in the same shell.
 - Swap is absent when swap used is 0. Missing Swap is not a failure; a Swap row when Activity Monitor also shows 0 is.
-- App names are truncated to 16 characters. Assert the row exists, not the full process name.
 - Custom views (map, Pressure, history) often have an empty menu-item title. Read the AXGroup label and value, not `name` alone.
 - `RAMI_FORCE_PRESSURE=warning` makes Pressure 88%; `critical` makes it 95%. Memory % stays the real sample.

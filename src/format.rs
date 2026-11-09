@@ -3,12 +3,7 @@ use crate::model::{
     classify_pressure, CpuModuleState, GpuModuleState, MemoryPressure, MemorySnapshot,
     SystemSnapshot,
 };
-use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::share::SharedMac;
-use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
-
-const APP_NAME_MAX_CHARS: usize = 16;
-const APP_USAGE_ROW_LIMIT: usize = 3;
 
 /// Binary gibibytes (1024³), matching Activity Monitor and marketed RAM sizes.
 const ONE_GIB_BYTES: u64 = 1_073_741_824;
@@ -44,10 +39,6 @@ pub fn mem_text(bytes: u64) -> String {
         let mb = (bytes as f64 / ONE_MIB_BYTES as f64).round() as u64;
         format!("{mb} MB")
     }
-}
-
-pub fn delta_bytes_text(delta_bytes: u64) -> String {
-    format!("+{}", mem_text(delta_bytes))
 }
 
 /// Share of physical RAM, rounded to the nearest percent and capped at 100.
@@ -87,14 +78,6 @@ pub fn history_caption(samples: &[u64], total_bytes: u64) -> Option<(String, Str
 pub struct StatRow {
     pub primary: String,
     pub tail: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppSectionDisplay {
-    Hidden,
-    Loading,
-    Rows { rows: Vec<StatRow> },
-    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -207,7 +190,6 @@ pub struct DropdownModel {
     /// the map's gray and empty cells.
     pub breakdown: [LegendRow; LEGEND_CATEGORIES.len()],
     pub swap: Option<StatRow>,
-    pub apps: AppSectionDisplay,
     pub cpu: Option<StatRow>,
     pub gpu: Option<StatRow>,
     pub shared: SharedSection,
@@ -243,7 +225,6 @@ pub struct SharedMacDisplay {
 
 pub(crate) fn dropdown_model(
     snapshot: SystemSnapshot,
-    apps: &AppMemorySnapshot,
     history: &[u64],
     shared: &SharedMac,
 ) -> DropdownModel {
@@ -259,7 +240,6 @@ pub(crate) fn dropdown_model(
             primary: "Swap".to_string(),
             tail: Some(mem_text(memory.swap_used_bytes)),
         }),
-        apps: app_section_display(apps),
         cpu: cpu_row(snapshot.cpu),
         gpu: gpu_row(snapshot.gpu),
         shared: shared_section(shared),
@@ -426,54 +406,12 @@ fn gpu_row(state: GpuModuleState) -> Option<StatRow> {
     })
 }
 
-fn app_section_display(apps: &AppMemorySnapshot) -> AppSectionDisplay {
-    match apps {
-        AppMemorySnapshot::Hidden => AppSectionDisplay::Hidden,
-        AppMemorySnapshot::Loading => AppSectionDisplay::Loading,
-        AppMemorySnapshot::Unavailable => AppSectionDisplay::Unavailable,
-        // Rows arrive already ranked (and delta-tagged) from `trend::app_rows_with_deltas`,
-        // which is the single source of ranking. Here we only project the top N to display rows.
-        AppMemorySnapshot::Loaded(rows) => AppSectionDisplay::Rows {
-            rows: rows.iter().take(APP_USAGE_ROW_LIMIT).map(app_row).collect(),
-        },
-    }
-}
-
-fn app_row(app: &AppMemoryUsage) -> StatRow {
-    let tail = if let Some(delta) = app
-        .delta_bytes
-        .filter(|delta| *delta >= MEANINGFUL_APP_DELTA_BYTES)
-    {
-        format!(
-            "{}\t{}",
-            mem_text(app.footprint_bytes),
-            delta_bytes_text(delta as u64)
-        )
-    } else {
-        mem_text(app.footprint_bytes)
-    };
-    StatRow {
-        primary: truncate_name(&app.name, APP_NAME_MAX_CHARS),
-        tail: Some(tail),
-    }
-}
-
-fn truncate_name(name: &str, max_chars: usize) -> String {
-    if name.chars().count() <= max_chars {
-        return name.to_string();
-    }
-    let mut out: String = name.chars().take(max_chars - 1).collect();
-    out.push('…');
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{
         CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot, PressureSource,
     };
-    use crate::trend::rank_app_rows;
 
     fn snapshot(total_bytes: u64) -> SystemSnapshot {
         SystemSnapshot {
@@ -496,8 +434,8 @@ mod tests {
         }
     }
 
-    fn model_with_apps(snapshot: SystemSnapshot, apps: AppMemorySnapshot) -> DropdownModel {
-        dropdown_model(snapshot, &apps, &[], &SharedMac::Hidden)
+    fn model(snapshot: SystemSnapshot) -> DropdownModel {
+        dropdown_model(snapshot, &[], &SharedMac::Hidden)
     }
 
     const SIXTEEN_GIB: u64 = 17_179_869_184;
@@ -576,88 +514,10 @@ mod tests {
     }
 
     #[test]
-    fn truncate_name_short_passthrough() {
-        assert_eq!(truncate_name("Cursor", 28), "Cursor");
-    }
-
-    #[test]
-    fn truncate_name_long_uses_ellipsis() {
-        let result = truncate_name("ThisIsAVeryLongApplicationNameThatExceedsTheLimit", 28);
-        assert_eq!(result.chars().count(), 28);
-        assert!(result.ends_with('…'));
-    }
-
-    #[test]
-    fn dropdown_model_default_apps_hidden() {
-        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Hidden);
-        assert_eq!(model.apps, AppSectionDisplay::Hidden);
-    }
-
-    #[test]
-    fn dropdown_model_with_apps_loading() {
-        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Loading);
-        assert_eq!(model.apps, AppSectionDisplay::Loading);
-    }
-
-    #[test]
-    fn dropdown_model_with_apps_unavailable() {
-        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Unavailable);
-        assert_eq!(model.apps, AppSectionDisplay::Unavailable);
-    }
-
-    #[test]
-    fn dropdown_model_with_apps_rows_format() {
-        let usage = vec![AppMemoryUsage {
-            name: "Cursor".to_string(),
-            group_key: "/Applications/Cursor.app".to_string(),
-            footprint_bytes: 2_147_483_648,
-            delta_bytes: None,
-        }];
-        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Loaded(usage));
-        let AppSectionDisplay::Rows { rows } = &model.apps else {
-            panic!("expected Rows");
-        };
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].primary, "Cursor");
-        assert_eq!(rows[0].tail.as_deref(), Some("2.0 GB"));
-    }
-
-    #[test]
-    fn dropdown_model_app_row_under_one_gb_uses_mb() {
-        let usage = vec![AppMemoryUsage {
-            name: "Tiny".to_string(),
-            group_key: "/Applications/Tiny.app".to_string(),
-            footprint_bytes: 256_901_120,
-            delta_bytes: None,
-        }];
-        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Loaded(usage));
-        let AppSectionDisplay::Rows { rows } = &model.apps else {
-            panic!("expected Rows");
-        };
-        assert_eq!(rows[0].tail.as_deref(), Some("245 MB"));
-    }
-
-    #[test]
-    fn dropdown_model_app_row_truncates_names_before_tail_column() {
-        let usage = vec![AppMemoryUsage {
-            name: "Codex Computer Use".to_string(),
-            group_key: "/Applications/Codex Computer Use.app".to_string(),
-            footprint_bytes: 84_934_656,
-            delta_bytes: None,
-        }];
-        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Loaded(usage));
-        let AppSectionDisplay::Rows { rows } = &model.apps else {
-            panic!("expected Rows");
-        };
-        assert_eq!(rows[0].primary, "Codex Computer …");
-        assert_eq!(rows[0].tail.as_deref(), Some("81 MB"));
-    }
-
-    #[test]
     fn dropdown_model_memory_map_shows_percent() {
         let mut snapshot = snapshot(SIXTEEN_GIB);
         snapshot.memory.used_percent = 56;
-        let model = model_with_apps(snapshot, AppMemorySnapshot::Hidden);
+        let model = model(snapshot);
         assert_eq!(model.map.used_percent, 56);
     }
 
@@ -665,7 +525,7 @@ mod tests {
     fn row_hierarchy_promotes_totals_and_demotes_derived_breakdowns() {
         // #23: brightness tracks actionability. App Memory is primary; the
         // derived breakdown rows are demoted.
-        let breakdown = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Hidden).breakdown;
+        let breakdown = model(snapshot(SIXTEEN_GIB)).breakdown;
         assert!(breakdown[0].primary, "App Memory is the total");
         assert!(
             breakdown[1..].iter().all(|row| !row.primary),
@@ -710,42 +570,6 @@ mod tests {
     }
 
     #[test]
-    fn dropdown_model_with_apps_keeps_top_three_sorted() {
-        // Input arrives pre-ranked from trend::rank_app_rows; the compact menu projects three.
-        let mut usage = vec![
-            usage("Six", 6, None),
-            usage("One", 1, None),
-            usage("Five", 5, None),
-            usage("Two", 2, None),
-            usage("Four", 4, None),
-            usage("Three", 3, None),
-        ];
-        rank_app_rows(&mut usage);
-        let model = model_with_apps(snapshot(100), AppMemorySnapshot::Loaded(usage));
-        let AppSectionDisplay::Rows { rows } = &model.apps else {
-            panic!("expected app rows");
-        };
-        let names: Vec<_> = rows.iter().map(|row| row.primary.as_str()).collect();
-        assert_eq!(names, vec!["Six", "Five", "Four"]);
-    }
-
-    #[test]
-    fn dropdown_model_with_apps_prefers_positive_deltas() {
-        let mut usage = vec![
-            usage("Chrome", 4_000_000_000, None),
-            usage("Zen", 734_003_200, Some(314_572_800)),
-            usage("Codex", 500_000_000, Some(80_000_000)),
-        ];
-        rank_app_rows(&mut usage);
-        let model = model_with_apps(snapshot(SIXTEEN_GIB), AppMemorySnapshot::Loaded(usage));
-        let AppSectionDisplay::Rows { rows } = &model.apps else {
-            panic!("expected app rows");
-        };
-        assert_eq!(rows[0].primary, "Zen");
-        assert_eq!(rows[0].tail.as_deref(), Some("700 MB\t+300 MB"));
-    }
-
-    #[test]
     fn dropdown_model_splits_memory_and_swap_rows() {
         let snapshot = MemorySnapshot {
             used_bytes: 9 * ONE_GIB_BYTES,
@@ -762,14 +586,11 @@ mod tests {
             available_bytes: 8_160_449_024,
         };
 
-        let memory = model_with_apps(
-            SystemSnapshot {
-                memory: snapshot,
-                cpu: CpuModuleState::Disabled,
-                gpu: GpuModuleState::Disabled,
-            },
-            AppMemorySnapshot::Hidden,
-        );
+        let memory = model(SystemSnapshot {
+            memory: snapshot,
+            cpu: CpuModuleState::Disabled,
+            gpu: GpuModuleState::Disabled,
+        });
 
         assert_eq!(memory.accent, Accent::Critical);
         assert_eq!(memory.map.used_percent, 53);
@@ -813,26 +634,14 @@ mod tests {
             available_bytes: 11 * ONE_GIB_BYTES,
         };
 
-        let memory = model_with_apps(
-            SystemSnapshot {
-                memory: snapshot,
-                cpu: CpuModuleState::Disabled,
-                gpu: GpuModuleState::Disabled,
-            },
-            AppMemorySnapshot::Hidden,
-        );
+        let memory = model(SystemSnapshot {
+            memory: snapshot,
+            cpu: CpuModuleState::Disabled,
+            gpu: GpuModuleState::Disabled,
+        });
 
         assert_eq!(memory.accent, Accent::Neutral);
         assert!(memory.swap.is_none());
-    }
-
-    fn usage(name: &str, footprint_bytes: u64, delta_bytes: Option<i64>) -> AppMemoryUsage {
-        AppMemoryUsage {
-            name: name.to_string(),
-            group_key: format!("/Applications/{name}.app"),
-            footprint_bytes,
-            delta_bytes,
-        }
     }
 
     #[test]

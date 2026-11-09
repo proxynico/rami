@@ -4,7 +4,7 @@
 //! Shape: a reducer. The shell translates each Objective-C callback into an
 //! [`Event`], calls [`RefreshEngine::step`], and performs the returned
 //! [`Effect`]s in order. The engine owns all lifecycle state — menu
-//! visibility, cadence counters, scan generations, render caches — and calls
+//! visibility, cadence counters, the shared Mac's ask, render caches — and calls
 //! out only through three injected ports ([`Samplers`], [`ScanRunner`],
 //! [`LaunchAtLogin`]). Timers, rendering, persistence, and the pasteboard are
 //! modeled as returned effects, not injected callables, so tests assert on
@@ -22,28 +22,22 @@
 //!   adapters (mach/sysctl reads, channel operations, synchronous SMAppService
 //!   XPC) all block without servicing the run loop.
 //!
-//! Time enters as data, not as a clock port: the only wall-clock comparison
-//! (the app-delta baseline freshness window) uses scan-completion timestamps
-//! carried on [`AppScanResult`], so tests fabricate `Instant`s instead of
-//! faking a clock. Every cadence is tick-counted and driven by events.
+//! There is no clock port: every cadence is tick-counted and driven by events.
 
 use crate::login_item::LaunchAtLoginStatus;
 use crate::model::{CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot};
-use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 use crate::settings::Settings;
 use crate::share::{SharedMac, SharedReading};
-use crate::trend::{app_rows_with_deltas, MemoryTrend, MemoryTrendTracker};
+use crate::trend::{MemoryTrend, MemoryTrendTracker};
 use std::io;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Real-world seconds per `Tick`. The shell's repeating
-/// timer must use this period: every tick-counted cadence below — the 6-tick
-/// app scan (~30 s), the sampler's swap cadence, and the 25-sample trend
+/// timer must use this period: every tick-counted cadence — the sampler's
+/// swap cadence, the shared reading's staleness, and the 25-sample trend
 /// window (~125 s) — encodes wall-clock time as a multiple of it.
 pub(crate) const REFRESH_TICK_SECONDS: f64 = 5.0;
 
-const APP_REFRESH_INTERVAL_TICKS: u8 = 6;
-const APP_DELTA_BASELINE_MAX_AGE: Duration = Duration::from_secs(90);
 const MENU_OPEN_DRAIN_DELAY: Duration = Duration::from_millis(150);
 /// A shared reading older than this many ticks (~60 s) shows as Loading
 /// when the menu opens, instead of as current.
@@ -56,7 +50,7 @@ pub(crate) enum Event {
     Startup,
     /// The 5 s repeating refresh timer fired.
     Tick,
-    /// The one-shot drain timer fired: pick up scan results, re-render from
+    /// The one-shot drain timer fired: pick up the shared Mac's answer, re-render from
     /// cache. Samples only to warm a Loading CPU reading; never advances a
     /// cadence.
     DrainTimerFired,
@@ -74,7 +68,6 @@ pub(crate) enum Event {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Setting {
     AutoRefresh,
-    ShowAppUsage,
     ShowCpu,
     ShowGpu,
     ShareOverTailscale,
@@ -86,7 +79,6 @@ pub(crate) enum Setting {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingChange {
     AutoRefresh(bool),
-    ShowAppUsage(bool),
     ShowCpu(bool),
     ShowGpu(bool),
     ShareOverTailscale(bool),
@@ -115,7 +107,6 @@ pub(crate) enum Effect {
     CopyDiagnostics {
         launch_at_login: LaunchAtLoginStatus,
         memory: Option<MemorySnapshot>,
-        apps: AppMemorySnapshot,
     },
 }
 
@@ -130,7 +121,6 @@ pub(crate) enum Render {
         snapshot: MemorySnapshot,
         cpu: CpuModuleState,
         gpu: GpuModuleState,
-        apps: AppMemorySnapshot,
         /// The trend window for the memory-history sparkline. Recorded every
         /// timer tick regardless of menu state, so it is warm on open.
         history: Vec<u64>,
@@ -163,20 +153,11 @@ pub(crate) struct SharedFetchResult {
     pub(crate) reading: io::Result<SharedReading>,
 }
 
-pub(crate) struct AppScanResult {
-    pub(crate) generation: u64,
-    pub(crate) completed_at: Instant,
-    pub(crate) rows: io::Result<Vec<AppMemoryUsage>>,
-}
-
-/// Async app-memory scans. `start_app_scan` is fire-and-forget (the
-/// production adapter spawns a utility-QoS worker); `poll_app_scan` is a
-/// non-blocking single-result read. The engine decides when to start and polls until empty; results stay
-/// queued in the adapter until the engine asks, so a skipped refresh drops
-/// nothing.
+/// Asks to the shared Mac. `start_shared_fetch` is fire-and-forget (the
+/// production adapter spawns a worker); `poll_shared_fetch` is a non-blocking
+/// single-result read. Results stay queued in the adapter until the engine
+/// asks, so a skipped refresh drops nothing.
 pub(crate) trait ScanRunner {
-    fn start_app_scan(&mut self, generation: u64);
-    fn poll_app_scan(&mut self) -> Option<AppScanResult>;
     /// Whether a shared Mac's host is set up to ask.
     fn shared_mac_configured(&self) -> bool;
     fn start_shared_fetch(&mut self, generation: u64);
@@ -206,35 +187,6 @@ fn auto_refresh_timer_action(enabled: bool, timer_active: bool) -> AutoRefreshTi
     }
 }
 
-fn previous_app_rows_if_fresh(
-    last_sample_at: Option<Instant>,
-    now: Instant,
-    rows: &[AppMemoryUsage],
-) -> Vec<AppMemoryUsage> {
-    if last_sample_at
-        .map(|sampled_at| now.duration_since(sampled_at) <= APP_DELTA_BASELINE_MAX_AGE)
-        .unwrap_or(false)
-    {
-        rows.to_vec()
-    } else {
-        Vec::new()
-    }
-}
-
-/// Decide whether this tick starts an app scan and what the countdown becomes.
-/// Scans only run while the menu is open; while it is closed the countdown is
-/// frozen so an idle app does no dropdown work at all.
-fn app_scan_decision(menu_open: bool, manual: bool, ticks_until_refresh: u8) -> (bool, u8) {
-    if !menu_open {
-        return (false, ticks_until_refresh);
-    }
-    if manual || ticks_until_refresh == 0 {
-        (true, APP_REFRESH_INTERVAL_TICKS.saturating_sub(1))
-    } else {
-        (false, ticks_until_refresh - 1)
-    }
-}
-
 fn should_sample_cpu(menu_open: bool, show_cpu: bool) -> bool {
     menu_open && show_cpu
 }
@@ -248,7 +200,6 @@ pub(crate) struct RefreshEngine<S, R, L> {
     scans: R,
     launch: L,
     auto_refresh_enabled: bool,
-    show_app_usage: bool,
     show_cpu: bool,
     show_gpu: bool,
     share_over_tailscale: bool,
@@ -262,16 +213,10 @@ pub(crate) struct RefreshEngine<S, R, L> {
     shared_generation: u64,
     ticks_since_shared_reading: u8,
     menu_open: bool,
-    ticks_until_app_refresh: u8,
-    app_scan_in_flight: bool,
-    app_scan_generation: u64,
     launch_at_login_status: LaunchAtLoginStatus,
     last_snapshot: Option<MemorySnapshot>,
     last_cpu_state: CpuModuleState,
     last_gpu_state: GpuModuleState,
-    app_memory: AppMemorySnapshot,
-    last_app_rows: Vec<AppMemoryUsage>,
-    last_app_sample_at: Option<Instant>,
     trend_tracker: MemoryTrendTracker,
     /// The engine's belief about the repeating refresh timer, reconciled via
     /// `auto_refresh_timer_action` so arm/cancel effects fire only on change.
@@ -283,17 +228,11 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
     pub(crate) fn new(samplers: S, scans: R, mut launch: L, settings: Settings) -> Self {
         let launch_at_login_status = launch.status();
         let shared_mac_configured = scans.shared_mac_configured();
-        let app_memory = if settings.show_app_usage {
-            AppMemorySnapshot::Loading
-        } else {
-            AppMemorySnapshot::Hidden
-        };
         Self {
             samplers,
             scans,
             launch,
             auto_refresh_enabled: settings.auto_refresh_enabled,
-            show_app_usage: settings.show_app_usage,
             show_cpu: settings.show_cpu,
             show_gpu: settings.show_gpu,
             share_over_tailscale: settings.share_over_tailscale,
@@ -305,16 +244,10 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             shared_generation: 0,
             ticks_since_shared_reading: 0,
             menu_open: false,
-            ticks_until_app_refresh: 0,
-            app_scan_in_flight: false,
-            app_scan_generation: 0,
             launch_at_login_status,
             last_snapshot: None,
             last_cpu_state: CpuModuleState::Loading,
             last_gpu_state: GpuModuleState::Unavailable,
-            app_memory,
-            last_app_rows: Vec::new(),
-            last_app_sample_at: None,
             trend_tracker: MemoryTrendTracker::new(),
             refresh_timer_armed: false,
             menu_reopen_for: None,
@@ -353,7 +286,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             }
             Event::MenuDidClose => {
                 self.menu_open = false;
-                self.ticks_until_app_refresh = 0;
                 self.samplers.reset_cpu();
                 self.shared_generation = self.shared_generation.wrapping_add(1);
                 self.shared_fetch_in_flight = false;
@@ -385,7 +317,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 out.push(Effect::CopyDiagnostics {
                     launch_at_login: self.launch_at_login_status,
                     memory: self.last_snapshot,
-                    apps: self.app_memory.clone(),
                 });
             }
         }
@@ -404,22 +335,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 self.trend_tracker.clear();
                 self.sync_auto_refresh_timer(out);
                 self.refresh(true, out);
-            }
-            Setting::ShowAppUsage => {
-                self.show_app_usage = !self.show_app_usage;
-                out.push(Effect::PersistSetting(SettingChange::ShowAppUsage(
-                    self.show_app_usage,
-                )));
-                if self.show_app_usage {
-                    self.app_memory = AppMemorySnapshot::Loading;
-                    self.ticks_until_app_refresh = 0;
-                } else {
-                    self.clear_app_usage();
-                }
-                self.refresh(true, out);
-                if self.show_app_usage {
-                    self.schedule_menu_reopen(setting, out);
-                }
             }
             Setting::ShowCpu => {
                 self.show_cpu = !self.show_cpu;
@@ -486,22 +401,10 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             return;
         }
         out.push(Effect::Render(self.settings_state_render()));
-        self.drain_app_scan_results();
         match self.samplers.sample_memory() {
             Ok(snapshot) => {
                 self.last_snapshot = Some(snapshot);
                 let trend = self.update_trend(manual, snapshot.used_bytes);
-                if self.show_app_usage {
-                    let (should_scan, next_ticks) =
-                        app_scan_decision(self.menu_open, manual, self.ticks_until_app_refresh);
-                    if should_scan {
-                        self.start_app_scan();
-                    }
-                    self.ticks_until_app_refresh = next_ticks;
-                } else {
-                    self.clear_app_usage();
-                }
-
                 out.push(Effect::Render(Render::Gauge { snapshot, trend }));
                 if self.menu_open {
                     self.drain_shared_fetch();
@@ -539,14 +442,14 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         }
     }
 
-    /// Pick up async scan results and re-render the dropdown from the values
+    /// Pick up the shared Mac's answer and re-render the dropdown from the values
     /// the last real refresh sampled.
     ///
     /// This deliberately does NOT resample memory, record a trend sample, or
     /// advance any cadence counter. It runs on a 150 ms one-shot timer,
     /// and routing it through the full `refresh` path meant every drain aged
     /// the tick-counted cadences: the 125 s trend window collapsed to about
-    /// 7 s and the 30 s app/swap cadences to under 2 s whenever the menu was
+    /// 7 s and the 30 s swap cadence to under 2 s whenever the menu was
     /// open. Those counters are meant to track wall-clock time, and a drain
     /// represents no elapsed time.
     ///
@@ -562,7 +465,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             return;
         }
 
-        self.drain_app_scan_results();
         self.drain_shared_fetch();
         if self.shared_fetch_in_flight {
             out.push(Effect::ScheduleDrain {
@@ -593,7 +495,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
 
     fn shows(&self, setting: Setting) -> bool {
         match setting {
-            Setting::ShowAppUsage => self.show_app_usage,
             Setting::ShowCpu => self.show_cpu,
             Setting::ShowGpu => self.show_gpu,
             Setting::ShowSharedMac => self.shared_visible(),
@@ -653,42 +554,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         }
     }
 
-    fn start_app_scan(&mut self) {
-        if self.app_scan_in_flight {
-            return;
-        }
-        self.app_scan_in_flight = true;
-        self.scans.start_app_scan(self.app_scan_generation);
-    }
-
-    fn drain_app_scan_results(&mut self) {
-        while let Some(result) = self.scans.poll_app_scan() {
-            if result.generation != self.app_scan_generation {
-                continue;
-            }
-            self.app_scan_in_flight = false;
-            self.app_memory = match result.rows {
-                Ok(rows) => {
-                    let previous_rows = previous_app_rows_if_fresh(
-                        self.last_app_sample_at,
-                        result.completed_at,
-                        &self.last_app_rows,
-                    );
-                    let ranked = app_rows_with_deltas(rows, &previous_rows);
-                    self.last_app_rows = ranked.clone();
-                    self.last_app_sample_at = Some(result.completed_at);
-                    AppMemorySnapshot::Loaded(ranked)
-                }
-                Err(err) => {
-                    eprintln!("process memory scan failed: {err}");
-                    self.last_app_rows.clear();
-                    self.last_app_sample_at = None;
-                    AppMemorySnapshot::Unavailable
-                }
-            };
-        }
-    }
-
     fn shared_visible(&self) -> bool {
         self.show_shared_mac && self.shared_mac_configured
     }
@@ -735,19 +600,10 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         }
     }
 
-    fn clear_app_usage(&mut self) {
-        self.app_memory = AppMemorySnapshot::Hidden;
-        self.last_app_rows.clear();
-        self.last_app_sample_at = None;
-        self.app_scan_in_flight = false;
-        self.app_scan_generation = self.app_scan_generation.wrapping_add(1);
-    }
-
     fn settings_state_render(&self) -> Render {
         Render::SettingsState {
             settings: Settings {
                 auto_refresh_enabled: self.auto_refresh_enabled,
-                show_app_usage: self.show_app_usage,
                 show_cpu: self.show_cpu,
                 show_gpu: self.show_gpu,
                 share_over_tailscale: self.share_over_tailscale,
@@ -767,7 +623,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             snapshot,
             cpu,
             gpu,
-            apps: self.app_memory.clone(),
             history: self.trend_tracker.window(),
             shared: self.shared.clone(),
         }

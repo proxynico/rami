@@ -42,8 +42,8 @@ Keep implementation details out of the map. Name only user paths, stable handles
 ## Features
 
 - [Status gauge](./status-gauge.md) covers the menu-bar icon, its spoken label, and its tooltip.
-- [Memory dropdown](./memory-dropdown.md) covers the map, breakdown, pressure, swap, history, and top apps.
-- [Settings modules](./settings-modules.md) covers Show CPU, Show GPU, Show Apps, and Auto-Refresh.
+- [Memory dropdown](./memory-dropdown.md) covers the map, breakdown, pressure, swap, and history.
+- [Settings modules](./settings-modules.md) covers Show CPU, Show GPU, and Auto-Refresh.
 - [CPU module](./cpu-module.md) covers the one-line CPU row.
 - [Copy diagnostics](./copy-diagnostics.md) covers the pasteboard report from Settings.
 - [Share over Tailscale](./share-over-tailscale.md) covers the Settings toggle and the shared reading on port 47960.

@@ -2,7 +2,6 @@ use objc2::rc::Retained;
 use objc2_foundation::{NSString, NSUserDefaults};
 
 const KEY_AUTO_REFRESH: &str = "autoRefreshEnabled";
-const KEY_SHOW_APPS: &str = "showAppUsage";
 const KEY_SHOW_CPU: &str = "showCpu";
 const KEY_SHOW_GPU: &str = "showGpu";
 const KEY_SHARE: &str = "shareOverTailscale";
@@ -13,7 +12,6 @@ const KEY_SHARED_MAC_HOST: &str = "sharedMacHost";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     pub auto_refresh_enabled: bool,
-    pub show_app_usage: bool,
     pub show_cpu: bool,
     pub show_gpu: bool,
     pub share_over_tailscale: bool,
@@ -24,7 +22,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             auto_refresh_enabled: true,
-            show_app_usage: true,
             show_cpu: true,
             // GPU is opt-in so the default dropdown stays memory-first.
             show_gpu: false,
@@ -56,7 +53,6 @@ impl SettingsStore {
     pub fn load(&self) -> Settings {
         resolve_settings(
             self.read_stored_bool(KEY_AUTO_REFRESH),
-            self.read_stored_bool(KEY_SHOW_APPS),
             self.read_stored_bool(KEY_SHOW_CPU),
             self.read_stored_bool(KEY_SHOW_GPU),
             self.read_stored_bool(KEY_SHARE),
@@ -67,11 +63,6 @@ impl SettingsStore {
     pub fn set_auto_refresh_enabled(&self, value: bool) {
         self.defaults
             .setBool_forKey(value, &NSString::from_str(KEY_AUTO_REFRESH));
-    }
-
-    pub fn set_show_app_usage(&self, value: bool) {
-        self.defaults
-            .setBool_forKey(value, &NSString::from_str(KEY_SHOW_APPS));
     }
 
     pub fn set_show_cpu(&self, value: bool) {
@@ -118,7 +109,6 @@ impl SettingsStore {
 
 fn resolve_settings(
     auto_refresh_enabled: Option<bool>,
-    show_app_usage: Option<bool>,
     show_cpu: Option<bool>,
     show_gpu: Option<bool>,
     share_over_tailscale: Option<bool>,
@@ -127,7 +117,6 @@ fn resolve_settings(
     let fallback = Settings::default();
     Settings {
         auto_refresh_enabled: resolve_bool(auto_refresh_enabled, fallback.auto_refresh_enabled),
-        show_app_usage: resolve_bool(show_app_usage, fallback.show_app_usage),
         show_cpu: resolve_bool(show_cpu, fallback.show_cpu),
         show_gpu: resolve_bool(show_gpu, fallback.show_gpu),
         share_over_tailscale: resolve_bool(share_over_tailscale, fallback.share_over_tailscale),
@@ -154,9 +143,8 @@ mod tests {
 
     #[test]
     fn module_visibility_defaults_and_persists_independently() {
-        let defaults = resolve_settings(None, None, None, None, None, None);
+        let defaults = resolve_settings(None, None, None, None, None);
         assert!(defaults.auto_refresh_enabled);
-        assert!(defaults.show_app_usage);
         assert!(defaults.show_cpu);
         assert!(!defaults.show_gpu);
         assert!(!defaults.share_over_tailscale);
@@ -164,14 +152,12 @@ mod tests {
 
         let persisted = resolve_settings(
             Some(false),
-            Some(true),
             Some(false),
             Some(true),
             Some(true),
             Some(false),
         );
         assert!(!persisted.auto_refresh_enabled);
-        assert!(persisted.show_app_usage);
         assert!(!persisted.show_cpu);
         assert!(persisted.show_gpu);
         assert!(persisted.share_over_tailscale);

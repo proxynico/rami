@@ -7,42 +7,6 @@ use std::rc::Rc;
 // --- pure decision tables -------------------------------------------
 
 #[test]
-fn previous_app_rows_are_suppressed_when_stale() {
-    let now = Instant::now();
-    let rows = vec![usage("Zen")];
-
-    assert_eq!(
-        previous_app_rows_if_fresh(Some(now - Duration::from_secs(30)), now, &rows),
-        rows
-    );
-    assert!(previous_app_rows_if_fresh(
-        Some(now - APP_DELTA_BASELINE_MAX_AGE - Duration::from_secs(1)),
-        now,
-        &rows
-    )
-    .is_empty());
-    assert!(previous_app_rows_if_fresh(None, now, &rows).is_empty());
-}
-
-#[test]
-fn app_scans_are_gated_on_menu_visibility() {
-    // Menu closed: never scan, never advance the countdown — even manually.
-    assert_eq!(app_scan_decision(false, false, 3), (false, 3));
-    assert_eq!(app_scan_decision(false, true, 0), (false, 0));
-
-    // Menu open: manual or an expired countdown scans and resets the cadence.
-    assert_eq!(
-        app_scan_decision(true, true, 3),
-        (true, APP_REFRESH_INTERVAL_TICKS - 1)
-    );
-    assert_eq!(
-        app_scan_decision(true, false, 0),
-        (true, APP_REFRESH_INTERVAL_TICKS - 1)
-    );
-    assert_eq!(app_scan_decision(true, false, 2), (false, 1));
-}
-
-#[test]
 fn cpu_sampling_is_gated_by_visibility_and_its_own_setting() {
     assert!(!should_sample_cpu(false, true));
     assert!(!should_sample_cpu(true, false));
@@ -164,8 +128,6 @@ impl Samplers for FakeSamplers {
 
 #[derive(Default)]
 struct ScanState {
-    app_starts: Vec<u64>,
-    app_results: VecDeque<AppScanResult>,
     shared_configured: bool,
     shared_starts: Vec<u64>,
     shared_results: VecDeque<SharedFetchResult>,
@@ -175,18 +137,6 @@ struct ScanState {
 struct FakeScans(Rc<RefCell<ScanState>>);
 
 impl FakeScans {
-    fn push_app(&self, generation: u64, completed_at: Instant, rows: Vec<AppMemoryUsage>) {
-        self.0.borrow_mut().app_results.push_back(AppScanResult {
-            generation,
-            completed_at,
-            rows: Ok(rows),
-        });
-    }
-
-    fn app_starts(&self) -> Vec<u64> {
-        self.0.borrow().app_starts.clone()
-    }
-
     fn with_shared_mac() -> Self {
         let scans = Self::default();
         scans.0.borrow_mut().shared_configured = true;
@@ -209,14 +159,6 @@ impl FakeScans {
 }
 
 impl ScanRunner for FakeScans {
-    fn start_app_scan(&mut self, generation: u64) {
-        self.0.borrow_mut().app_starts.push(generation);
-    }
-
-    fn poll_app_scan(&mut self) -> Option<AppScanResult> {
-        self.0.borrow_mut().app_results.pop_front()
-    }
-
     fn shared_mac_configured(&self) -> bool {
         self.0.borrow().shared_configured
     }
@@ -267,15 +209,6 @@ fn snapshot(used_bytes: u64) -> MemorySnapshot {
         cached_bytes: 0,
         swap_used_bytes: 0,
         available_bytes: 0,
-    }
-}
-
-fn usage(name: &str) -> AppMemoryUsage {
-    AppMemoryUsage {
-        name: name.to_string(),
-        group_key: format!("/Applications/{name}.app"),
-        footprint_bytes: 1,
-        delta_bytes: None,
     }
 }
 
@@ -364,7 +297,7 @@ fn toggling_auto_refresh_cancels_and_rearms_the_timer_once() {
 
 #[test]
 fn menu_open_samples_modules_and_schedules_the_menu_drain() {
-    let (mut engine, counts, scans) = engine_on();
+    let (mut engine, counts, _) = engine_on();
     engine.step(Event::Startup);
 
     let effects = engine.step(Event::MenuWillOpen);
@@ -372,14 +305,13 @@ fn menu_open_samples_modules_and_schedules_the_menu_drain() {
     assert_eq!(counts.memory.get(), 2);
     assert_eq!(counts.cpu.get(), 1);
     assert_eq!(counts.gpu.get(), 0);
-    assert_eq!(scans.app_starts(), vec![0]);
     assert_eq!(menu_renders(&effects), 1);
     assert_eq!(scheduled_drains(&effects), vec![Duration::from_millis(150)]);
 }
 
 #[test]
 fn menu_close_freezes_the_cadence_and_cancels_the_drain() {
-    let (mut engine, counts, scans) = engine_on();
+    let (mut engine, counts, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::MenuWillOpen);
 
@@ -388,31 +320,27 @@ fn menu_close_freezes_the_cadence_and_cancels_the_drain() {
     assert_eq!(counts.cpu_resets.get(), 1);
 
     // Closed-menu ticks sample memory for the gauge but do no dropdown
-    // work: no CPU/GPU samples, no scans, no menu renders.
-    let before = (counts.cpu.get(), counts.gpu.get(), scans.app_starts().len());
+    // work: no CPU/GPU samples, no menu renders.
+    let before = (counts.cpu.get(), counts.gpu.get());
     for _ in 0..10 {
         let effects = engine.step(Event::Tick);
         assert_eq!(menu_renders(&effects), 0);
     }
-    assert_eq!(
-        (counts.cpu.get(), counts.gpu.get(), scans.app_starts().len()),
-        before
-    );
+    assert_eq!((counts.cpu.get(), counts.gpu.get()), before);
 }
 
 // --- the #18 regressions, pinned at the interface --------------------
 
 #[test]
 fn drains_never_resample_and_never_advance_cadences() {
-    let (mut engine, counts, scans) = engine_on();
+    let (mut engine, counts, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::MenuWillOpen);
     let memory_before = counts.memory.get();
-    let app_starts_before = scans.app_starts().len();
 
     for _ in 0..20 {
         let effects = engine.step(Event::DrainTimerFired);
-        // Re-renders from cache while the scans are still in flight.
+        // Re-renders from cache without sampling again.
         assert_eq!(menu_renders(&effects), 1);
     }
 
@@ -422,7 +350,6 @@ fn drains_never_resample_and_never_advance_cadences() {
     // drains render from cache.
     assert_eq!(counts.cpu.get(), 2);
     assert_eq!(counts.gpu.get(), 0);
-    assert_eq!(scans.app_starts().len(), app_starts_before);
 }
 
 #[test]
@@ -479,63 +406,6 @@ fn reenabling_cpu_while_open_recovers_the_split_via_the_drain() {
             cpu: CpuModuleState::Available(_),
             ..
         })
-    )));
-}
-
-#[test]
-fn app_scan_cadence_fires_every_six_open_ticks() {
-    let (mut engine, _, scans) = engine_on();
-    engine.step(Event::Startup);
-    engine.step(Event::MenuWillOpen); // manual refresh: scan 1, countdown 5
-    let now = Instant::now();
-    scans.push_app(0, now, vec![usage("Zen")]);
-    engine.step(Event::DrainTimerFired);
-    assert_eq!(scans.app_starts().len(), 1);
-
-    for _ in 0..5 {
-        engine.step(Event::Tick);
-    }
-    assert_eq!(scans.app_starts().len(), 1, "cadence fired early");
-    engine.step(Event::Tick);
-    assert_eq!(scans.app_starts().len(), 2);
-}
-
-// --- freshness window (fabricated timestamps stand in for a clock) ---
-
-#[test]
-fn app_deltas_use_the_previous_scan_only_while_fresh() {
-    let (mut engine, _, scans) = engine_on();
-    engine.step(Event::Startup);
-    engine.step(Event::MenuWillOpen);
-    let base = Instant::now();
-
-    let mut first = usage("Zen");
-    first.footprint_bytes = 1_000;
-    scans.push_app(0, base, vec![first.clone()]);
-    engine.step(Event::DrainTimerFired);
-
-    // A second scan inside the 90 s window computes a delta.
-    let mut second = usage("Zen");
-    second.footprint_bytes = 3_000;
-    engine.step(Event::MenuDidClose);
-    engine.step(Event::MenuWillOpen); // restarts the scan
-    scans.push_app(0, base + Duration::from_secs(30), vec![second.clone()]);
-    let effects = engine.step(Event::DrainTimerFired);
-    assert!(effects.iter().any(|e| matches!(
-        e,
-        Effect::Render(Render::Menu { apps: AppMemorySnapshot::Loaded(rows), .. })
-            if rows[0].delta_bytes == Some(2_000)
-    )));
-
-    // A third scan past the window suppresses the stale baseline.
-    engine.step(Event::MenuDidClose);
-    engine.step(Event::MenuWillOpen);
-    scans.push_app(0, base + Duration::from_secs(200), vec![usage("Zen")]);
-    let effects = engine.step(Event::DrainTimerFired);
-    assert!(effects.iter().any(|e| matches!(
-        e,
-        Effect::Render(Render::Menu { apps: AppMemorySnapshot::Loaded(rows), .. })
-            if rows[0].delta_bytes.is_none()
     )));
 }
 
@@ -636,19 +506,6 @@ fn a_failed_sample_leaves_no_stale_reading_behind() {
 // --- toggle flows ----------------------------------------------------
 
 #[test]
-fn enabling_app_usage_schedules_the_menu_reopen_last() {
-    let (mut engine, _, _) = engine_on();
-    engine.step(Event::Startup);
-    engine.step(Event::Toggle(Setting::ShowAppUsage)); // off
-
-    let effects = engine.step(Event::Toggle(Setting::ShowAppUsage)); // on
-    assert_eq!(effects.last(), Some(&Effect::ScheduleMenuReopen));
-
-    let effects = engine.step(Event::ReopenMenuTimerFired);
-    assert_eq!(effects.last(), Some(&Effect::PopUpMenu));
-}
-
-#[test]
 fn enabling_cpu_or_gpu_reopens_the_menu_once() {
     let (mut engine, _, _) = engine_on();
     engine.step(Event::Startup);
@@ -721,7 +578,7 @@ fn sharing_starts_with_the_app_and_follows_its_toggle() {
 fn reopen_timer_does_nothing_without_a_pending_reopen() {
     let (mut engine, _, _) = engine_on();
     engine.step(Event::Startup);
-    engine.step(Event::Toggle(Setting::ShowAppUsage)); // off
+    engine.step(Event::Toggle(Setting::ShowCpu)); // off
 
     assert!(engine.step(Event::ReopenMenuTimerFired).is_empty());
 }

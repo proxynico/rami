@@ -16,24 +16,23 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/readme-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="assets/readme-light.png">
-    <img src="assets/readme-light.png" width="350" alt="rami's menu open under its memory-stick icon: a map of 16 GB of RAM with its breakdown, the pressure meter, swap, a two-minute history, the three apps using the most memory, and CPU and GPU rows">
+    <img src="assets/readme-light.png" width="350" alt="rami's menu open under its memory-stick icon: a map of 16 GB of RAM with its breakdown, the pressure meter, swap, a two-minute history, and CPU and GPU rows">
   </picture>
 </p>
 
 One memory gauge stays in the menu bar. Click it to see Memory, CPU, and GPU
 in one compact native menu: a memory map with its breakdown and pressure, a
-bounded history, the apps using the most memory, and one-line CPU and GPU
-readings (GPU when macOS exposes it). A small trend marker appears when memory is
-climbing fast.
+bounded history, and one-line CPU and GPU readings (GPU when macOS exposes
+it). A small trend marker appears when memory is climbing fast.
 
-CPU, GPU, and app rows can each be hidden. There is still one status item, no
+CPU and GPU rows can each be hidden. There is still one status item, no
 dock icon, and no window.
 
 Settings also includes auto-refresh, launch-at-login status, a local
 diagnostics copy action, and Share over Tailscale.
 
 Share over Tailscale lets another Mac on your tailnet read this Mac's memory,
-CPU, and GPU, without app names. rami listens only on this Mac; turn the
+CPU, and GPU. rami listens only on this Mac; turn the
 setting on, then expose the port to your tailnet once:
 
 ```sh

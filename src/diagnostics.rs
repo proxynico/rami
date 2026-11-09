@@ -1,10 +1,8 @@
-use crate::format::{delta_bytes_text, gb_pair, mem_text};
+use crate::format::{gb_pair, mem_text};
 use crate::login_item::{current_app_bundle_path, LaunchAtLoginStatus, BUNDLE_IDENTIFIER};
 use crate::model::{MemorySnapshot, PressureSource};
-use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
-use crate::trend::MEANINGFUL_APP_DELTA_BYTES;
 
-pub(crate) struct DiagnosticReportInput<'a> {
+pub(crate) struct DiagnosticReportInput {
     pub(crate) version: String,
     pub(crate) bundle_identifier: String,
     pub(crate) bundle_path: String,
@@ -12,14 +10,12 @@ pub(crate) struct DiagnosticReportInput<'a> {
     pub(crate) architecture: String,
     pub(crate) launch_at_login: LaunchAtLoginStatus,
     pub(crate) memory: Option<MemorySnapshot>,
-    pub(crate) apps: &'a AppMemorySnapshot,
 }
 
-pub(crate) fn current_report_input<'a>(
+pub(crate) fn current_report_input(
     launch_at_login: LaunchAtLoginStatus,
     memory: Option<MemorySnapshot>,
-    apps: &'a AppMemorySnapshot,
-) -> DiagnosticReportInput<'a> {
+) -> DiagnosticReportInput {
     let process_path = std::env::current_exe()
         .ok()
         .and_then(|path| path.into_os_string().into_string().ok())
@@ -36,11 +32,10 @@ pub(crate) fn current_report_input<'a>(
         architecture: std::env::consts::ARCH.to_string(),
         launch_at_login,
         memory,
-        apps,
     }
 }
 
-pub(crate) fn build_diagnostic_report(input: DiagnosticReportInput<'_>) -> String {
+pub(crate) fn build_diagnostic_report(input: DiagnosticReportInput) -> String {
     let mut out = String::new();
     out.push_str("rami diagnostics\n");
     out.push_str(&format!("Version: {}\n", input.version));
@@ -86,20 +81,6 @@ pub(crate) fn build_diagnostic_report(input: DiagnosticReportInput<'_>) -> Strin
         None => out.push_str("Memory: unavailable\nSwap: unavailable\n"),
     }
 
-    out.push_str("Apps:\n");
-    match input.apps {
-        AppMemorySnapshot::Loaded(rows) if !rows.is_empty() => {
-            for row in rows.iter().take(5) {
-                out.push_str(&format!("- {}\n", app_row_text(row)));
-            }
-        }
-        AppMemorySnapshot::Hidden => out.push_str("- hidden\n"),
-        AppMemorySnapshot::Loading => out.push_str("- loading\n"),
-        AppMemorySnapshot::Loaded(_) | AppMemorySnapshot::Unavailable => {
-            out.push_str("- unavailable\n")
-        }
-    }
-
     out
 }
 
@@ -119,32 +100,14 @@ fn launch_at_login_label(status: LaunchAtLoginStatus) -> &'static str {
     }
 }
 
-fn app_row_text(row: &AppMemoryUsage) -> String {
-    let mut text = format!("{}: {}", row.name, mem_text(row.footprint_bytes));
-    if let Some(delta) = row
-        .delta_bytes
-        .filter(|delta| *delta >= MEANINGFUL_APP_DELTA_BYTES)
-    {
-        text.push_str(&format!(" ({})", delta_bytes_text(delta as u64)));
-    }
-    text
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::login_item::LaunchAtLoginStatus;
     use crate::model::MemorySnapshot;
-    use crate::process_memory::{AppMemorySnapshot, AppMemoryUsage};
 
     #[test]
     fn report_includes_runtime_paths_login_state_and_memory_rows() {
-        let apps = AppMemorySnapshot::Loaded(vec![AppMemoryUsage {
-            name: "Cursor".to_string(),
-            group_key: "/Applications/Cursor.app".to_string(),
-            footprint_bytes: 2_254_579_918,
-            delta_bytes: Some(367_001_600),
-        }]);
         let report = build_diagnostic_report(DiagnosticReportInput {
             version: "0.1.0".to_string(),
             bundle_identifier: "com.nicomontero.rami".to_string(),
@@ -166,7 +129,6 @@ mod tests {
                 swap_used_bytes: 419_430_400,
                 available_bytes: 9_556_301_414,
             }),
-            apps: &apps,
         });
 
         assert!(report.contains("rami diagnostics"));
@@ -181,6 +143,5 @@ mod tests {
         assert!(report.contains("App Memory: 6.0 GB"));
         assert!(report.contains("Available: 8.9 GB"));
         assert!(report.contains("Swap: 400 MB"));
-        assert!(report.contains("- Cursor: 2.1 GB (+350 MB)"));
     }
 }
