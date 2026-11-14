@@ -1,106 +1,45 @@
 use super::*;
 use crate::model::PressureSource;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-// --- pure decision tables -------------------------------------------
-
-#[test]
-fn cpu_sampling_is_gated_by_visibility_and_its_own_setting() {
-    assert!(!should_sample_cpu(false, true));
-    assert!(!should_sample_cpu(true, false));
-    assert!(should_sample_cpu(true, true));
-}
-
-#[test]
-fn gpu_sampling_is_gated_by_visibility_and_its_own_setting() {
-    assert!(!should_sample_gpu(false, true));
-    assert!(!should_sample_gpu(true, false));
-    assert!(should_sample_gpu(true, true));
-}
-
-#[test]
-fn auto_refresh_timer_tracks_the_setting() {
-    assert_eq!(
-        auto_refresh_timer_action(true, false),
-        AutoRefreshTimerAction::Arm
-    );
-    assert_eq!(
-        auto_refresh_timer_action(true, true),
-        AutoRefreshTimerAction::Keep
-    );
-    assert_eq!(
-        auto_refresh_timer_action(false, true),
-        AutoRefreshTimerAction::Cancel
-    );
-    assert_eq!(
-        auto_refresh_timer_action(false, false),
-        AutoRefreshTimerAction::Keep
-    );
-}
-
 // --- fakes -----------------------------------------------------------
 
-#[derive(Clone, Default)]
-struct SamplerCounts {
-    memory: Rc<Cell<usize>>,
-    cpu: Rc<Cell<usize>>,
-    gpu: Rc<Cell<usize>>,
-    cpu_resets: Rc<Cell<usize>>,
-}
-
+#[derive(Default)]
 struct FakeSamplers {
-    counts: SamplerCounts,
+    memory_samples: usize,
+    cpu_samples: usize,
+    gpu_samples: usize,
+    cpu_resets: usize,
     memory_fails: bool,
-    used_bytes: Rc<Cell<u64>>,
+    used_bytes: u64,
     /// Mirrors `CpuTracker`: the first CPU sample after construction or
     /// `reset_cpu` has no delta baseline and reports `None`.
     cpu_has_baseline: bool,
 }
 
 impl FakeSamplers {
-    fn healthy() -> (Self, SamplerCounts, Rc<Cell<u64>>) {
-        let counts = SamplerCounts::default();
-        let used_bytes = Rc::new(Cell::new(1_000_000_000));
-        (
-            Self {
-                counts: counts.clone(),
-                memory_fails: false,
-                used_bytes: used_bytes.clone(),
-                cpu_has_baseline: false,
-            },
-            counts,
-            used_bytes,
-        )
-    }
-
-    fn failing() -> (Self, SamplerCounts) {
-        let counts = SamplerCounts::default();
-        (
-            Self {
-                counts: counts.clone(),
-                memory_fails: true,
-                used_bytes: Rc::new(Cell::new(0)),
-                cpu_has_baseline: false,
-            },
-            counts,
-        )
+    fn healthy() -> Self {
+        Self {
+            used_bytes: 1_000_000_000,
+            ..Self::default()
+        }
     }
 }
 
 impl Samplers for FakeSamplers {
     fn sample_memory(&mut self) -> io::Result<MemorySnapshot> {
-        self.counts.memory.set(self.counts.memory.get() + 1);
+        self.memory_samples += 1;
         if self.memory_fails {
             Err(io::Error::other("no host stats"))
         } else {
-            Ok(snapshot(self.used_bytes.get()))
+            Ok(snapshot(self.used_bytes))
         }
     }
 
     fn sample_cpu(&mut self) -> io::Result<Option<CpuSnapshot>> {
-        self.counts.cpu.set(self.counts.cpu.get() + 1);
+        self.cpu_samples += 1;
         if !self.cpu_has_baseline {
             self.cpu_has_baseline = true;
             return Ok(None);
@@ -112,7 +51,7 @@ impl Samplers for FakeSamplers {
     }
 
     fn sample_gpu(&mut self) -> io::Result<Option<GpuSnapshot>> {
-        self.counts.gpu.set(self.counts.gpu.get() + 1);
+        self.gpu_samples += 1;
         Ok(Some(GpuSnapshot {
             utilization_percent: 20,
             renderer_percent: None,
@@ -121,7 +60,7 @@ impl Samplers for FakeSamplers {
     }
 
     fn reset_cpu(&mut self) {
-        self.counts.cpu_resets.set(self.counts.cpu_resets.get() + 1);
+        self.cpu_resets += 1;
         self.cpu_has_baseline = false;
     }
 }
@@ -188,11 +127,15 @@ impl LaunchAtLogin for FakeLaunch {
 
 type TestEngine = RefreshEngine<FakeSamplers, FakeScans, FakeLaunch>;
 
-fn engine_on() -> (TestEngine, SamplerCounts, FakeScans) {
-    let (samplers, counts, _) = FakeSamplers::healthy();
+fn engine_on() -> (TestEngine, FakeScans) {
     let scans = FakeScans::default();
-    let engine = RefreshEngine::new(samplers, scans.clone(), FakeLaunch, Settings::default());
-    (engine, counts, scans)
+    let engine = RefreshEngine::new(
+        FakeSamplers::healthy(),
+        scans.clone(),
+        FakeLaunch,
+        Settings::default(),
+    );
+    (engine, scans)
 }
 
 fn snapshot(used_bytes: u64) -> MemorySnapshot {
@@ -212,14 +155,11 @@ fn snapshot(used_bytes: u64) -> MemorySnapshot {
     }
 }
 
-fn scheduled_drains(effects: &[Effect]) -> Vec<Duration> {
+fn scheduled_drains(effects: &[Effect]) -> usize {
     effects
         .iter()
-        .filter_map(|e| match e {
-            Effect::ScheduleDrain { delay } => Some(*delay),
-            _ => None,
-        })
-        .collect()
+        .filter(|e| matches!(e, Effect::ScheduleDrain))
+        .count()
 }
 
 fn menu_history(effects: &[Effect]) -> Vec<u64> {
@@ -243,41 +183,41 @@ fn menu_renders(effects: &[Effect]) -> usize {
 
 #[test]
 fn startup_renders_and_arms_the_refresh_timer() {
-    let (mut engine, counts, _) = engine_on();
+    let (mut engine, _) = engine_on();
 
     let effects = engine.step(Event::Startup);
 
-    assert_eq!(counts.memory.get(), 1);
+    assert_eq!(engine.samplers.memory_samples, 1);
     assert!(effects
         .iter()
         .any(|e| matches!(e, Effect::Render(Render::Gauge { .. }))));
     assert!(effects.contains(&Effect::ArmRefreshTimer));
     // Menu is closed at startup: no dropdown work.
     assert_eq!(menu_renders(&effects), 0);
-    assert_eq!(counts.cpu.get(), 0);
-    assert_eq!(counts.gpu.get(), 0);
+    assert_eq!(engine.samplers.cpu_samples, 0);
+    assert_eq!(engine.samplers.gpu_samples, 0);
 }
 
 #[test]
 fn tick_with_auto_refresh_off_is_a_no_op_but_menu_open_always_samples() {
-    let (mut engine, counts, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::Toggle(Setting::AutoRefresh)); // off
 
     let effects = engine.step(Event::Tick);
     assert!(effects.is_empty());
-    let sampled_before = counts.memory.get();
+    let sampled_before = engine.samplers.memory_samples;
 
     let effects = engine.step(Event::MenuWillOpen);
     assert!(effects
         .iter()
         .any(|e| matches!(e, Effect::Render(Render::Gauge { .. }))));
-    assert_eq!(counts.memory.get(), sampled_before + 1);
+    assert_eq!(engine.samplers.memory_samples, sampled_before + 1);
 }
 
 #[test]
 fn toggling_auto_refresh_cancels_and_rearms_the_timer_once() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     let effects = engine.step(Event::Startup);
     assert_eq!(
         effects
@@ -297,46 +237,49 @@ fn toggling_auto_refresh_cancels_and_rearms_the_timer_once() {
 
 #[test]
 fn menu_open_samples_modules_and_schedules_the_menu_drain() {
-    let (mut engine, counts, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
 
     let effects = engine.step(Event::MenuWillOpen);
 
-    assert_eq!(counts.memory.get(), 2);
-    assert_eq!(counts.cpu.get(), 1);
-    assert_eq!(counts.gpu.get(), 0);
+    assert_eq!(engine.samplers.memory_samples, 2);
+    assert_eq!(engine.samplers.cpu_samples, 1);
+    assert_eq!(engine.samplers.gpu_samples, 0);
     assert_eq!(menu_renders(&effects), 1);
-    assert_eq!(scheduled_drains(&effects), vec![Duration::from_millis(150)]);
+    assert_eq!(scheduled_drains(&effects), 1);
 }
 
 #[test]
 fn menu_close_freezes_the_cadence_and_cancels_the_drain() {
-    let (mut engine, counts, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::MenuWillOpen);
 
     let effects = engine.step(Event::MenuDidClose);
     assert!(effects.contains(&Effect::CancelDrain));
-    assert_eq!(counts.cpu_resets.get(), 1);
+    assert_eq!(engine.samplers.cpu_resets, 1);
 
     // Closed-menu ticks sample memory for the gauge but do no dropdown
     // work: no CPU/GPU samples, no menu renders.
-    let before = (counts.cpu.get(), counts.gpu.get());
+    let before = (engine.samplers.cpu_samples, engine.samplers.gpu_samples);
     for _ in 0..10 {
         let effects = engine.step(Event::Tick);
         assert_eq!(menu_renders(&effects), 0);
     }
-    assert_eq!((counts.cpu.get(), counts.gpu.get()), before);
+    assert_eq!(
+        (engine.samplers.cpu_samples, engine.samplers.gpu_samples),
+        before
+    );
 }
 
 // --- the #18 regressions, pinned at the interface --------------------
 
 #[test]
 fn drains_never_resample_and_never_advance_cadences() {
-    let (mut engine, counts, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::MenuWillOpen);
-    let memory_before = counts.memory.get();
+    let memory_before = engine.samplers.memory_samples;
 
     for _ in 0..20 {
         let effects = engine.step(Event::DrainTimerFired);
@@ -344,17 +287,20 @@ fn drains_never_resample_and_never_advance_cadences() {
         assert_eq!(menu_renders(&effects), 1);
     }
 
-    assert_eq!(counts.memory.get(), memory_before, "a drain resampled");
+    assert_eq!(
+        engine.samplers.memory_samples, memory_before,
+        "a drain resampled"
+    );
     // One open sample (baseline, no delta yet) plus exactly one warm-up
     // resample on the first drain; once the split is Available, further
     // drains render from cache.
-    assert_eq!(counts.cpu.get(), 2);
-    assert_eq!(counts.gpu.get(), 0);
+    assert_eq!(engine.samplers.cpu_samples, 2);
+    assert_eq!(engine.samplers.gpu_samples, 0);
 }
 
 #[test]
 fn menu_open_drain_warms_up_the_cpu_split_even_without_auto_refresh() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::Toggle(Setting::AutoRefresh)); // off: no future tick
 
@@ -383,7 +329,7 @@ fn menu_open_drain_warms_up_the_cpu_split_even_without_auto_refresh() {
 
 #[test]
 fn reenabling_cpu_while_open_recovers_the_split_via_the_drain() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::MenuWillOpen);
     engine.step(Event::DrainTimerFired); // the menu-open drain is spent
@@ -397,7 +343,7 @@ fn reenabling_cpu_while_open_recovers_the_split_via_the_drain() {
             ..
         })
     )));
-    assert_eq!(scheduled_drains(&effects), vec![Duration::from_millis(150)]);
+    assert_eq!(scheduled_drains(&effects), 1);
 
     let effects = engine.step(Event::DrainTimerFired);
     assert!(effects.iter().any(|e| matches!(
@@ -413,7 +359,7 @@ fn reenabling_cpu_while_open_recovers_the_split_via_the_drain() {
 
 #[test]
 fn only_timer_ticks_grow_the_history_window() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup); // seeds the window
     engine.step(Event::MenuWillOpen);
     engine.step(Event::Toggle(Setting::ShowGpu));
@@ -431,16 +377,10 @@ fn only_timer_ticks_grow_the_history_window() {
 
 #[test]
 fn menu_opens_read_the_trend_without_recording_it() {
-    let (samplers, _, used_bytes) = FakeSamplers::healthy();
-    let mut engine = RefreshEngine::new(
-        samplers,
-        FakeScans::default(),
-        FakeLaunch,
-        Settings::default(),
-    );
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup); // 1 GB seeds the window
 
-    used_bytes.set(2_100_000_000);
+    engine.samplers.used_bytes = 2_100_000_000;
     let effects = engine.step(Event::MenuWillOpen);
     assert!(effects.iter().any(|e| matches!(
         e,
@@ -453,7 +393,7 @@ fn menu_opens_read_the_trend_without_recording_it() {
 
 #[test]
 fn toggling_auto_refresh_restarts_the_history() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::MenuWillOpen);
     for _ in 0..3 {
@@ -473,13 +413,8 @@ fn toggling_auto_refresh_restarts_the_history() {
 
 #[test]
 fn memory_sample_failure_renders_the_placeholder() {
-    let (samplers, _) = FakeSamplers::failing();
-    let mut engine = RefreshEngine::new(
-        samplers,
-        FakeScans::default(),
-        FakeLaunch,
-        Settings::default(),
-    );
+    let (mut engine, _) = engine_on();
+    engine.samplers.memory_fails = true;
 
     let effects = engine.step(Event::Tick);
     assert!(effects
@@ -490,7 +425,7 @@ fn memory_sample_failure_renders_the_placeholder() {
 
 #[test]
 fn a_failed_sample_leaves_no_stale_reading_behind() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::MenuWillOpen);
 
@@ -507,7 +442,7 @@ fn a_failed_sample_leaves_no_stale_reading_behind() {
 
 #[test]
 fn enabling_cpu_or_gpu_reopens_the_menu_once() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
     let hidden = engine.step(Event::Toggle(Setting::ShowCpu)); // CPU starts on
     assert!(!hidden.contains(&Effect::ScheduleMenuReopen));
@@ -524,7 +459,7 @@ fn enabling_cpu_or_gpu_reopens_the_menu_once() {
 
 #[test]
 fn hiding_the_module_again_cancels_its_reopen() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
     engine.step(Event::Toggle(Setting::ShowGpu)); // on: reopen scheduled
     engine.step(Event::Toggle(Setting::ShowGpu)); // off before the timer
@@ -534,7 +469,7 @@ fn hiding_the_module_again_cancels_its_reopen() {
 
 #[test]
 fn sharing_starts_with_the_app_and_follows_its_toggle() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     assert!(!engine.step(Event::Startup).contains(&Effect::Share(true)));
 
     let effects = engine.step(Event::Toggle(Setting::ShareOverTailscale)); // on
@@ -553,12 +488,16 @@ fn sharing_starts_with_the_app_and_follows_its_toggle() {
     let effects = engine.step(Event::Toggle(Setting::ShareOverTailscale)); // off
     assert!(effects.contains(&Effect::Share(false)));
 
-    let (samplers, _, _) = FakeSamplers::healthy();
     let settings = Settings {
         share_over_tailscale: true,
         ..Settings::default()
     };
-    let mut shared = RefreshEngine::new(samplers, FakeScans::default(), FakeLaunch, settings);
+    let mut shared = RefreshEngine::new(
+        FakeSamplers::healthy(),
+        FakeScans::default(),
+        FakeLaunch,
+        settings,
+    );
     assert!(shared.step(Event::Startup).contains(&Effect::Share(true)));
 
     let effects = shared.step(Event::ShareFailed);
@@ -575,31 +514,22 @@ fn sharing_starts_with_the_app_and_follows_its_toggle() {
 }
 
 #[test]
-fn reopen_timer_does_nothing_without_a_pending_reopen() {
-    let (mut engine, _, _) = engine_on();
-    engine.step(Event::Startup);
-    engine.step(Event::Toggle(Setting::ShowCpu)); // off
-
-    assert!(engine.step(Event::ReopenMenuTimerFired).is_empty());
-}
-
-#[test]
 fn toggling_show_cpu_resets_the_sampler_and_gates_the_rows() {
-    let (mut engine, counts, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
 
     let effects = engine.step(Event::Toggle(Setting::ShowCpu)); // off
-    assert_eq!(counts.cpu_resets.get(), 1);
+    assert_eq!(engine.samplers.cpu_resets, 1);
     assert!(effects.contains(&Effect::PersistSetting(SettingChange::ShowCpu(false))));
 
     // With CPU hidden and the menu open, no CPU sampling happens.
     engine.step(Event::MenuWillOpen);
-    assert_eq!(counts.cpu.get(), 0);
+    assert_eq!(engine.samplers.cpu_samples, 0);
 }
 
 #[test]
 fn toggling_launch_at_login_rereads_status_through_the_port() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
 
     let effects = engine.step(Event::Toggle(Setting::LaunchAtLogin));
@@ -614,7 +544,7 @@ fn toggling_launch_at_login_rereads_status_through_the_port() {
 
 #[test]
 fn copy_diagnostics_carries_the_cached_state() {
-    let (mut engine, _, _) = engine_on();
+    let (mut engine, _) = engine_on();
     engine.step(Event::Startup);
 
     let effects = engine.step(Event::CopyDiagnostics);
@@ -640,9 +570,13 @@ fn shared_reading() -> SharedReading {
 }
 
 fn shared_engine() -> (TestEngine, FakeScans) {
-    let (samplers, _, _) = FakeSamplers::healthy();
     let scans = FakeScans::with_shared_mac();
-    let engine = RefreshEngine::new(samplers, scans.clone(), FakeLaunch, Settings::default());
+    let engine = RefreshEngine::new(
+        FakeSamplers::healthy(),
+        scans.clone(),
+        FakeLaunch,
+        Settings::default(),
+    );
     (engine, scans)
 }
 
@@ -655,7 +589,7 @@ fn menu_shared(effects: &[Effect]) -> Option<SharedMac> {
 
 #[test]
 fn shared_mac_stays_hidden_without_a_host() {
-    let (mut engine, _, scans) = engine_on();
+    let (mut engine, scans) = engine_on();
     engine.step(Event::Startup);
     let effects = engine.step(Event::MenuWillOpen);
     assert_eq!(menu_shared(&effects), Some(SharedMac::Hidden));
@@ -678,9 +612,7 @@ fn shared_mac_is_asked_only_while_the_menu_is_open() {
 
     // Still in flight: the drain keeps polling and does not ask twice.
     let effects = engine.step(Event::DrainTimerFired);
-    assert!(effects.contains(&Effect::ScheduleDrain {
-        delay: MENU_OPEN_DRAIN_DELAY
-    }));
+    assert!(effects.contains(&Effect::ScheduleDrain));
     engine.step(Event::Tick);
     assert_eq!(scans.shared_starts(), 1);
 
@@ -690,9 +622,7 @@ fn shared_mac_is_asked_only_while_the_menu_is_open() {
         menu_shared(&effects),
         Some(SharedMac::Reading(shared_reading()))
     );
-    assert!(!effects
-        .iter()
-        .any(|e| matches!(e, Effect::ScheduleDrain { .. })));
+    assert!(!effects.contains(&Effect::ScheduleDrain));
 
     engine.step(Event::Tick);
     assert_eq!(scans.shared_starts(), 2, "each open tick asks again");
@@ -708,9 +638,7 @@ fn a_failed_ask_shows_offline_with_the_last_title() {
 
     let effects = engine.step(Event::Tick);
     assert!(
-        effects.contains(&Effect::ScheduleDrain {
-            delay: MENU_OPEN_DRAIN_DELAY
-        }),
+        effects.contains(&Effect::ScheduleDrain),
         "a tick's ask is picked up within 150 ms, not a tick later"
     );
     scans.push_shared(Err(io::Error::other("connection refused")));

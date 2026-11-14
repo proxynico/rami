@@ -30,7 +30,6 @@ use crate::settings::Settings;
 use crate::share::{SharedMac, SharedReading};
 use crate::trend::{MemoryTrend, MemoryTrendTracker};
 use std::io;
-use std::time::Duration;
 
 /// Real-world seconds per `Tick`. The shell's repeating
 /// timer must use this period: every tick-counted cadence — the sampler's
@@ -38,7 +37,6 @@ use std::time::Duration;
 /// window (~125 s) — encodes wall-clock time as a multiple of it.
 pub(crate) const REFRESH_TICK_SECONDS: f64 = 5.0;
 
-const MENU_OPEN_DRAIN_DELAY: Duration = Duration::from_millis(150);
 /// A shared reading older than this many ticks (~60 s) shows as Loading
 /// when the menu opens, instead of as current.
 const SHARED_STALE_TICKS: u8 = 12;
@@ -46,7 +44,7 @@ const SHARED_STALE_TICKS: u8 = 12;
 /// Everything the outside world can tell the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Event {
-    /// App launch, after settings load: first render plus timer reconcile.
+    /// App launch, after settings load: first render, and arm the timer if Auto-Refresh is on.
     Startup,
     /// The 5 s repeating refresh timer fired.
     Tick,
@@ -90,9 +88,7 @@ pub(crate) enum SettingChange {
 pub(crate) enum Effect {
     Render(Render),
     /// Arm the single one-shot drain timer, replacing any pending one.
-    ScheduleDrain {
-        delay: Duration,
-    },
+    ScheduleDrain,
     CancelDrain,
     /// Arm the 5 s repeating refresh timer.
     ArmRefreshTimer,
@@ -172,38 +168,11 @@ pub(crate) trait LaunchAtLogin {
     fn toggle(&mut self) -> LaunchAtLoginStatus;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AutoRefreshTimerAction {
-    Arm,
-    Cancel,
-    Keep,
-}
-
-fn auto_refresh_timer_action(enabled: bool, timer_active: bool) -> AutoRefreshTimerAction {
-    match (enabled, timer_active) {
-        (true, false) => AutoRefreshTimerAction::Arm,
-        (false, true) => AutoRefreshTimerAction::Cancel,
-        _ => AutoRefreshTimerAction::Keep,
-    }
-}
-
-fn should_sample_cpu(menu_open: bool, show_cpu: bool) -> bool {
-    menu_open && show_cpu
-}
-
-fn should_sample_gpu(menu_open: bool, show_gpu: bool) -> bool {
-    menu_open && show_gpu
-}
-
 pub(crate) struct RefreshEngine<S, R, L> {
     samplers: S,
     scans: R,
     launch: L,
-    auto_refresh_enabled: bool,
-    show_cpu: bool,
-    show_gpu: bool,
-    share_over_tailscale: bool,
-    show_shared_mac: bool,
+    settings: Settings,
     shared_mac_configured: bool,
     shared: SharedMac,
     shared_title: Option<String>,
@@ -218,9 +187,6 @@ pub(crate) struct RefreshEngine<S, R, L> {
     last_cpu_state: CpuModuleState,
     last_gpu_state: GpuModuleState,
     trend_tracker: MemoryTrendTracker,
-    /// The engine's belief about the repeating refresh timer, reconciled via
-    /// `auto_refresh_timer_action` so arm/cancel effects fire only on change.
-    refresh_timer_armed: bool,
     menu_reopen_for: Option<Setting>,
 }
 
@@ -232,11 +198,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             samplers,
             scans,
             launch,
-            auto_refresh_enabled: settings.auto_refresh_enabled,
-            show_cpu: settings.show_cpu,
-            show_gpu: settings.show_gpu,
-            share_over_tailscale: settings.share_over_tailscale,
-            show_shared_mac: settings.show_shared_mac,
+            settings,
             shared_mac_configured,
             shared: SharedMac::Hidden,
             shared_title: None,
@@ -249,7 +211,6 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             last_cpu_state: CpuModuleState::Loading,
             last_gpu_state: GpuModuleState::Unavailable,
             trend_tracker: MemoryTrendTracker::new(),
-            refresh_timer_armed: false,
             menu_reopen_for: None,
         }
     }
@@ -261,8 +222,10 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
         match event {
             Event::Startup => {
                 self.refresh(true, &mut out);
-                self.sync_auto_refresh_timer(&mut out);
-                if self.share_over_tailscale {
+                if self.settings.auto_refresh_enabled {
+                    out.push(Effect::ArmRefreshTimer);
+                }
+                if self.settings.share_over_tailscale {
                     out.push(Effect::Share(true));
                 }
             }
@@ -280,9 +243,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 self.launch_at_login_status = self.launch.status();
                 self.mark_stale_shared_reading();
                 self.refresh(true, &mut out);
-                out.push(Effect::ScheduleDrain {
-                    delay: MENU_OPEN_DRAIN_DELAY,
-                });
+                out.push(Effect::ScheduleDrain);
             }
             Event::MenuDidClose => {
                 self.menu_open = false;
@@ -305,8 +266,8 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 }
             }
             Event::ShareFailed => {
-                if self.share_over_tailscale {
-                    self.share_over_tailscale = false;
+                if self.settings.share_over_tailscale {
+                    self.settings.share_over_tailscale = false;
                     out.push(Effect::PersistSetting(SettingChange::ShareOverTailscale(
                         false,
                     )));
@@ -326,48 +287,50 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
     fn toggle(&mut self, setting: Setting, out: &mut Vec<Effect>) {
         match setting {
             Setting::AutoRefresh => {
-                self.auto_refresh_enabled = !self.auto_refresh_enabled;
+                self.settings.auto_refresh_enabled = !self.settings.auto_refresh_enabled;
                 out.push(Effect::PersistSetting(SettingChange::AutoRefresh(
-                    self.auto_refresh_enabled,
+                    self.settings.auto_refresh_enabled,
                 )));
                 // Ticks stop or restart here, so the samples so far no longer
                 // describe the last two minutes.
                 self.trend_tracker.clear();
-                self.sync_auto_refresh_timer(out);
+                out.push(if self.settings.auto_refresh_enabled {
+                    Effect::ArmRefreshTimer
+                } else {
+                    Effect::CancelRefreshTimer
+                });
                 self.refresh(true, out);
             }
             Setting::ShowCpu => {
-                self.show_cpu = !self.show_cpu;
+                self.settings.show_cpu = !self.settings.show_cpu;
                 out.push(Effect::PersistSetting(SettingChange::ShowCpu(
-                    self.show_cpu,
+                    self.settings.show_cpu,
                 )));
                 self.samplers.reset_cpu();
                 self.refresh(true, out);
-                if self.show_cpu && self.menu_open {
+                if self.settings.show_cpu && self.menu_open {
                     // The refresh only recorded a baseline; a drain takes
                     // the second reading so the row leaves Loading.
-                    out.push(Effect::ScheduleDrain {
-                        delay: MENU_OPEN_DRAIN_DELAY,
-                    });
+                    out.push(Effect::ScheduleDrain);
                 }
-                if self.show_cpu {
+                if self.settings.show_cpu {
                     self.schedule_menu_reopen(setting, out);
                 }
             }
             Setting::ShowGpu => {
-                self.show_gpu = !self.show_gpu;
+                self.settings.show_gpu = !self.settings.show_gpu;
                 out.push(Effect::PersistSetting(SettingChange::ShowGpu(
-                    self.show_gpu,
+                    self.settings.show_gpu,
                 )));
                 self.refresh(true, out);
-                if self.show_gpu {
+                if self.settings.show_gpu {
                     self.schedule_menu_reopen(setting, out);
                 }
             }
             Setting::ShowSharedMac => {
-                self.show_shared_mac = !self.show_shared_mac;
+                self.settings.show_shared_mac = !self.settings.show_shared_mac;
                 out.push(Effect::PersistSetting(SettingChange::ShowSharedMac(
-                    self.show_shared_mac,
+                    self.settings.show_shared_mac,
                 )));
                 self.shared = if self.shared_visible() {
                     SharedMac::Loading {
@@ -382,11 +345,11 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 }
             }
             Setting::ShareOverTailscale => {
-                self.share_over_tailscale = !self.share_over_tailscale;
+                self.settings.share_over_tailscale = !self.settings.share_over_tailscale;
                 out.push(Effect::PersistSetting(SettingChange::ShareOverTailscale(
-                    self.share_over_tailscale,
+                    self.settings.share_over_tailscale,
                 )));
-                out.push(Effect::Share(self.share_over_tailscale));
+                out.push(Effect::Share(self.settings.share_over_tailscale));
                 out.push(Effect::Render(self.settings_state_render()));
             }
             Setting::LaunchAtLogin => {
@@ -397,7 +360,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
     }
 
     fn refresh(&mut self, manual: bool, out: &mut Vec<Effect>) {
-        if !manual && !self.auto_refresh_enabled {
+        if !manual && !self.settings.auto_refresh_enabled {
             return;
         }
         out.push(Effect::Render(self.settings_state_render()));
@@ -411,9 +374,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                     if self.shared_visible() && !self.shared_fetch_in_flight {
                         self.shared_fetch_in_flight = true;
                         self.scans.start_shared_fetch(self.shared_generation);
-                        out.push(Effect::ScheduleDrain {
-                            delay: MENU_OPEN_DRAIN_DELAY,
-                        });
+                        out.push(Effect::ScheduleDrain);
                     }
                     let cpu = self.sample_cpu_if_visible();
                     self.last_cpu_state = cpu;
@@ -435,7 +396,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
     /// to it; they only seed an empty window while Auto-Refresh is on.
     fn update_trend(&mut self, manual: bool, used_bytes: u64) -> MemoryTrend {
         let advances = !manual || self.trend_tracker.is_empty();
-        if self.auto_refresh_enabled && advances {
+        if self.settings.auto_refresh_enabled && advances {
             self.trend_tracker.record(used_bytes)
         } else {
             self.trend_tracker.classify(used_bytes)
@@ -467,9 +428,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
 
         self.drain_shared_fetch();
         if self.shared_fetch_in_flight {
-            out.push(Effect::ScheduleDrain {
-                delay: MENU_OPEN_DRAIN_DELAY,
-            });
+            out.push(Effect::ScheduleDrain);
         }
 
         if matches!(self.last_cpu_state, CpuModuleState::Loading) {
@@ -495,34 +454,16 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
 
     fn shows(&self, setting: Setting) -> bool {
         match setting {
-            Setting::ShowCpu => self.show_cpu,
-            Setting::ShowGpu => self.show_gpu,
+            Setting::ShowCpu => self.settings.show_cpu,
+            Setting::ShowGpu => self.settings.show_gpu,
             Setting::ShowSharedMac => self.shared_visible(),
             Setting::AutoRefresh | Setting::ShareOverTailscale | Setting::LaunchAtLogin => false,
         }
     }
 
-    fn sync_auto_refresh_timer(&mut self, out: &mut Vec<Effect>) {
-        match auto_refresh_timer_action(self.auto_refresh_enabled, self.refresh_timer_armed) {
-            AutoRefreshTimerAction::Arm => {
-                self.refresh_timer_armed = true;
-                out.push(Effect::ArmRefreshTimer);
-            }
-            AutoRefreshTimerAction::Cancel => {
-                self.refresh_timer_armed = false;
-                out.push(Effect::CancelRefreshTimer);
-            }
-            AutoRefreshTimerAction::Keep => {}
-        }
-    }
-
     fn sample_cpu_if_visible(&mut self) -> CpuModuleState {
-        if !should_sample_cpu(self.menu_open, self.show_cpu) {
-            return if self.show_cpu {
-                CpuModuleState::Loading
-            } else {
-                CpuModuleState::Disabled
-            };
+        if !self.settings.show_cpu {
+            return CpuModuleState::Disabled;
         }
 
         match self.samplers.sample_cpu() {
@@ -536,12 +477,8 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
     }
 
     fn sample_gpu_if_visible(&mut self) -> GpuModuleState {
-        if !should_sample_gpu(self.menu_open, self.show_gpu) {
-            return if self.show_gpu {
-                GpuModuleState::Unavailable
-            } else {
-                GpuModuleState::Disabled
-            };
+        if !self.settings.show_gpu {
+            return GpuModuleState::Disabled;
         }
 
         match self.samplers.sample_gpu() {
@@ -555,7 +492,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
     }
 
     fn shared_visible(&self) -> bool {
-        self.show_shared_mac && self.shared_mac_configured
+        self.settings.show_shared_mac && self.shared_mac_configured
     }
 
     /// Show Loading instead of a reading the dropdown has not refreshed
@@ -602,13 +539,7 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
 
     fn settings_state_render(&self) -> Render {
         Render::SettingsState {
-            settings: Settings {
-                auto_refresh_enabled: self.auto_refresh_enabled,
-                show_cpu: self.show_cpu,
-                show_gpu: self.show_gpu,
-                share_over_tailscale: self.share_over_tailscale,
-                show_shared_mac: self.show_shared_mac,
-            },
+            settings: self.settings,
             launch_at_login: self.launch_at_login_status,
         }
     }
