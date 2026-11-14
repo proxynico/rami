@@ -8,13 +8,7 @@ pub struct AppLock {
     _file: File,
 }
 
-#[derive(Debug)]
-enum FlockOutcome {
-    Acquired,
-    Contended,
-}
-
-pub fn lock_file_path(home: &Path) -> PathBuf {
+fn lock_file_path(home: &Path) -> PathBuf {
     home.join("Library/Application Support/rami/rami.lock")
 }
 
@@ -40,47 +34,42 @@ impl AppLock {
             .write(true)
             .open(path)?;
 
-        match classify_flock_result(
-            unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) },
-            io::Error::last_os_error(),
-        )? {
-            FlockOutcome::Acquired => Ok(Some(Self { _file: file })),
-            FlockOutcome::Contended => Ok(None),
+        if unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) } == 0 {
+            return Ok(Some(Self { _file: file }));
         }
-    }
-}
-
-fn classify_flock_result(rc: libc::c_int, err: io::Error) -> io::Result<FlockOutcome> {
-    if rc == 0 {
-        return Ok(FlockOutcome::Acquired);
-    }
-
-    match err.raw_os_error() {
-        Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => {
-            Ok(FlockOutcome::Contended)
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(libc::EWOULDBLOCK) => Ok(None),
+            _ => Err(err),
         }
-        _ => Err(err),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_flock_result, FlockOutcome};
-    use std::io;
+    use super::{lock_file_path, AppLock};
+    use std::path::PathBuf;
 
     #[test]
-    fn classify_flock_result_maps_contention_to_contended() {
-        let result =
-            classify_flock_result(-1, io::Error::from_raw_os_error(libc::EWOULDBLOCK)).unwrap();
+    fn lock_file_path_lives_in_application_support() {
+        let home = PathBuf::from("/tmp/rami-home");
+        let path = lock_file_path(&home);
 
-        assert!(matches!(result, FlockOutcome::Contended));
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/rami-home/Library/Application Support/rami/rami.lock")
+        );
     }
 
     #[test]
-    fn classify_flock_result_preserves_real_errors() {
-        let err =
-            classify_flock_result(-1, io::Error::from_raw_os_error(libc::ENOENT)).unwrap_err();
+    fn second_acquire_on_same_path_reports_contention() {
+        let home = std::env::temp_dir().join(format!("rami-lock-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
 
-        assert_eq!(err.raw_os_error(), Some(libc::ENOENT));
+        let first = AppLock::acquire_at_home(&home).unwrap();
+        assert!(first.is_some());
+
+        let second = AppLock::acquire_at_home(&home).unwrap();
+        assert!(second.is_none());
     }
 }

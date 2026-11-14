@@ -192,7 +192,7 @@ fn forced_pressure() -> Option<u8> {
     })
 }
 
-pub fn validate_stats_count(count: u32) -> io::Result<()> {
+fn validate_stats_count(count: u32) -> io::Result<()> {
     if count < REQUIRED_STATS_COUNT {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
@@ -235,7 +235,7 @@ impl MemorySampler {
         #[allow(deprecated)]
         let host_port = unsafe { libc::mach_host_self() };
         let total_bytes = total_memory_bytes()?;
-        let page_size = page_size_bytes()?;
+        let page_size = unsafe { vm_page_size as u64 };
         Ok(Self {
             host_port,
             total_bytes,
@@ -349,16 +349,6 @@ fn read_memory_status_level() -> io::Result<i32> {
 
 fn total_memory_bytes() -> io::Result<u64> {
     read_sysctl_value(b"hw.memsize\0")
-}
-
-fn page_size_bytes() -> io::Result<u64> {
-    let page_size = unsafe { vm_page_size as u64 };
-
-    if page_size == 0 {
-        return Err(io::Error::other("vm_page_size unavailable"));
-    }
-
-    Ok(page_size)
 }
 
 #[cfg(test)]

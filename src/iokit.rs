@@ -1,4 +1,5 @@
 use libc::{c_char, c_void};
+use std::ffi::CStr;
 
 pub(crate) type IoObjectId = libc::mach_port_t;
 pub(crate) type CfTypeRef = *const c_void;
@@ -8,7 +9,7 @@ pub(crate) type CfMutableDictionaryRef = *mut c_void;
 pub(crate) type CfTypeId = usize;
 pub(crate) type CfIndex = isize;
 
-pub(crate) const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
 #[link(name = "IOKit", kind = "framework")]
 unsafe extern "C" {
@@ -18,7 +19,7 @@ unsafe extern "C" {
         matching: CfDictionaryRef,
         iterator: *mut IoObjectId,
     ) -> libc::kern_return_t;
-    pub(crate) fn IORegistryEntryCreateCFProperty(
+    fn IORegistryEntryCreateCFProperty(
         entry: IoObjectId,
         key: CfStringRef,
         allocator: *const c_void,
@@ -34,7 +35,7 @@ unsafe extern "C" {
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
-    pub(crate) fn CFStringCreateWithCString(
+    fn CFStringCreateWithCString(
         allocator: *const c_void,
         string: *const c_char,
         encoding: u32,
@@ -102,6 +103,17 @@ impl Drop for CfObject {
     fn drop(&mut self) {
         unsafe { CFRelease(self.0) };
     }
+}
+
+pub(crate) fn cf_string(value: &CStr) -> Option<CfObject> {
+    CfObject::new(unsafe {
+        CFStringCreateWithCString(std::ptr::null(), value.as_ptr(), CF_STRING_ENCODING_UTF8)
+    })
+}
+
+pub(crate) fn registry_property(entry: IoObjectId, key: &CStr) -> Option<CfObject> {
+    let key = cf_string(key)?;
+    CfObject::new(unsafe { IORegistryEntryCreateCFProperty(entry, key.get(), std::ptr::null(), 0) })
 }
 
 #[cfg(test)]

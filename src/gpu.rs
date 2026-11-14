@@ -1,7 +1,7 @@
 use crate::iokit::{
-    CFDictionaryGetTypeID, CFDictionaryGetValue, CFGetTypeID, CFNumberGetTypeID, CFNumberGetValue,
-    CFStringCreateWithCString, CfIndex, CfObject, IOIteratorNext, IORegistryEntryCreateCFProperty,
-    IOServiceGetMatchingServices, IOServiceMatching, IoObject, IoObjectId, CF_STRING_ENCODING_UTF8,
+    cf_string, registry_property, CFDictionaryGetTypeID, CFDictionaryGetValue, CFGetTypeID,
+    CFNumberGetTypeID, CFNumberGetValue, CfIndex, CfObject, IOIteratorNext,
+    IOServiceGetMatchingServices, IOServiceMatching, IoObject, IoObjectId,
 };
 use crate::model::GpuSnapshot;
 use std::ffi::CStr;
@@ -75,9 +75,7 @@ fn accelerator_snapshot(entry: IoObjectId) -> Option<GpuSnapshot> {
 }
 
 fn dictionary_percent(dictionary: &CfObject, key: &CStr) -> Option<u8> {
-    let key = CfObject::new(unsafe {
-        CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), CF_STRING_ENCODING_UTF8)
-    })?;
+    let key = cf_string(key)?;
     let value = unsafe { CFDictionaryGetValue(dictionary.get(), key.get()) };
     if value.is_null() || unsafe { CFGetTypeID(value) } != unsafe { CFNumberGetTypeID() } {
         return None;
@@ -90,13 +88,6 @@ fn dictionary_percent(dictionary: &CfObject, key: &CStr) -> Option<u8> {
         return None;
     }
     normalized_utilization(raw)
-}
-
-fn registry_property(entry: IoObjectId, key: &CStr) -> Option<CfObject> {
-    let key = CfObject::new(unsafe {
-        CFStringCreateWithCString(std::ptr::null(), key.as_ptr(), CF_STRING_ENCODING_UTF8)
-    })?;
-    CfObject::new(unsafe { IORegistryEntryCreateCFProperty(entry, key.get(), std::ptr::null(), 0) })
 }
 
 fn normalized_utilization(raw: i64) -> Option<u8> {

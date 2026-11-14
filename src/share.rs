@@ -13,9 +13,8 @@
 use crate::cpu::CpuSampler;
 use crate::gpu::GpuSampler;
 use crate::iokit::{
-    CFDataGetBytePtr, CFDataGetLength, CFDataGetTypeID, CFGetTypeID, CFStringCreateWithCString,
-    CfObject, IORegistryEntryCreateCFProperty, IORegistryEntryFromPath, IoObject,
-    CF_STRING_ENCODING_UTF8,
+    registry_property, CFDataGetBytePtr, CFDataGetLength, CFDataGetTypeID, CFGetTypeID,
+    IORegistryEntryFromPath, IoObject,
 };
 use crate::memory::MemorySampler;
 use crate::model::{CpuSnapshot, GpuSnapshot, MemorySnapshot, PressureSource};
@@ -316,16 +315,7 @@ fn http_response(status: &str, body: &str) -> String {
 fn product_model() -> Option<String> {
     let product =
         IoObject::new(unsafe { IORegistryEntryFromPath(0, c"IODeviceTree:/product".as_ptr()) })?;
-    let key = CfObject::new(unsafe {
-        CFStringCreateWithCString(
-            std::ptr::null(),
-            c"product-name".as_ptr(),
-            CF_STRING_ENCODING_UTF8,
-        )
-    })?;
-    let data = CfObject::new(unsafe {
-        IORegistryEntryCreateCFProperty(product.id(), key.get(), std::ptr::null(), 0)
-    })?;
+    let data = registry_property(product.id(), c"product-name")?;
     if unsafe { CFGetTypeID(data.get()) } != unsafe { CFDataGetTypeID() } {
         return None;
     }

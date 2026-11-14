@@ -26,33 +26,9 @@ impl ProcessorTicks {
     }
 }
 
-#[derive(Debug)]
-struct CpuTracker {
-    previous: Option<Vec<ProcessorTicks>>,
-}
-
-impl CpuTracker {
-    fn new() -> Self {
-        Self { previous: None }
-    }
-
-    fn record(&mut self, current: Vec<ProcessorTicks>) -> Option<CpuSnapshot> {
-        let snapshot = self
-            .previous
-            .as_deref()
-            .and_then(|previous| snapshot_from_ticks(previous, &current));
-        self.previous = Some(current);
-        snapshot
-    }
-
-    fn reset(&mut self) {
-        self.previous = None;
-    }
-}
-
 pub(crate) struct CpuSampler {
     host_port: libc::mach_port_t,
-    tracker: CpuTracker,
+    previous: Option<Vec<ProcessorTicks>>,
 }
 
 impl CpuSampler {
@@ -61,28 +37,20 @@ impl CpuSampler {
         let host_port = unsafe { libc::mach_host_self() };
         Self {
             host_port,
-            tracker: CpuTracker::new(),
+            previous: None,
         }
     }
 
     pub(crate) fn sample(&mut self) -> io::Result<Option<CpuSnapshot>> {
-        match read_processor_ticks(self.host_port) {
-            Ok(ticks) => Ok(self.tracker.record(ticks)),
-            Err(error) => {
-                self.tracker.reset();
-                Err(error)
-            }
-        }
+        let previous = self.previous.take();
+        let current = read_processor_ticks(self.host_port)?;
+        let snapshot = previous.and_then(|previous| snapshot_from_ticks(&previous, &current));
+        self.previous = Some(current);
+        Ok(snapshot)
     }
 
     pub(crate) fn reset(&mut self) {
-        self.tracker.reset();
-    }
-}
-
-impl Default for CpuSampler {
-    fn default() -> Self {
-        Self::new()
+        self.previous = None;
     }
 }
 
@@ -105,9 +73,7 @@ fn read_processor_ticks(host_port: libc::mach_port_t) -> io::Result<Vec<Processo
         )));
     }
 
-    let expected_count = (processor_count as usize)
-        .checked_mul(CPU_STATE_MAX as usize)
-        .ok_or_else(|| io::Error::other("processor tick count overflow"))?;
+    let expected_count = processor_count as usize * CPU_STATE_MAX as usize;
     let actual_count = info_count as usize;
     let copied = if info.is_null() || actual_count < expected_count {
         Err(io::Error::new(
@@ -154,49 +120,18 @@ fn snapshot_from_ticks(
     if previous.len() != current.len() || current.is_empty() {
         return None;
     }
-    let totals = tick_totals(previous, current);
+    let (mut user, mut system, mut idle) = (0_u64, 0_u64, 0_u64);
+    for (before, after) in previous.iter().zip(current) {
+        user += after.user.wrapping_sub(before.user) as u64
+            + after.nice.wrapping_sub(before.nice) as u64;
+        system += after.system.wrapping_sub(before.system) as u64;
+        idle += after.idle.wrapping_sub(before.idle) as u64;
+    }
+    let total = user + system + idle;
     Some(CpuSnapshot {
-        user_percent: percent(totals.user, totals.total()),
-        system_percent: percent(totals.system, totals.total()),
+        user_percent: percent(user, total),
+        system_percent: percent(system, total),
     })
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct TickTotals {
-    user: u64,
-    system: u64,
-    idle: u64,
-}
-
-impl TickTotals {
-    fn total(self) -> u64 {
-        self.user
-            .saturating_add(self.system)
-            .saturating_add(self.idle)
-    }
-
-    fn add(&mut self, before: &ProcessorTicks, after: &ProcessorTicks) {
-        self.user = self
-            .user
-            .saturating_add(after.user.wrapping_sub(before.user) as u64)
-            .saturating_add(after.nice.wrapping_sub(before.nice) as u64);
-        self.system = self
-            .system
-            .saturating_add(after.system.wrapping_sub(before.system) as u64);
-        self.idle = self
-            .idle
-            .saturating_add(after.idle.wrapping_sub(before.idle) as u64);
-    }
-}
-
-fn tick_totals(previous: &[ProcessorTicks], current: &[ProcessorTicks]) -> TickTotals {
-    previous
-        .iter()
-        .zip(current)
-        .fold(TickTotals::default(), |mut totals, (before, after)| {
-            totals.add(before, after);
-            totals
-        })
 }
 
 fn percent(part: u64, total: u64) -> u8 {
@@ -222,19 +157,6 @@ mod tests {
 
         assert_eq!(snapshot.user_percent, 50);
         assert_eq!(snapshot.system_percent, 17);
-    }
-
-    #[test]
-    fn tracker_requires_two_fresh_samples_after_reset() {
-        let mut tracker = CpuTracker::new();
-        let first = vec![ProcessorTicks::new(10, 10, 80, 0)];
-        let second = vec![ProcessorTicks::new(20, 20, 160, 0)];
-
-        assert_eq!(tracker.record(first.clone()), None);
-        assert!(tracker.record(second.clone()).is_some());
-
-        tracker.reset();
-        assert_eq!(tracker.record(second), None);
     }
 
     #[test]

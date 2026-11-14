@@ -1,6 +1,5 @@
 pub mod app;
 pub mod format;
-pub mod lock;
 pub mod memory;
 pub mod model;
 
@@ -11,6 +10,7 @@ mod engine;
 mod gpu;
 mod history_view;
 mod iokit;
+mod lock;
 mod login_item;
 mod memory_map_view;
 pub(crate) mod presentation;
