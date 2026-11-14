@@ -1,3 +1,4 @@
+use crate::engine::SettingChange;
 use objc2::rc::Retained;
 use objc2_foundation::{NSString, NSUserDefaults};
 
@@ -37,12 +38,6 @@ pub struct SettingsStore {
     defaults: Retained<NSUserDefaults>,
 }
 
-impl Default for SettingsStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SettingsStore {
     pub fn new() -> Self {
         Self {
@@ -51,38 +46,26 @@ impl SettingsStore {
     }
 
     pub fn load(&self) -> Settings {
-        resolve_settings(
-            self.read_stored_bool(KEY_AUTO_REFRESH),
-            self.read_stored_bool(KEY_SHOW_CPU),
-            self.read_stored_bool(KEY_SHOW_GPU),
-            self.read_stored_bool(KEY_SHARE),
-            self.read_stored_bool(KEY_SHOW_SHARED_MAC),
-        )
+        let default = Settings::default();
+        Settings {
+            auto_refresh_enabled: self.read_bool(KEY_AUTO_REFRESH, default.auto_refresh_enabled),
+            show_cpu: self.read_bool(KEY_SHOW_CPU, default.show_cpu),
+            show_gpu: self.read_bool(KEY_SHOW_GPU, default.show_gpu),
+            share_over_tailscale: self.read_bool(KEY_SHARE, default.share_over_tailscale),
+            show_shared_mac: self.read_bool(KEY_SHOW_SHARED_MAC, default.show_shared_mac),
+        }
     }
 
-    pub fn set_auto_refresh_enabled(&self, value: bool) {
+    pub fn persist(&self, change: SettingChange) {
+        let (key, value) = match change {
+            SettingChange::AutoRefresh(value) => (KEY_AUTO_REFRESH, value),
+            SettingChange::ShowCpu(value) => (KEY_SHOW_CPU, value),
+            SettingChange::ShowGpu(value) => (KEY_SHOW_GPU, value),
+            SettingChange::ShareOverTailscale(value) => (KEY_SHARE, value),
+            SettingChange::ShowSharedMac(value) => (KEY_SHOW_SHARED_MAC, value),
+        };
         self.defaults
-            .setBool_forKey(value, &NSString::from_str(KEY_AUTO_REFRESH));
-    }
-
-    pub fn set_show_cpu(&self, value: bool) {
-        self.defaults
-            .setBool_forKey(value, &NSString::from_str(KEY_SHOW_CPU));
-    }
-
-    pub fn set_show_gpu(&self, value: bool) {
-        self.defaults
-            .setBool_forKey(value, &NSString::from_str(KEY_SHOW_GPU));
-    }
-
-    pub fn set_share_over_tailscale(&self, value: bool) {
-        self.defaults
-            .setBool_forKey(value, &NSString::from_str(KEY_SHARE));
-    }
-
-    pub fn set_show_shared_mac(&self, value: bool) {
-        self.defaults
-            .setBool_forKey(value, &NSString::from_str(KEY_SHOW_SHARED_MAC));
+            .setBool_forKey(value, &NSString::from_str(key));
     }
 
     /// The tailnet host whose shared reading the dropdown shows, set once
@@ -96,71 +79,33 @@ impl SettingsStore {
         (!host.is_empty()).then(|| host.to_string())
     }
 
-    fn read_stored_bool(&self, key: &str) -> Option<bool> {
+    fn read_bool(&self, key: &str, default: bool) -> bool {
         let key = NSString::from_str(key);
         // objectForKey is None only when the key was never written, letting us
         // distinguish "unset" (use the default) from an explicitly stored `false`.
-        self.defaults
-            .objectForKey(&key)
-            .is_some()
-            .then(|| self.defaults.boolForKey(&key))
+        if self.defaults.objectForKey(&key).is_some() {
+            self.defaults.boolForKey(&key)
+        } else {
+            default
+        }
     }
-}
-
-fn resolve_settings(
-    auto_refresh_enabled: Option<bool>,
-    show_cpu: Option<bool>,
-    show_gpu: Option<bool>,
-    share_over_tailscale: Option<bool>,
-    show_shared_mac: Option<bool>,
-) -> Settings {
-    let fallback = Settings::default();
-    Settings {
-        auto_refresh_enabled: resolve_bool(auto_refresh_enabled, fallback.auto_refresh_enabled),
-        show_cpu: resolve_bool(show_cpu, fallback.show_cpu),
-        show_gpu: resolve_bool(show_gpu, fallback.show_gpu),
-        share_over_tailscale: resolve_bool(share_over_tailscale, fallback.share_over_tailscale),
-        show_shared_mac: resolve_bool(show_shared_mac, fallback.show_shared_mac),
-    }
-}
-
-fn resolve_bool(stored: Option<bool>, fallback: bool) -> bool {
-    stored.unwrap_or(fallback)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_bool, resolve_settings};
+    use super::Settings;
 
     #[test]
-    fn resolve_bool_uses_fallback_only_when_unset() {
-        assert!(resolve_bool(None, true));
-        assert!(!resolve_bool(None, false));
-        // A stored value always wins over the default, including an explicit false.
-        assert!(!resolve_bool(Some(false), true));
-        assert!(resolve_bool(Some(true), false));
-    }
-
-    #[test]
-    fn module_visibility_defaults_and_persists_independently() {
-        let defaults = resolve_settings(None, None, None, None, None);
-        assert!(defaults.auto_refresh_enabled);
-        assert!(defaults.show_cpu);
-        assert!(!defaults.show_gpu);
-        assert!(!defaults.share_over_tailscale);
-        assert!(defaults.show_shared_mac);
-
-        let persisted = resolve_settings(
-            Some(false),
-            Some(false),
-            Some(true),
-            Some(true),
-            Some(false),
+    fn defaults_hide_gpu_and_keep_sharing_off() {
+        assert_eq!(
+            Settings::default(),
+            Settings {
+                auto_refresh_enabled: true,
+                show_cpu: true,
+                show_gpu: false,
+                share_over_tailscale: false,
+                show_shared_mac: true,
+            }
         );
-        assert!(!persisted.auto_refresh_enabled);
-        assert!(!persisted.show_cpu);
-        assert!(persisted.show_gpu);
-        assert!(persisted.share_over_tailscale);
-        assert!(!persisted.show_shared_mac);
     }
 }
