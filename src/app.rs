@@ -10,7 +10,7 @@ use crate::cpu::CpuSampler;
 use crate::diagnostics::{build_diagnostic_report, current_report_input};
 use crate::engine::{
     Effect, Event, LaunchAtLogin, RefreshEngine, Render, Samplers, ScanRunner, Setting,
-    SettingChange, SharedFetchResult, REFRESH_TICK_SECONDS,
+    SharedFetchResult, REFRESH_TICK_SECONDS,
 };
 use crate::gpu::GpuSampler;
 use crate::lock::AppLock;
@@ -165,17 +165,7 @@ impl AppState {
                 Effect::CancelDrain => self.cancel_menu_open_drain(),
                 Effect::ArmRefreshTimer => self.arm_refresh_timer(),
                 Effect::CancelRefreshTimer => self.cancel_refresh_timer(),
-                Effect::PersistSetting(change) => match change {
-                    SettingChange::AutoRefresh(value) => {
-                        self.settings.set_auto_refresh_enabled(value)
-                    }
-                    SettingChange::ShowCpu(value) => self.settings.set_show_cpu(value),
-                    SettingChange::ShowGpu(value) => self.settings.set_show_gpu(value),
-                    SettingChange::ShareOverTailscale(value) => {
-                        self.settings.set_share_over_tailscale(value)
-                    }
-                    SettingChange::ShowSharedMac(value) => self.settings.set_show_shared_mac(value),
-                },
+                Effect::PersistSetting(change) => self.settings.persist(change),
                 Effect::Share(on) => self.set_sharing(on),
                 Effect::ScheduleMenuReopen => unsafe {
                     NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(

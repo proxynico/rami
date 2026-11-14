@@ -76,12 +76,6 @@ pub struct LaunchAtLoginController {
     service: Retained<SMAppService>,
 }
 
-impl Default for LaunchAtLoginController {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl LaunchAtLoginController {
     pub fn new() -> Self {
         Self {
@@ -99,7 +93,7 @@ impl LaunchAtLoginController {
             LaunchAtLoginStatus::Disabled | LaunchAtLoginStatus::RequiresApproval => unsafe {
                 self.service.register_and_return_error()?
             },
-            LaunchAtLoginStatus::Unavailable => return Ok(self.status()),
+            LaunchAtLoginStatus::Unavailable => {}
         }
         Ok(self.status())
     }

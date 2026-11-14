@@ -3,11 +3,8 @@ use crate::login_item::{current_app_bundle_path, LaunchAtLoginStatus, BUNDLE_IDE
 use crate::model::{MemorySnapshot, PressureSource};
 
 pub(crate) struct DiagnosticReportInput {
-    pub(crate) version: String,
-    pub(crate) bundle_identifier: String,
     pub(crate) bundle_path: String,
     pub(crate) process_path: String,
-    pub(crate) architecture: String,
     pub(crate) launch_at_login: LaunchAtLoginStatus,
     pub(crate) memory: Option<MemorySnapshot>,
 }
@@ -25,63 +22,56 @@ pub(crate) fn current_report_input(
         .unwrap_or_else(|| "<not running from app bundle>".to_string());
 
     DiagnosticReportInput {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        bundle_identifier: BUNDLE_IDENTIFIER.to_string(),
         bundle_path,
         process_path,
-        architecture: std::env::consts::ARCH.to_string(),
         launch_at_login,
         memory,
     }
 }
 
 pub(crate) fn build_diagnostic_report(input: DiagnosticReportInput) -> String {
-    let mut out = String::new();
-    out.push_str("rami diagnostics\n");
-    out.push_str(&format!("Version: {}\n", input.version));
-    out.push_str(&format!("Bundle ID: {}\n", input.bundle_identifier));
-    out.push_str(&format!("Bundle path: {}\n", input.bundle_path));
-    out.push_str(&format!("Process path: {}\n", input.process_path));
-    out.push_str(&format!("Architecture: {}\n", input.architecture));
-    out.push_str(&format!(
-        "Launch at login: {}\n",
-        launch_at_login_label(input.launch_at_login)
-    ));
-
+    let header = format!(
+        "rami diagnostics\n\
+         Version: {}\n\
+         Bundle ID: {BUNDLE_IDENTIFIER}\n\
+         Bundle path: {}\n\
+         Process path: {}\n\
+         Architecture: {}\n\
+         Launch at login: {}\n",
+        env!("CARGO_PKG_VERSION"),
+        input.bundle_path,
+        input.process_path,
+        std::env::consts::ARCH,
+        launch_at_login_label(input.launch_at_login),
+    );
     match input.memory {
-        Some(snapshot) => {
-            out.push_str(&format!(
-                "Memory: {} ({}%)\n",
-                gb_pair(snapshot.used_bytes, snapshot.total_bytes),
-                snapshot.used_percent
-            ));
-            out.push_str(&format!(
-                "Pressure: {}% ({})\n",
-                snapshot.pressure_percent,
-                pressure_source_label(snapshot.pressure_source)
-            ));
-            out.push_str(&format!(
-                "App Memory: {}\n",
-                mem_text(snapshot.app_memory_bytes)
-            ));
-            out.push_str(&format!("Wired: {}\n", mem_text(snapshot.wired_bytes)));
-            out.push_str(&format!(
-                "Compressed: {}\n",
-                mem_text(snapshot.compressed_bytes)
-            ));
-            out.push_str(&format!("Cached: {}\n", mem_text(snapshot.cached_bytes)));
-            out.push_str(&format!("Other: {}\n", mem_text(snapshot.other_bytes())));
-            out.push_str(&format!("Free: {}\n", mem_text(snapshot.free_bytes)));
-            out.push_str(&format!(
-                "Available: {}\n",
-                mem_text(snapshot.available_bytes)
-            ));
-            out.push_str(&format!("Swap: {}\n", mem_text(snapshot.swap_used_bytes)));
-        }
-        None => out.push_str("Memory: unavailable\nSwap: unavailable\n"),
+        Some(s) => format!(
+            "{header}\
+             Memory: {} ({}%)\n\
+             Pressure: {}% ({})\n\
+             App Memory: {}\n\
+             Wired: {}\n\
+             Compressed: {}\n\
+             Cached: {}\n\
+             Other: {}\n\
+             Free: {}\n\
+             Available: {}\n\
+             Swap: {}\n",
+            gb_pair(s.used_bytes, s.total_bytes),
+            s.used_percent,
+            s.pressure_percent,
+            pressure_source_label(s.pressure_source),
+            mem_text(s.app_memory_bytes),
+            mem_text(s.wired_bytes),
+            mem_text(s.compressed_bytes),
+            mem_text(s.cached_bytes),
+            mem_text(s.other_bytes()),
+            mem_text(s.free_bytes),
+            mem_text(s.available_bytes),
+            mem_text(s.swap_used_bytes),
+        ),
+        None => header + "Memory: unavailable\nSwap: unavailable\n",
     }
-
-    out
 }
 
 fn pressure_source_label(source: PressureSource) -> &'static str {
@@ -109,11 +99,8 @@ mod tests {
     #[test]
     fn report_includes_runtime_paths_login_state_and_memory_rows() {
         let report = build_diagnostic_report(DiagnosticReportInput {
-            version: "0.1.0".to_string(),
-            bundle_identifier: "com.nicomontero.rami".to_string(),
             bundle_path: "/Applications/rami.app".to_string(),
             process_path: "/Applications/rami.app/Contents/MacOS/rami".to_string(),
-            architecture: "aarch64".to_string(),
             launch_at_login: LaunchAtLoginStatus::Enabled,
             memory: Some(MemorySnapshot {
                 used_bytes: 9_774_150_902,
@@ -132,11 +119,11 @@ mod tests {
         });
 
         assert!(report.contains("rami diagnostics"));
-        assert!(report.contains("Version: 0.1.0"));
+        assert!(report.contains(concat!("Version: ", env!("CARGO_PKG_VERSION"))));
         assert!(report.contains("Bundle ID: com.nicomontero.rami"));
         assert!(report.contains("Bundle path: /Applications/rami.app"));
         assert!(report.contains("Process path: /Applications/rami.app/Contents/MacOS/rami"));
-        assert!(report.contains("Architecture: aarch64"));
+        assert!(report.contains(&format!("Architecture: {}", std::env::consts::ARCH)));
         assert!(report.contains("Launch at login: Enabled"));
         assert!(report.contains("Memory: 9.1 / 18.0 GB (51%)"));
         assert!(report.contains("Pressure: 27% (kernel)"));
