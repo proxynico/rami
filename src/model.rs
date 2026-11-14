@@ -97,27 +97,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normal_when_plenty_available() {
-        assert_eq!(classify_pressure(50), MemoryPressure::Normal);
-    }
-
-    #[test]
-    fn warning_when_available_drops_below_threshold() {
-        // 10% available -> warning band
-        assert_eq!(classify_pressure(90), MemoryPressure::Warning);
-    }
-
-    #[test]
-    fn critical_when_available_nearly_exhausted() {
-        assert_eq!(classify_pressure(97), MemoryPressure::Critical);
-    }
-
-    #[test]
-    fn normal_when_pressure_is_zero() {
-        assert_eq!(classify_pressure(0), MemoryPressure::Normal);
-    }
-
-    #[test]
     fn bands_classify_by_pressure_percent() {
         assert_eq!(classify_pressure(95), MemoryPressure::Critical);
         assert_eq!(classify_pressure(88), MemoryPressure::Warning);

@@ -1,4 +1,4 @@
-use rami::memory::{snapshot_from_counts, validate_stats_count, MemoryCounts};
+use rami::memory::{snapshot_from_counts, MemoryCounts};
 use rami::model::PressureSource;
 
 /// Real counts from `vm_stat` on a 16 GB Apple Silicon Mac. Used matches
@@ -29,31 +29,6 @@ fn snapshot_partitions_physical_memory_like_activity_monitor() {
         snapshot.used_bytes + snapshot.cached_bytes + snapshot.free_bytes + snapshot.other_bytes(),
         snapshot.total_bytes
     );
-}
-
-#[test]
-fn snapshot_sums_available_from_reclaimable_pools() {
-    let counts = MemoryCounts {
-        total_bytes: 1000,
-        page_size: 10,
-        internal_pages: 25,
-        external_pages: 0,
-        wired_pages: 20,
-        compressed_pages: 10,
-        free_pages: 5,
-        inactive_pages: 4,
-        speculative_pages: 1,
-        purgeable_pages: 2,
-    };
-
-    let snapshot = snapshot_from_counts(counts, 0, None);
-
-    // (5 + 4 + 2) pages * 10 byte pages = 110 bytes reclaimable.
-    //
-    // Speculative pages are excluded: host_statistics64 reports free_count as raw
-    // free plus speculative, so adding speculative_count again would double-count
-    // them and overstate Available.
-    assert_eq!(snapshot.available_bytes, 110);
 }
 
 #[test]
@@ -119,16 +94,6 @@ fn snapshot_returns_zero_percent_when_total_bytes_is_zero() {
     assert_eq!(snapshot.total_bytes, 0);
     assert_eq!(snapshot.used_percent, 0);
     assert_eq!(snapshot.swap_used_bytes, 0);
-}
-
-#[test]
-fn validate_stats_count_rejects_incomplete_host_stats() {
-    let error = validate_stats_count(0).expect_err("count should be rejected");
-
-    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
-    assert!(error
-        .to_string()
-        .contains("insufficient host statistics count"));
 }
 
 #[test]

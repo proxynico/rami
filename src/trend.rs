@@ -54,7 +54,7 @@ impl MemoryTrendTracker {
     }
 }
 
-pub fn classify_memory_trend(delta_bytes: i64) -> MemoryTrend {
+fn classify_memory_trend(delta_bytes: i64) -> MemoryTrend {
     if delta_bytes >= RISING_FAST_BYTES {
         MemoryTrend::RisingFast
     } else if delta_bytes >= RISING_BYTES {
