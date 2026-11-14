@@ -21,7 +21,7 @@ use crate::settings::SettingsStore;
 use crate::share::{self, ShareServer};
 use crate::tray::TrayController;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSMenu, NSMenuDelegate, NSPasteboard,
@@ -40,6 +40,7 @@ thread_local! {
     static APP_STATE: RefCell<Option<Weak<AppState>>> = const { RefCell::new(None) };
 }
 
+const MENU_OPEN_DRAIN_DELAY_SECONDS: f64 = 0.15;
 const MENU_REOPEN_DELAY_SECONDS: f64 = 0.05;
 
 /// The three synchronous kernel samplers behind the engine's `Samplers` port.
@@ -160,9 +161,7 @@ impl AppState {
         for effect in effects {
             match effect {
                 Effect::Render(render) => self.render(render, mtm),
-                Effect::ScheduleDrain { delay } => {
-                    self.schedule_menu_open_drain(delay.as_secs_f64())
-                }
+                Effect::ScheduleDrain => self.schedule_menu_open_drain(),
                 Effect::CancelDrain => self.cancel_menu_open_drain(),
                 Effect::ArmRefreshTimer => self.arm_refresh_timer(),
                 Effect::CancelRefreshTimer => self.cancel_refresh_timer(),
@@ -178,7 +177,15 @@ impl AppState {
                     SettingChange::ShowSharedMac(value) => self.settings.set_show_shared_mac(value),
                 },
                 Effect::Share(on) => self.set_sharing(on),
-                Effect::ScheduleMenuReopen => self.schedule_one_shot(sel!(reopenMenu:)),
+                Effect::ScheduleMenuReopen => unsafe {
+                    NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+                        MENU_REOPEN_DELAY_SECONDS,
+                        &self.refresh_target,
+                        sel!(reopenMenu:),
+                        None,
+                        false,
+                    );
+                },
                 Effect::PopUpMenu => self.tray.pop_up_menu(),
                 Effect::CopyDiagnostics {
                     launch_at_login,
@@ -269,10 +276,10 @@ impl AppState {
     /// tracking. It must live in NSRunLoopCommonModes or it would only fire
     /// after the menu closes. Replaces any pending drain: the engine emits
     /// its schedules in order and the latest must win.
-    fn schedule_menu_open_drain(&self, delay_seconds: f64) {
+    fn schedule_menu_open_drain(&self) {
         let timer = unsafe {
             NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
-                delay_seconds,
+                MENU_OPEN_DRAIN_DELAY_SECONDS,
                 &self.refresh_target,
                 sel!(drainScanResults:),
                 None,
@@ -294,21 +301,6 @@ impl AppState {
             timer.invalidate();
         }
     }
-
-    /// One-shot at the short reopen delay, targeting a `RefreshTarget`
-    /// selector. Used to let the current menu-tracking session end before
-    /// popping a menu back up.
-    fn schedule_one_shot(&self, selector: Sel) {
-        let _timer = unsafe {
-            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                MENU_REOPEN_DELAY_SECONDS,
-                &self.refresh_target,
-                selector,
-                None,
-                false,
-            )
-        };
-    }
 }
 
 fn copy_to_pasteboard(report: &str) {
@@ -318,12 +310,6 @@ fn copy_to_pasteboard(report: &str) {
     if !pasteboard.setString_forType(&NSString::from_str(report), string_type) {
         eprintln!("failed to copy diagnostics to pasteboard");
     }
-}
-
-fn install_app_state(state: &Rc<AppState>) {
-    APP_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(Rc::downgrade(state));
-    });
 }
 
 /// Open the latest release page in the user's default browser. Uses `open`
@@ -336,14 +322,10 @@ fn open_releases_page() {
     }
 }
 
-fn with_app_state(f: impl FnOnce(&AppState)) {
-    if let Some(state) = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade)) {
-        f(&state);
-    }
-}
-
 fn dispatch_event(event: Event) {
-    with_app_state(|state| state.dispatch(event));
+    if let Some(state) = APP_STATE.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade)) {
+        state.dispatch(event);
+    }
 }
 
 define_class!(
@@ -474,7 +456,7 @@ impl App {
             refresh_timer: RefCell::new(None),
             share_server: RefCell::new(None),
         });
-        install_app_state(&state);
+        APP_STATE.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&state)));
         app.finishLaunching();
         state.dispatch(Event::Startup);
 
