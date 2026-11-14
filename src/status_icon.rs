@@ -11,24 +11,6 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BadgeKind {
-    None,
-    RisingFast,
-}
-
-pub(crate) fn badge_for_state(trend: MemoryTrend) -> BadgeKind {
-    match trend {
-        MemoryTrend::RisingFast => BadgeKind::RisingFast,
-        MemoryTrend::Rising | MemoryTrend::Stable => BadgeKind::None,
-    }
-}
-
-pub(crate) struct StatusImage {
-    pub(crate) image: Retained<NSImage>,
-    pub(crate) template: bool,
-}
-
 /// The status glyph's design grid in points: a RAM stick whose four chips
 /// fill left to right with Memory %, over four short legs.
 const GLYPH_WIDTH: f64 = 22.0;
@@ -47,9 +29,9 @@ pub(crate) fn make_status_image(
     used_percent: u8,
     trend: MemoryTrend,
     accent: Accent,
-) -> StatusImage {
+) -> Retained<NSImage> {
     let level = f64::from(used_percent.min(100)) / 100.0;
-    let rising = badge_for_state(trend) == BadgeKind::RisingFast;
+    let rising = trend == MemoryTrend::RisingFast;
     let tinted = accent != Accent::Neutral;
     let handler = RcBlock::new(move |rect: NSRect| -> Bool {
         let scale = rect.size.width / GLYPH_WIDTH;
@@ -74,30 +56,23 @@ pub(crate) fn make_status_image(
         ink.setStroke();
         body.stroke();
 
-        let chips: Vec<NSRect> = (0..4)
-            .map(|k| at(chip_left(k), 4.3, CHIP_WIDTH, 4.4))
-            .collect();
+        let fill_chips = || {
+            for k in 0..4 {
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                    at(chip_left(k), 4.3, CHIP_WIDTH, 4.4),
+                    0.7 * scale,
+                    0.7 * scale,
+                )
+                .fill();
+            }
+        };
         ink.colorWithAlphaComponent(EMPTY_CHIP_ALPHA).setFill();
-        for chip in &chips {
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-                *chip,
-                0.7 * scale,
-                0.7 * scale,
-            )
-            .fill();
-        }
+        fill_chips();
         let span = 4.0 * CHIP_WIDTH + 3.0 * CHIP_GAP;
         NSGraphicsContext::saveGraphicsState_class();
         NSBezierPath::clipRect(at(CHIPS_LEFT, 0.0, span * level, GLYPH_HEIGHT));
         ink.setFill();
-        for chip in &chips {
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
-                *chip,
-                0.7 * scale,
-                0.7 * scale,
-            )
-            .fill();
-        }
+        fill_chips();
         NSGraphicsContext::restoreGraphicsState_class();
 
         ink.setFill();
@@ -121,10 +96,8 @@ pub(crate) fn make_status_image(
         true,
         &handler,
     );
-    StatusImage {
-        image,
-        template: !tinted,
-    }
+    image.setTemplate(!tinted);
+    image
 }
 
 /// The RisingFast badge in the glyph's top-right corner, cut out of the
@@ -183,12 +156,9 @@ fn draw_rising_badge(rect: NSRect, ink: &NSColor) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::draw::tests::rasterize;
     use crate::format::Accent;
-    use objc2::{AnyThread, Message};
-    use objc2_app_kit::{
-        NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath,
-        NSBitmapImageRep, NSDeviceRGBColorSpace, NSGraphicsContext,
-    };
+    use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua};
     use objc2_foundation::NSInteger;
     use std::cell::RefCell;
 
@@ -203,52 +173,20 @@ mod tests {
         drawing_appearance: &NSAppearance,
     ) -> (f64, f64, f64, usize) {
         let side: NSInteger = 24;
-        let rep = unsafe {
-            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
-                NSBitmapImageRep::alloc(),
-                std::ptr::null_mut(),
-                side,
-                side,
-                8,
-                4,
-                true,
-                false,
-                NSDeviceRGBColorSpace,
-                0,
-                0,
-            )
-        }
-        .expect("bitmap");
-        NSGraphicsContext::saveGraphicsState_class();
-        let ctx =
-            NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep).expect("graphics context");
-        NSGraphicsContext::setCurrentContext(Some(&ctx));
-        NSColor::clearColor().setFill();
-        let bounds = NSRect::new(NSPoint::ZERO, NSSize::new(side as f64, side as f64));
-        NSBezierPath::bezierPathWithRect(bounds).fill();
-        let image = image.retain();
-        let draw = RcBlock::new(move || {
+        let pixel = rasterize(side, side, Some(drawing_appearance), || {
             image.drawInRect_fromRect_operation_fraction(
-                bounds,
+                NSRect::new(NSPoint::ZERO, NSSize::new(side as f64, side as f64)),
                 NSRect::ZERO,
                 NSCompositingOperation::SourceOver,
                 1.0,
             );
         });
-        drawing_appearance.performAsCurrentDrawingAppearance(&draw);
-        NSGraphicsContext::restoreGraphicsState_class();
 
         let (mut sum_r, mut sum_g, mut sum_b) = (0.0, 0.0, 0.0);
         let mut count = 0usize;
         for x in 0..side {
             for y in 0..side {
-                let Some(color) = rep.colorAtX_y(x, y) else {
-                    continue;
-                };
-                let (mut r, mut g, mut b, mut a) = (0.0, 0.0, 0.0, 0.0);
-                unsafe {
-                    color.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
-                }
+                let (r, g, b, a) = pixel(x, y);
                 if a > 0.5 {
                     sum_r += r;
                     sum_g += g;
@@ -262,16 +200,6 @@ mod tests {
         }
         let n = count as f64;
         (sum_r / n, sum_g / n, sum_b / n, count)
-    }
-
-    #[test]
-    fn badge_uses_trend_only() {
-        assert_eq!(badge_for_state(MemoryTrend::Stable), BadgeKind::None);
-        assert_eq!(badge_for_state(MemoryTrend::Rising), BadgeKind::None);
-        assert_eq!(
-            badge_for_state(MemoryTrend::RisingFast),
-            BadgeKind::RisingFast
-        );
     }
 
     #[test]
@@ -290,16 +218,16 @@ mod tests {
             });
             light.performAsCurrentDrawingAppearance(&build);
         }
-        let status = built.into_inner().expect("status image");
+        let image = built.into_inner().expect("status image");
         assert!(
-            status.template,
+            image.isTemplate(),
             "Normal rising icons follow menu-bar contrast"
         );
 
-        let (_, _, _, light_count) = sample_opaque_average(&status.image, &light);
+        let (_, _, _, light_count) = sample_opaque_average(&image, &light);
         assert!(light_count > 0, "template mask drew nothing under light");
 
-        let (r, g, b, count) = sample_opaque_average(&status.image, &dark);
+        let (r, g, b, count) = sample_opaque_average(&image, &dark);
         assert!(count > 0, "template mask drew no opaque pixels");
         assert!(
             r < 0.05 && g < 0.05 && b < 0.05,
@@ -309,50 +237,28 @@ mod tests {
 
     #[test]
     fn status_glyph_fills_its_chips_up_to_memory_percent() {
-        let status = make_status_image(30, MemoryTrend::Stable, Accent::Neutral);
-        assert!(status.template, "the calm glyph is a template image");
+        let image = make_status_image(30, MemoryTrend::Stable, Accent::Neutral);
+        assert!(image.isTemplate(), "the calm glyph is a template image");
         assert!(
-            !make_status_image(30, MemoryTrend::Stable, Accent::Critical).template,
+            !make_status_image(30, MemoryTrend::Stable, Accent::Critical).isTemplate(),
             "Critical draws its own red; a content tint would leave a template glyph black"
         );
 
         let (width, height) = (GLYPH_WIDTH * 2.0, GLYPH_HEIGHT * 2.0);
-        let rep = unsafe {
-            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
-                NSBitmapImageRep::alloc(),
-                std::ptr::null_mut(),
-                width as NSInteger,
-                height as NSInteger,
-                8,
-                4,
-                true,
-                false,
-                NSDeviceRGBColorSpace,
-                0,
-                0,
-            )
-        }
-        .expect("bitmap");
-        NSGraphicsContext::saveGraphicsState_class();
-        let ctx =
-            NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep).expect("graphics context");
-        NSGraphicsContext::setCurrentContext(Some(&ctx));
-        status.image.drawInRect_fromRect_operation_fraction(
-            NSRect::new(NSPoint::ZERO, NSSize::new(width, height)),
-            NSRect::ZERO,
-            NSCompositingOperation::SourceOver,
-            1.0,
-        );
-        NSGraphicsContext::restoreGraphicsState_class();
-        let alpha_at = |x: f64, y: f64| {
-            let color = rep
-                .colorAtX_y((x * 2.0) as NSInteger, (y * 2.0) as NSInteger)
-                .expect("pixel");
-            color.alphaComponent()
+        let alpha_at = |image: &NSImage, x: f64, y: f64| {
+            let pixel = rasterize(width as NSInteger, height as NSInteger, None, || {
+                image.drawInRect_fromRect_operation_fraction(
+                    NSRect::new(NSPoint::ZERO, NSSize::new(width, height)),
+                    NSRect::ZERO,
+                    NSCompositingOperation::SourceOver,
+                    1.0,
+                );
+            });
+            pixel((x * 2.0) as NSInteger, (y * 2.0) as NSInteger).3
         };
 
-        let first_chip = alpha_at(chip_left(0) + CHIP_WIDTH / 2.0, 6.5);
-        let last_chip = alpha_at(chip_left(3) + CHIP_WIDTH / 2.0, 6.5);
+        let first_chip = alpha_at(&image, chip_left(0) + CHIP_WIDTH / 2.0, 6.5);
+        let last_chip = alpha_at(&image, chip_left(3) + CHIP_WIDTH / 2.0, 6.5);
         assert!(
             first_chip > 0.9,
             "30% fills the first chip, got alpha {first_chip:.2}"
@@ -363,16 +269,7 @@ mod tests {
         );
 
         let rising = make_status_image(30, MemoryTrend::RisingFast, Accent::Neutral);
-        NSGraphicsContext::saveGraphicsState_class();
-        NSGraphicsContext::setCurrentContext(Some(&ctx));
-        rising.image.drawInRect_fromRect_operation_fraction(
-            NSRect::new(NSPoint::ZERO, NSSize::new(width, height)),
-            NSRect::ZERO,
-            NSCompositingOperation::Copy,
-            1.0,
-        );
-        NSGraphicsContext::restoreGraphicsState_class();
-        let badge_disc = alpha_at(17.8, 1.8);
+        let badge_disc = alpha_at(&rising, 17.8, 1.8);
         assert!(
             badge_disc > 0.9,
             "rising badge disc must use full-strength ink, got alpha {badge_disc:.2}"

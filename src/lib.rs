@@ -1,5 +1,5 @@
 pub mod app;
-pub mod format;
+mod format;
 pub mod memory;
 pub mod model;
 

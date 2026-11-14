@@ -9,16 +9,17 @@ use crate::history_view::MemoryHistoryView;
 use crate::login_item::LaunchAtLoginStatus;
 use crate::memory_map_view::MemoryMapView;
 use crate::model::{classify_pressure, MemoryPressure, MemorySnapshot, SystemSnapshot};
+use crate::presentation::set_accessibility_label;
 use crate::pressure_view::PressureView;
 use crate::row_view::{RowContent, RowView};
 use crate::settings::Settings;
 use crate::share::SharedMac;
 use crate::shared_mac_view::SharedMacView;
-use crate::status_icon::{make_status_image, StatusImage};
+use crate::status_icon::make_status_image;
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{msg_send, MainThreadMarker};
+use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusItem,
 };
@@ -157,12 +158,8 @@ impl TrayController {
         let Some(button) = self.status_item.button(mtm) else {
             return;
         };
-        let tooltip = NSString::from_str(tooltip);
-        let accessibility_label = NSString::from_str(accessibility_label);
-        unsafe {
-            let _: () = msg_send![&*button, setToolTip: &*tooltip];
-            let _: () = msg_send![&*button, setAccessibilityLabel: &*accessibility_label];
-        }
+        button.setToolTip(Some(&NSString::from_str(tooltip)));
+        set_accessibility_label(&button, accessibility_label);
         *self.last_tooltip.borrow_mut() = tooltip.to_string();
     }
 
@@ -178,10 +175,11 @@ impl TrayController {
             return;
         }
         if let Some(button) = self.status_item.button(mtm) {
-            let StatusImage { image, template } =
-                make_status_image(percent, trend, Accent::from(pressure));
-            image.setTemplate(template);
-            button.setImage(Some(&image));
+            button.setImage(Some(&make_status_image(
+                percent,
+                trend,
+                Accent::from(pressure),
+            )));
             self.last_gauge.set(Some(gauge));
         }
     }

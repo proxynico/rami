@@ -1,7 +1,10 @@
 use crate::format::Accent;
+use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSColor};
-use objc2_foundation::{NSArray, NSSize};
+use objc2_app_kit::{
+    NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSColor, NSView,
+};
+use objc2_foundation::{NSArray, NSSize, NSString};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MenuTypeScale {
@@ -11,8 +14,6 @@ pub(crate) struct MenuTypeScale {
     pub(crate) stat_row: f64,
 }
 
-/// Top-down geometry of the memory map view: header, a 16×4 cell grid on a
-/// board, and a contact strip.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MapLayout {
     pub(crate) view_width: f64,
@@ -22,10 +23,12 @@ pub(crate) struct MapLayout {
     pub(crate) header_y: f64,
     pub(crate) board_top: f64,
     pub(crate) board_padding: f64,
+    pub(crate) board_radius: f64,
     pub(crate) columns: usize,
     pub(crate) rows: usize,
     pub(crate) cell_height: f64,
     pub(crate) cell_gap: f64,
+    pub(crate) cell_radius: f64,
     pub(crate) strip_height: f64,
 }
 
@@ -42,20 +45,11 @@ pub(crate) struct MeterLayout {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct HistoryMetrics {
-    view_height: f64,
-    band_top_inset: f64,
-    band_bottom: f64,
-    caption_y: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MenuMetrics {
     pub(crate) canvas_width: f64,
     pub(crate) content_inset: f64,
     pub(crate) row_height: f64,
     pub(crate) type_scale: MenuTypeScale,
-    history: HistoryMetrics,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,12 +75,6 @@ impl MenuMetrics {
             caption: 10.0,
             stat_row: 13.0,
         },
-        history: HistoryMetrics {
-            view_height: 36.0,
-            band_top_inset: 4.0,
-            band_bottom: 14.0,
-            caption_y: 1.0,
-        },
     };
 
     pub(crate) fn content_left(&self) -> f64 {
@@ -106,10 +94,12 @@ impl MenuMetrics {
             header_y: 6.0,
             board_top: 30.0,
             board_padding: 4.0,
+            board_radius: 4.0,
             columns: 16,
             rows: 4,
             cell_height: 10.0,
             cell_gap: 2.0,
+            cell_radius: 2.0,
             strip_height: 4.0,
         }
     }
@@ -129,12 +119,12 @@ impl MenuMetrics {
     pub(crate) fn history_layout(&self) -> HistoryLayout {
         HistoryLayout {
             view_width: self.canvas_width,
-            view_height: self.history.view_height,
+            view_height: 36.0,
             band_left: self.content_left(),
             band_right: self.content_right(),
-            band_bottom: self.history.band_bottom,
-            band_top: self.history.view_height - self.history.band_top_inset,
-            caption_y: self.history.caption_y,
+            band_bottom: 14.0,
+            band_top: 32.0,
+            caption_y: 1.0,
             caption_size: self.type_scale.caption,
         }
     }
@@ -220,10 +210,8 @@ pub(crate) fn color_for_accent_alpha(accent: Accent, alpha: f64) -> Retained<NSC
         Accent::Neutral => {
             if alpha >= 0.99 {
                 NSColor::labelColor()
-            } else if alpha >= 0.45 {
-                NSColor::secondaryLabelColor()
             } else {
-                NSColor::tertiaryLabelColor()
+                NSColor::secondaryLabelColor()
             }
         }
         Accent::Warning | Accent::Critical => {
@@ -237,18 +225,39 @@ pub(crate) fn color_for_accent_alpha(accent: Accent, alpha: f64) -> Retained<NSC
     }
 }
 
+pub(crate) fn set_accessibility_role(view: &NSView, role: &str) {
+    let role = NSString::from_str(role);
+    unsafe {
+        let _: () = msg_send![view, setAccessibilityElement: true];
+        let _: () = msg_send![view, setAccessibilityRole: &*role];
+    }
+}
+
+pub(crate) fn set_accessibility_label(view: &NSView, label: &str) {
+    let label = NSString::from_str(label);
+    unsafe {
+        let _: () = msg_send![view, setAccessibilityLabel: &*label];
+    }
+}
+
+pub(crate) fn set_accessibility_value(view: &NSView, value: &str) {
+    let value = NSString::from_str(value);
+    unsafe {
+        let _: () = msg_send![view, setAccessibilityValue: &*value];
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{color_for_accent_alpha, MenuMetrics};
+    use crate::draw::tests::rasterize;
     use crate::format::Accent;
     use block2::RcBlock;
     use objc2::rc::Retained;
-    use objc2::{AnyThread, Message};
     use objc2_app_kit::{
-        NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath,
-        NSBitmapImageRep, NSColor, NSDeviceRGBColorSpace, NSGraphicsContext,
+        NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBezierPath, NSColor,
     };
-    use objc2_foundation::{NSInteger, NSPoint, NSRect, NSSize};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
     use std::cell::RefCell;
 
     fn appearance(name: &objc2_foundation::NSString) -> Retained<NSAppearance> {
@@ -256,45 +265,10 @@ mod tests {
     }
 
     fn sample_fill(color: &NSColor, drawing_appearance: &NSAppearance) -> (f64, f64, f64, f64) {
-        let rep = unsafe {
-            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
-                NSBitmapImageRep::alloc(),
-                std::ptr::null_mut(),
-                4,
-                4,
-                8,
-                4,
-                true,
-                false,
-                NSDeviceRGBColorSpace,
-                0,
-                0,
-            )
-        }
-        .expect("bitmap");
-        NSGraphicsContext::saveGraphicsState_class();
-        let ctx =
-            NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep).expect("graphics context");
-        NSGraphicsContext::setCurrentContext(Some(&ctx));
-        let color = color.retain();
-        let draw = RcBlock::new(move || {
+        rasterize(4, 4, Some(drawing_appearance), || {
             color.setFill();
-            let bounds = NSRect::new(NSPoint::ZERO, NSSize::new(4.0, 4.0));
-            NSBezierPath::bezierPathWithRect(bounds).fill();
-        });
-        drawing_appearance.performAsCurrentDrawingAppearance(&draw);
-        NSGraphicsContext::restoreGraphicsState_class();
-        let sampled = rep
-            .colorAtX_y(1 as NSInteger, 1 as NSInteger)
-            .expect("pixel");
-        let mut r = 0.0;
-        let mut g = 0.0;
-        let mut b = 0.0;
-        let mut a = 0.0;
-        unsafe {
-            sampled.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
-        }
-        (r, g, b, a)
+            NSBezierPath::fillRect(NSRect::new(NSPoint::ZERO, NSSize::new(4.0, 4.0)));
+        })(1, 1)
     }
 
     #[test]

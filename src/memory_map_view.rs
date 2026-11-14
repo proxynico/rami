@@ -3,15 +3,18 @@
 //! is empty. The cell size is spoken to VoiceOver, not drawn.
 
 use crate::draw::{draw_text, draw_text_right, fill_swatch, text_width};
-use crate::format::{Accent, MemoryMapDisplay};
-use crate::presentation::{mark_color, MenuMetrics};
+use crate::format::{Accent, MemoryCategory, MemoryMapDisplay};
+use crate::presentation::{
+    mark_color, set_accessibility_label, set_accessibility_role, set_accessibility_value,
+    MapLayout, MenuMetrics,
+};
 use objc2::rc::Retained;
 use objc2::runtime::NSObjectProtocol;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSFont, NSFontWeightRegular, NSFontWeightSemibold, NSView,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use std::cell::RefCell;
 
 /// Share of the strip width before the key notch, off-center like a DIMM's.
@@ -27,7 +30,6 @@ struct MapState {
 }
 
 pub struct MemoryMapIvars {
-    metrics: MenuMetrics,
     state: RefCell<MapState>,
 }
 
@@ -53,23 +55,20 @@ define_class!(
 );
 
 impl MemoryMapView {
-    pub fn new(mtm: MainThreadMarker, metrics: MenuMetrics) -> Retained<Self> {
-        let frame = NSRect::new(NSPoint::ZERO, metrics.map_layout().view_size());
+    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let frame = NSRect::new(
+            NSPoint::ZERO,
+            MenuMetrics::STANDARD.map_layout().view_size(),
+        );
         let this = Self::alloc(mtm).set_ivars(MemoryMapIvars {
-            metrics,
             state: RefCell::new(MapState {
                 map: None,
                 accent: Accent::Neutral,
             }),
         });
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
-        let role = NSString::from_str("AXGroup");
-        let label = NSString::from_str("Memory");
-        unsafe {
-            let _: () = msg_send![&*view, setAccessibilityElement: true];
-            let _: () = msg_send![&*view, setAccessibilityRole: &*role];
-            let _: () = msg_send![&*view, setAccessibilityLabel: &*label];
-        }
+        set_accessibility_role(&view, "AXGroup");
+        set_accessibility_label(&view, "Memory");
         view
     }
 
@@ -81,13 +80,13 @@ impl MemoryMapView {
                 return;
             }
         }
-        let value = NSString::from_str(&format!(
-            "{} percent, {} used, {}",
-            map.used_percent, map.used_of_total, map.cell_caption
-        ));
-        unsafe {
-            let _: () = msg_send![self, setAccessibilityValue: &*value];
-        }
+        set_accessibility_value(
+            self,
+            &format!(
+                "{} percent, {} used, {}",
+                map.used_percent, map.used_of_total, map.cell_caption
+            ),
+        );
         *self.ivars().state.borrow_mut() = MapState {
             map: Some(map.clone()),
             accent,
@@ -100,8 +99,8 @@ impl MemoryMapView {
         let Some(map) = &state.map else {
             return;
         };
-        let layout = self.ivars().metrics.map_layout();
-        let scale = self.ivars().metrics.type_scale;
+        let layout = MenuMetrics::STANDARD.map_layout();
+        let scale = MenuMetrics::STANDARD.type_scale;
 
         let title_font =
             NSFont::systemFontOfSize_weight(scale.map_title, unsafe { NSFontWeightSemibold });
@@ -126,39 +125,7 @@ impl MemoryMapView {
             &NSColor::secondaryLabelColor(),
         );
 
-        let board = NSRect::new(
-            NSPoint::new(layout.left + 0.5, layout.board_top + 0.5),
-            NSSize::new(
-                layout.right - layout.left - 1.0,
-                layout.board_height() - 1.0,
-            ),
-        );
-        let board_path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(board, 4.0, 4.0);
-        NSColor::labelColor()
-            .colorWithAlphaComponent(0.04)
-            .setFill();
-        board_path.fill();
-        NSColor::labelColor()
-            .colorWithAlphaComponent(0.12)
-            .setStroke();
-        board_path.setLineWidth(1.0);
-        board_path.stroke();
-
-        let cell_width = layout.cell_width();
-        for (index, category) in map.cells.iter().enumerate() {
-            let column = (index / layout.rows) as f64;
-            let row = (index % layout.rows) as f64;
-            let cell = NSRect::new(
-                NSPoint::new(
-                    layout.left + layout.board_padding + column * (cell_width + layout.cell_gap),
-                    layout.board_top
-                        + layout.board_padding
-                        + row * (layout.cell_height + layout.cell_gap),
-                ),
-                NSSize::new(cell_width, layout.cell_height),
-            );
-            fill_swatch(cell, category.swatch(), state.accent, 2.0);
-        }
+        draw_board(&layout, &map.cells, state.accent);
 
         let strip_left = layout.left + STRIP_INSET;
         let strip_right = layout.right - STRIP_INSET;
@@ -175,6 +142,45 @@ impl MemoryMapView {
                 NSSize::new(to - from, layout.strip_height),
             ));
         }
+    }
+}
+
+pub(crate) fn draw_board(layout: &MapLayout, cells: &[MemoryCategory], accent: Accent) {
+    let board = NSRect::new(
+        NSPoint::new(layout.left + 0.5, layout.board_top + 0.5),
+        NSSize::new(
+            layout.right - layout.left - 1.0,
+            layout.board_height() - 1.0,
+        ),
+    );
+    let board_path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+        board,
+        layout.board_radius,
+        layout.board_radius,
+    );
+    NSColor::labelColor()
+        .colorWithAlphaComponent(0.04)
+        .setFill();
+    board_path.fill();
+    NSColor::labelColor()
+        .colorWithAlphaComponent(0.12)
+        .setStroke();
+    board_path.stroke();
+
+    let cell_width = layout.cell_width();
+    for (index, category) in cells.iter().enumerate() {
+        let column = (index / layout.rows) as f64;
+        let row = (index % layout.rows) as f64;
+        let cell = NSRect::new(
+            NSPoint::new(
+                layout.left + layout.board_padding + column * (cell_width + layout.cell_gap),
+                layout.board_top
+                    + layout.board_padding
+                    + row * (layout.cell_height + layout.cell_gap),
+            ),
+            NSSize::new(cell_width, layout.cell_height),
+        );
+        fill_swatch(cell, category.swatch(), accent, layout.cell_radius);
     }
 }
 

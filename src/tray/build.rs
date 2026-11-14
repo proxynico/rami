@@ -7,14 +7,13 @@ use crate::format::{Accent, LEGEND_CATEGORIES};
 use crate::history_view::MemoryHistoryView;
 use crate::memory_map_view::MemoryMapView;
 use crate::model::MemoryPressure;
-use crate::presentation::MenuMetrics;
 use crate::pressure_view::PressureView;
 use crate::row_view::{RowContent, RowView};
 use crate::shared_mac_view::SharedMacView;
 use crate::trend::MemoryTrend;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{msg_send, sel, MainThreadMarker, MainThreadOnly};
+use objc2::{sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSCellImagePosition, NSMenu, NSMenuItem, NSStatusBar, NSView};
 use objc2_foundation::NSString;
 use std::cell::{Cell, RefCell};
@@ -38,29 +37,26 @@ fn make_command_item(
             item.setTarget(Some(target));
         }
     }
-    item.setEnabled(true);
     item
 }
 
 /// An untitled, enabled item that shows `view` instead of a title.
 fn make_view_item(mtm: MainThreadMarker, view: &NSView) -> Retained<NSMenuItem> {
     let item = make_command_item(mtm, "", None, None);
-    unsafe {
-        let _: () = msg_send![&item, setView: view];
-    }
+    item.setView(Some(view));
     item
 }
 
-fn make_row(mtm: MainThreadMarker, metrics: MenuMetrics) -> RowItem {
-    let view = RowView::new(mtm, metrics);
+fn make_row(mtm: MainThreadMarker) -> RowItem {
+    let view = RowView::new(mtm);
     RowItem {
         item: make_view_item(mtm, &view),
         view,
     }
 }
 
-fn make_muted_row(mtm: MainThreadMarker, metrics: MenuMetrics, label: &str) -> RowItem {
-    let row = make_row(mtm, metrics);
+fn make_muted_row(mtm: MainThreadMarker, label: &str) -> RowItem {
+    let row = make_row(mtm);
     row.view.update(&RowContent::muted(label), Accent::Neutral);
     row
 }
@@ -75,11 +71,10 @@ pub(super) fn build_controller(
     menu.setAutoenablesItems(false);
     let target = Some(&*refresh_target);
 
-    let metrics = MenuMetrics::STANDARD;
-    let map_view = MemoryMapView::new(mtm, metrics);
-    let pressure_view = PressureView::new(mtm, metrics);
-    let history_view = MemoryHistoryView::new(mtm, metrics);
-    let shared_view = SharedMacView::new(mtm, metrics);
+    let map_view = MemoryMapView::new(mtm);
+    let pressure_view = PressureView::new(mtm);
+    let history_view = MemoryHistoryView::new(mtm);
+    let shared_view = SharedMacView::new(mtm);
 
     let auto_refresh_item =
         make_command_item(mtm, "Auto-Refresh", Some(sel!(toggleAutoRefresh:)), target);
@@ -162,13 +157,13 @@ pub(super) fn build_controller(
         history_item: make_view_item(mtm, &history_view),
         history_view,
         legend_items: (0..LEGEND_CATEGORIES.len())
-            .map(|_| make_row(mtm, metrics))
+            .map(|_| make_row(mtm))
             .collect(),
-        swap_item: make_row(mtm, metrics),
-        loading_item: make_muted_row(mtm, metrics, "Loading…"),
-        cpu_item: make_row(mtm, metrics),
-        gpu_item: make_row(mtm, metrics),
-        shared_status_item: make_row(mtm, metrics),
+        swap_item: make_row(mtm),
+        loading_item: make_muted_row(mtm, "Loading…"),
+        cpu_item: make_row(mtm),
+        gpu_item: make_row(mtm),
+        shared_status_item: make_row(mtm),
         shared_item: make_view_item(mtm, &shared_view),
         shared_view,
         settings_item,
