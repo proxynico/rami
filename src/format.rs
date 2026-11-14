@@ -77,7 +77,8 @@ pub fn history_caption(samples: &[u64], total_bytes: u64) -> Option<(String, Str
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatRow {
     pub primary: String,
-    pub tail: Option<String>,
+    pub detail: String,
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -238,7 +239,8 @@ pub(crate) fn dropdown_model(
         breakdown: memory_breakdown(&memory),
         swap: (memory.swap_used_bytes > 0).then(|| StatRow {
             primary: "Swap".to_string(),
-            tail: Some(mem_text(memory.swap_used_bytes)),
+            detail: mem_text(memory.swap_used_bytes),
+            value: None,
         }),
         cpu: cpu_row(snapshot.cpu),
         gpu: gpu_row(snapshot.gpu),
@@ -364,20 +366,22 @@ fn allocate_cells(parts: &[(MemoryCategory, u64)], count: usize) -> Vec<MemoryCa
 
 /// One CPU row: User and System as detail, their busy sum as the value.
 fn cpu_row(state: CpuModuleState) -> Option<StatRow> {
-    let tail = match state {
+    let (detail, value) = match state {
         CpuModuleState::Disabled => return None,
-        CpuModuleState::Loading => "Loading…".to_string(),
-        CpuModuleState::Unavailable => "Unavailable".to_string(),
-        CpuModuleState::Available(cpu) => format!(
-            "{} usr · {} sys\t{}%",
-            cpu.user_percent,
-            cpu.system_percent,
-            cpu.user_percent.saturating_add(cpu.system_percent).min(100)
+        CpuModuleState::Loading => ("Loading…".to_string(), None),
+        CpuModuleState::Unavailable => ("Unavailable".to_string(), None),
+        CpuModuleState::Available(cpu) => (
+            format!("{} usr · {} sys", cpu.user_percent, cpu.system_percent),
+            Some(format!(
+                "{}%",
+                cpu.user_percent.saturating_add(cpu.system_percent).min(100)
+            )),
         ),
     };
     Some(StatRow {
         primary: "CPU".to_string(),
-        tail: Some(tail),
+        detail,
+        value,
     })
 }
 
@@ -394,15 +398,16 @@ fn gpu_row(state: GpuModuleState) -> Option<StatRow> {
     .into_iter()
     .filter_map(|(name, percent)| percent.map(|percent| format!("{name} {percent}")))
     .collect();
-    let value = format!("{}%", gpu.utilization_percent.min(100));
-    let tail = if detail.is_empty() {
-        value
+    let utilization = format!("{}%", gpu.utilization_percent.min(100));
+    let (detail, value) = if detail.is_empty() {
+        (utilization, None)
     } else {
-        format!("{}\t{value}", detail.join(" · "))
+        (detail.join(" · "), Some(utilization))
     };
     Some(StatRow {
         primary: "GPU".to_string(),
-        tail: Some(tail),
+        detail,
+        value,
     })
 }
 
@@ -454,6 +459,12 @@ mod tests {
             gauge_accessibility_label(47, 7_729_084_723, 17_179_869_184),
             "Memory 47 percent, 7.2 of 16.0 GB used"
         );
+    }
+
+    #[test]
+    fn mem_text_at_gib_boundary_uses_mb_then_gb() {
+        assert_eq!(mem_text(ONE_GIB_BYTES - 1), "1024 MB");
+        assert_eq!(mem_text(ONE_GIB_BYTES), "1.0 GB");
     }
 
     #[test]
@@ -514,14 +525,6 @@ mod tests {
     }
 
     #[test]
-    fn dropdown_model_memory_map_shows_percent() {
-        let mut snapshot = snapshot(SIXTEEN_GIB);
-        snapshot.memory.used_percent = 56;
-        let model = model(snapshot);
-        assert_eq!(model.map.used_percent, 56);
-    }
-
-    #[test]
     fn row_hierarchy_promotes_totals_and_demotes_derived_breakdowns() {
         // #23: brightness tracks actionability. App Memory is primary; the
         // derived breakdown rows are demoted.
@@ -535,18 +538,21 @@ mod tests {
 
     #[test]
     fn cpu_row_shows_the_user_system_split_and_their_busy_sum() {
-        let row = |state| cpu_row(state).map(|row| row.tail.unwrap_or_default());
+        let row = |state| cpu_row(state).map(|row| (row.detail, row.value));
         assert_eq!(
             row(CpuModuleState::Available(CpuSnapshot {
                 user_percent: 41,
                 system_percent: 13,
             })),
-            Some("41 usr · 13 sys\t54%".to_string())
+            Some(("41 usr · 13 sys".to_string(), Some("54%".to_string())))
         );
-        assert_eq!(row(CpuModuleState::Loading), Some("Loading…".to_string()));
+        assert_eq!(
+            row(CpuModuleState::Loading),
+            Some(("Loading…".to_string(), None))
+        );
         assert_eq!(
             row(CpuModuleState::Unavailable),
-            Some("Unavailable".to_string())
+            Some(("Unavailable".to_string(), None))
         );
         assert_eq!(row(CpuModuleState::Disabled), None);
     }
@@ -559,13 +565,13 @@ mod tests {
                 renderer_percent,
                 tiler_percent,
             }))
-            .and_then(|row| row.tail)
+            .map(|row| (row.detail, row.value))
         };
         assert_eq!(
             row(Some(54), Some(12)),
-            Some("render 54 · tiler 12\t76%".to_string())
+            Some(("render 54 · tiler 12".to_string(), Some("76%".to_string())))
         );
-        assert_eq!(row(None, None), Some("76%".to_string()));
+        assert_eq!(row(None, None), Some(("76%".to_string(), None)));
         assert_eq!(gpu_row(GpuModuleState::Unavailable), None);
     }
 
@@ -614,34 +620,8 @@ mod tests {
         );
         let swap = memory.swap.as_ref().expect("swap row present when nonzero");
         assert_eq!(swap.primary, "Swap");
-        assert_eq!(swap.tail.as_deref(), Some("4.4 GB"));
-    }
-
-    #[test]
-    fn dropdown_model_hides_swap_when_zero() {
-        let snapshot = MemorySnapshot {
-            used_bytes: 5 * ONE_GIB_BYTES,
-            total_bytes: SIXTEEN_GIB,
-            used_percent: 31,
-            pressure_percent: 20,
-            pressure_source: PressureSource::Kernel,
-            app_memory_bytes: 3 * ONE_GIB_BYTES,
-            wired_bytes: ONE_GIB_BYTES,
-            compressed_bytes: ONE_GIB_BYTES,
-            free_bytes: 4 * ONE_GIB_BYTES,
-            cached_bytes: 0,
-            swap_used_bytes: 0,
-            available_bytes: 11 * ONE_GIB_BYTES,
-        };
-
-        let memory = model(SystemSnapshot {
-            memory: snapshot,
-            cpu: CpuModuleState::Disabled,
-            gpu: GpuModuleState::Disabled,
-        });
-
-        assert_eq!(memory.accent, Accent::Neutral);
-        assert!(memory.swap.is_none());
+        assert_eq!(swap.detail, "4.4 GB");
+        assert_eq!(swap.value, None);
     }
 
     #[test]

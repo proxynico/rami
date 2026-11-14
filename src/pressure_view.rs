@@ -1,21 +1,23 @@
 //! The pressure row: label, a meter with ticks where Warning and Critical
 //! begin, and the percent.
 
-use crate::draw::{draw_text, draw_text_right};
+use crate::draw::{centered_text_y, draw_text, draw_text_right};
 use crate::format::Accent;
 use crate::model::{CRITICAL_PRESSURE_PCT, WARNING_PRESSURE_PCT};
-use crate::presentation::{mark_color, MenuMetrics};
+use crate::presentation::{
+    color_for_accent, mark_color, set_accessibility_label, set_accessibility_role,
+    set_accessibility_value, MenuMetrics,
+};
 use objc2::rc::Retained;
 use objc2::runtime::NSObjectProtocol;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBezierPath, NSColor, NSFont, NSFontWeightRegular, NSView};
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use std::cell::Cell;
 
 const TICK_HEIGHT: f64 = 10.0;
 
 pub struct PressureIvars {
-    metrics: MenuMetrics,
     reading: Cell<Option<(u8, Accent)>>,
 }
 
@@ -41,20 +43,17 @@ define_class!(
 );
 
 impl PressureView {
-    pub fn new(mtm: MainThreadMarker, metrics: MenuMetrics) -> Retained<Self> {
-        let frame = NSRect::new(NSPoint::ZERO, metrics.meter_layout().view_size());
+    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let frame = NSRect::new(
+            NSPoint::ZERO,
+            MenuMetrics::STANDARD.meter_layout().view_size(),
+        );
         let this = Self::alloc(mtm).set_ivars(PressureIvars {
-            metrics,
             reading: Cell::new(None),
         });
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
-        let role = NSString::from_str("AXGroup");
-        let label = NSString::from_str("Pressure");
-        unsafe {
-            let _: () = msg_send![&*view, setAccessibilityElement: true];
-            let _: () = msg_send![&*view, setAccessibilityRole: &*role];
-            let _: () = msg_send![&*view, setAccessibilityLabel: &*label];
-        }
+        set_accessibility_role(&view, "AXGroup");
+        set_accessibility_label(&view, "Pressure");
         view
     }
 
@@ -64,10 +63,7 @@ impl PressureView {
             return;
         }
         self.ivars().reading.set(Some((percent, accent)));
-        let value = NSString::from_str(&format!("{percent} percent"));
-        unsafe {
-            let _: () = msg_send![self, setAccessibilityValue: &*value];
-        }
+        set_accessibility_value(self, &format!("{percent} percent"));
         self.setNeedsDisplay(true);
     }
 
@@ -76,19 +72,23 @@ impl PressureView {
             return;
         };
         let percent = percent.min(100);
-        let layout = self.ivars().metrics.meter_layout();
+        let layout = MenuMetrics::STANDARD.meter_layout();
         let font = NSFont::monospacedDigitSystemFontOfSize_weight(
-            self.ivars().metrics.type_scale.stat_row,
+            MenuMetrics::STANDARD.type_scale.stat_row,
             unsafe { NSFontWeightRegular },
         );
-        let text_y = (layout.view_height - 16.0) / 2.0;
-        let (label_color, value_color) = match accent {
-            Accent::Neutral => (NSColor::labelColor(), NSColor::secondaryLabelColor()),
-            Accent::Warning | Accent::Critical => {
-                (NSColor::systemRedColor(), NSColor::systemRedColor())
-            }
+        let text_y = centered_text_y(layout.view_height);
+        let value_color = match accent {
+            Accent::Neutral => NSColor::secondaryLabelColor(),
+            Accent::Warning | Accent::Critical => NSColor::systemRedColor(),
         };
-        draw_text("Pressure", layout.label_x, text_y, &font, &label_color);
+        draw_text(
+            "Pressure",
+            layout.label_x,
+            text_y,
+            &font,
+            &color_for_accent(accent),
+        );
         draw_text_right(
             &format!("{percent}%"),
             layout.value_right,

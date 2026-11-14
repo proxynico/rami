@@ -42,6 +42,10 @@ pub(crate) fn draw_text_right(text: &str, right: f64, y: f64, font: &NSFont, col
     draw_text(text, right - text_width(text, font), y, font, color);
 }
 
+pub(crate) fn centered_text_y(height: f64) -> f64 {
+    (height - 16.0) / 2.0
+}
+
 pub(crate) fn fill_swatch(rect: NSRect, swatch: Swatch, accent: Accent, radius: f64) {
     let shape = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, radius, radius);
     match swatch {
@@ -95,7 +99,7 @@ pub(crate) fn fill_swatch(rect: NSRect, swatch: Swatch, accent: Accent, radius: 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use block2::RcBlock;
     use objc2::AnyThread;
@@ -104,16 +108,18 @@ mod tests {
     };
     use objc2_foundation::NSInteger;
 
-    #[test]
-    fn orange_swatch_resolves_to_dark_orange_in_a_dark_menu() {
-        // A mark color resolved outside the draw keeps whichever mode was
-        // active then. The swatch must pick orange for the drawing appearance.
+    pub(crate) fn rasterize(
+        width: NSInteger,
+        height: NSInteger,
+        appearance: Option<&NSAppearance>,
+        draw: impl Fn(),
+    ) -> impl Fn(NSInteger, NSInteger) -> (f64, f64, f64, f64) {
         let rep = unsafe {
             NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
                 NSBitmapImageRep::alloc(),
                 std::ptr::null_mut(),
-                4,
-                4,
+                width,
+                height,
                 8,
                 4,
                 true,
@@ -128,22 +134,31 @@ mod tests {
         let ctx =
             NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep).expect("graphics context");
         NSGraphicsContext::setCurrentContext(Some(&ctx));
+        match appearance {
+            Some(appearance) => appearance.performAsCurrentDrawingAppearance(&RcBlock::new(draw)),
+            None => draw(),
+        }
+        NSGraphicsContext::restoreGraphicsState_class();
+        move |x, y| {
+            let color = rep.colorAtX_y(x, y).expect("pixel");
+            let (mut r, mut g, mut b, mut a) = (0.0, 0.0, 0.0, 0.0);
+            unsafe {
+                color.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
+            }
+            (r, g, b, a)
+        }
+    }
+
+    #[test]
+    fn orange_swatch_resolves_to_dark_orange_in_a_dark_menu() {
+        // A mark color resolved outside the draw keeps whichever mode was
+        // active then. The swatch must pick orange for the drawing appearance.
         let dark = NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua })
             .expect("dark appearance");
-        let draw = RcBlock::new(|| {
+        let (r, g, b, a) = rasterize(4, 4, Some(&dark), || {
             let rect = NSRect::new(NSPoint::ZERO, NSSize::new(4.0, 4.0));
             fill_swatch(rect, Swatch::Accent(100), Accent::Neutral, 0.0);
-        });
-        dark.performAsCurrentDrawingAppearance(&draw);
-        NSGraphicsContext::restoreGraphicsState_class();
-
-        let color = rep
-            .colorAtX_y(1 as NSInteger, 1 as NSInteger)
-            .expect("pixel");
-        let (mut r, mut g, mut b, mut a) = (0.0, 0.0, 0.0, 0.0);
-        unsafe {
-            color.getRed_green_blue_alpha(&mut r, &mut g, &mut b, &mut a);
-        }
+        })(1, 1);
         assert!(
             r > 0.8 && (0.45..0.65).contains(&g) && b < 0.4,
             "dark menu must draw the dark-mode orange, got rgba({r:.2},{g:.2},{b:.2},{a:.2})"

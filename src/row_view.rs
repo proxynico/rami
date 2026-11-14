@@ -4,14 +4,17 @@
 //! submenu-arrow column on the right of every titled item once any item has
 //! a submenu, which left the rows short of the custom views' right edge.
 
-use crate::draw::{draw_text, draw_text_right, fill_swatch, text_width};
+use crate::draw::{centered_text_y, draw_text, draw_text_right, fill_swatch, text_width};
 use crate::format::{Accent, LegendRow, StatRow, Swatch};
-use crate::presentation::{color_for_accent_alpha, MenuMetrics};
+use crate::presentation::{
+    color_for_accent_alpha, set_accessibility_label, set_accessibility_role,
+    set_accessibility_value, MenuMetrics,
+};
 use objc2::rc::Retained;
 use objc2::runtime::NSObjectProtocol;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSColor, NSFont, NSFontWeightRegular, NSView};
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_app_kit::{NSFont, NSFontWeightRegular, NSView};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use std::cell::RefCell;
 
 const SWATCH_SIZE: f64 = 9.0;
@@ -25,7 +28,6 @@ const DEMOTED_ALPHA: f64 = 0.55;
 pub(crate) enum RowStrength {
     Primary,
     Demoted,
-    Muted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,20 +54,13 @@ impl RowContent {
         }
     }
 
-    /// A stat row's tail splits on a tab: secondary detail, then an
-    /// emphasized value (an app's growth, CPU busy %, GPU utilization).
     pub(crate) fn stat(row: &StatRow) -> Self {
-        let (detail, value) = match row.tail.as_deref().map(|tail| tail.split_once('\t')) {
-            Some(Some((detail, value))) => (Some(detail.to_string()), Some(value.to_string())),
-            Some(None) => (row.tail.clone(), None),
-            None => (None, None),
-        };
         Self {
             swatch: None,
             label: row.primary.clone(),
             strength: RowStrength::Primary,
-            detail,
-            value,
+            detail: Some(row.detail.clone()),
+            value: row.value.clone(),
         }
     }
 
@@ -84,7 +79,7 @@ impl RowContent {
         Self {
             swatch: None,
             label: label.to_string(),
-            strength: RowStrength::Muted,
+            strength: RowStrength::Demoted,
             detail: None,
             value: None,
         }
@@ -97,7 +92,6 @@ struct RowState {
 }
 
 pub struct RowIvars {
-    metrics: MenuMetrics,
     state: RefCell<RowState>,
 }
 
@@ -123,24 +117,20 @@ define_class!(
 );
 
 impl RowView {
-    pub fn new(mtm: MainThreadMarker, metrics: MenuMetrics) -> Retained<Self> {
+    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let metrics = MenuMetrics::STANDARD;
         let frame = NSRect::new(
             NSPoint::ZERO,
             NSSize::new(metrics.canvas_width, metrics.row_height),
         );
         let this = Self::alloc(mtm).set_ivars(RowIvars {
-            metrics,
             state: RefCell::new(RowState {
                 content: None,
                 accent: Accent::Neutral,
             }),
         });
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
-        let role = NSString::from_str("AXStaticText");
-        unsafe {
-            let _: () = msg_send![&*view, setAccessibilityElement: true];
-            let _: () = msg_send![&*view, setAccessibilityRole: &*role];
-        }
+        set_accessibility_role(&view, "AXStaticText");
         view
     }
 
@@ -156,12 +146,8 @@ impl RowView {
             .into_iter()
             .flatten()
             .collect();
-        let label = NSString::from_str(&content.label);
-        let value = NSString::from_str(&spoken.join(" "));
-        unsafe {
-            let _: () = msg_send![self, setAccessibilityLabel: &*label];
-            let _: () = msg_send![self, setAccessibilityValue: &*value];
-        }
+        set_accessibility_label(self, &content.label);
+        set_accessibility_value(self, &spoken.join(" "));
         *self.ivars().state.borrow_mut() = RowState {
             content: Some(content.clone()),
             accent,
@@ -174,12 +160,12 @@ impl RowView {
         let Some(content) = &state.content else {
             return;
         };
-        let metrics = self.ivars().metrics;
+        let metrics = MenuMetrics::STANDARD;
         let font =
             NSFont::monospacedDigitSystemFontOfSize_weight(metrics.type_scale.stat_row, unsafe {
                 NSFontWeightRegular
             });
-        let text_y = (metrics.row_height - 16.0) / 2.0;
+        let text_y = centered_text_y(metrics.row_height);
         let mut label_x = metrics.content_left();
 
         if let Some(swatch) = content.swatch {
@@ -216,7 +202,6 @@ impl RowView {
         let label_color = match content.strength {
             RowStrength::Primary => color_for_accent_alpha(state.accent, 1.0),
             RowStrength::Demoted => color_for_accent_alpha(state.accent, DEMOTED_ALPHA),
-            RowStrength::Muted => NSColor::secondaryLabelColor(),
         };
         let label = fit_text(&content.label, &font, right - label_x);
         draw_text(&label, label_x, text_y, &font, &label_color);
@@ -242,21 +227,6 @@ fn fit_text(text: &str, font: &NSFont, max_width: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn stat_tails_split_into_detail_and_emphasized_value() {
-        let row = |tail: Option<&str>| StatRow {
-            primary: "CPU".to_string(),
-            tail: tail.map(str::to_string),
-        };
-        let cpu = RowContent::stat(&row(Some("12 usr · 6 sys\t18%")));
-        assert_eq!(cpu.detail.as_deref(), Some("12 usr · 6 sys"));
-        assert_eq!(cpu.value.as_deref(), Some("18%"));
-
-        let swap = RowContent::stat(&row(Some("4.7 GB")));
-        assert_eq!(swap.detail.as_deref(), Some("4.7 GB"));
-        assert_eq!(swap.value, None);
-    }
 
     #[test]
     fn long_labels_are_cut_to_leave_room_for_the_values() {

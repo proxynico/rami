@@ -4,12 +4,15 @@
 
 use crate::draw::{draw_text, draw_text_right};
 use crate::format::{history_caption, Accent};
-use crate::presentation::{color_for_accent_alpha, mark_color, HistoryLayout, MenuMetrics};
+use crate::presentation::{
+    color_for_accent_alpha, mark_color, set_accessibility_label, set_accessibility_role,
+    set_accessibility_value, HistoryLayout, MenuMetrics,
+};
 use objc2::rc::Retained;
 use objc2::runtime::NSObjectProtocol;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBezierPath, NSColor, NSFont, NSFontWeightRegular, NSView};
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSCopying, NSPoint, NSRect, NSSize};
 use std::cell::RefCell;
 /// Below this byte span the sparkline collapses to a midline so tiny page
 /// jitter does not fill the band. Deliberately lower than the trend
@@ -58,7 +61,6 @@ struct HistoryState {
 }
 
 pub struct MemoryHistoryIvars {
-    metrics: MenuMetrics,
     state: RefCell<HistoryState>,
 }
 
@@ -79,10 +81,12 @@ define_class!(
 );
 
 impl MemoryHistoryView {
-    pub fn new(mtm: MainThreadMarker, metrics: MenuMetrics) -> Retained<Self> {
-        let frame = NSRect::new(NSPoint::ZERO, metrics.history_layout().view_size());
+    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let frame = NSRect::new(
+            NSPoint::ZERO,
+            MenuMetrics::STANDARD.history_layout().view_size(),
+        );
         let this = Self::alloc(mtm).set_ivars(MemoryHistoryIvars {
-            metrics,
             state: RefCell::new(HistoryState {
                 samples: Vec::new(),
                 total_bytes: 0,
@@ -90,13 +94,8 @@ impl MemoryHistoryView {
             }),
         });
         let view: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
-        let role = NSString::from_str("AXGroup");
-        let label = NSString::from_str("Memory history");
-        unsafe {
-            let _: () = msg_send![&*view, setAccessibilityElement: true];
-            let _: () = msg_send![&*view, setAccessibilityRole: &*role];
-            let _: () = msg_send![&*view, setAccessibilityLabel: &*label];
-        }
+        set_accessibility_role(&view, "AXGroup");
+        set_accessibility_label(&view, "Memory history");
         view
     }
 
@@ -121,16 +120,13 @@ impl MemoryHistoryView {
             total_bytes,
             accent,
         };
-        let value = NSString::from_str(&value);
-        unsafe {
-            let _: () = msg_send![self, setAccessibilityValue: &*value];
-        }
+        set_accessibility_value(self, &value);
         self.setNeedsDisplay(true);
     }
 
     fn render(&self) {
         let state = self.ivars().state.borrow();
-        let layout = self.ivars().metrics.history_layout();
+        let layout = MenuMetrics::STANDARD.history_layout();
         let mark = mark_color(state.accent);
         self.draw_caption(&state.samples, state.total_bytes, &layout, state.accent);
 
@@ -151,22 +147,19 @@ impl MemoryHistoryView {
             )
         };
 
-        let area = NSBezierPath::bezierPath();
-        area.moveToPoint(to_view(&points[0]));
+        let line = NSBezierPath::bezierPath();
+        line.moveToPoint(to_view(&points[0]));
         for point in &points[1..] {
-            area.lineToPoint(to_view(point));
+            line.lineToPoint(to_view(point));
         }
+
+        let area = line.copy();
         area.lineToPoint(NSPoint::new(layout.band_right, layout.band_bottom));
         area.lineToPoint(NSPoint::new(layout.band_left, layout.band_bottom));
         area.closePath();
         mark.colorWithAlphaComponent(FILL_ALPHA).setFill();
         area.fill();
 
-        let line = NSBezierPath::bezierPath();
-        line.moveToPoint(to_view(&points[0]));
-        for point in &points[1..] {
-            line.lineToPoint(to_view(point));
-        }
         line.setLineWidth(LINE_WIDTH);
         mark.colorWithAlphaComponent(LINE_ALPHA).setStroke();
         line.stroke();
