@@ -21,20 +21,7 @@ process_binary_path() {
 }
 
 binary_mtime() {
-  local binary_path="$1"
-  local mtime
-
-  if [ ! -f "$binary_path" ]; then
-    printf '%s' "unavailable (binary not found)"
-    return
-  fi
-
-  if ! mtime="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S %z' "$binary_path" 2>/dev/null)"; then
-    printf '%s' "unavailable"
-    return
-  fi
-
-  printf '%s' "$mtime"
+  stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S %z' "$1" 2>/dev/null || printf 'unavailable'
 }
 
 report_running_binaries() {

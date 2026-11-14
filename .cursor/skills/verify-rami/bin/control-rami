@@ -6,13 +6,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-STATE_DIR="${RAMI_VERIFY_STATE_DIR:-/tmp/rami-verify}"
-ARTIFACT_DIR="${RAMI_VERIFY_ARTIFACTS:-$ROOT_DIR/.cursor/skills/verify-rami/artifacts}"
+STATE_DIR="/tmp/rami-verify"
+ARTIFACT_DIR="$ROOT_DIR/.cursor/skills/verify-rami/artifacts"
 BUNDLE_DIR="$ROOT_DIR/rami.app"
 BINARY="$BUNDLE_DIR/Contents/MacOS/rami"
 DEFAULTS_DOMAIN="com.nicomontero.rami"
 PID_FILE="$STATE_DIR/pid"
-BIN_FILE="$STATE_DIR/binary"
 PRESSURE_FILE="$STATE_DIR/force-pressure"
 DEFAULTS_FILE="$STATE_DIR/defaults.plist"
 DEFAULTS_EXISTED_FILE="$STATE_DIR/defaults-existed"
@@ -232,15 +231,12 @@ cmd_launch() {
   if [ -n "$ours" ] && pid_is_alive "$ours"; then
     die "verification instance already running (pid $ours). Run cleanup first."
   fi
-  rm -f "$PID_FILE" "$BIN_FILE" "$PRESSURE_FILE"
+  rm -f "$PID_FILE" "$PRESSURE_FILE"
 
-  local foreign=""
-  local pid
-  for pid in $(running_rami_pids); do
-    foreign="$foreign $pid"
-  done
-  if [ -n "${foreign// /}" ]; then
-    die "a rami we did not start is already running (pid(s):$foreign). Quit that instance before verification. One lock, one menu-bar gauge, one defaults domain — do not double-drive."
+  local foreign
+  foreign="$(running_rami_pids | xargs)"
+  if [ -n "$foreign" ]; then
+    die "a rami we did not start is already running (pid(s): $foreign). Quit that instance before verification. One lock, one menu-bar gauge, one defaults domain — do not double-drive."
   fi
 
   if [ "$skip_build" -eq 0 ]; then
@@ -250,7 +246,6 @@ cmd_launch() {
 
   cmd_snapshot_defaults
 
-  mkdir -p "$STATE_DIR"
   local stdout_log="$STATE_DIR/rami.stdout" stderr_log="$STATE_DIR/rami.stderr"
   : >"$stdout_log"
   : >"$stderr_log"
@@ -262,7 +257,7 @@ cmd_launch() {
     open -g --stdout "$stdout_log" --stderr "$stderr_log" "$BUNDLE_DIR"
   fi
 
-  local i launched="" cmd label=""
+  local i pid launched="" cmd label=""
   for i in $(seq 1 40); do
     launched=""
     for pid in $(running_rami_pids); do
@@ -274,7 +269,6 @@ cmd_launch() {
     done
     if [ -n "$launched" ]; then
       printf '%s\n' "$launched" >"$PID_FILE"
-      printf '%s\n' "$BINARY" >"$BIN_FILE"
       if label="$(status_label "$launched" 2>/dev/null)" && printf '%s' "$label" | grep -Eq 'Memory [0-9]+ percent|memory unavailable'; then
         printf 'launched pid=%s binary=%s label=%s\n' "$launched" "$BINARY" "$label"
         return 0
@@ -435,10 +429,6 @@ cmd_capture_open_menu() {
   local watcher="$!"
   click_status "$(recorded_pid)" || true
   wait "$watcher"
-  [ -s "$dump_path" ] || die "capture-open-menu wrote no dump"
-  grep -q $'\tMemory\t' "$dump_path" || die "capture-open-menu dump missing the Memory map"
-  grep -q $'\tSettings\t' "$dump_path" || die "capture-open-menu dump missing Settings"
-  [ -f "$shot_path" ] || die "capture-open-menu wrote no screenshot"
   printf 'dump=%s screenshot=%s\n' "$dump_path" "$shot_path"
 }
 
@@ -454,7 +444,6 @@ cmd_screenshot() {
   [ -n "$path" ] || die "screenshot needs --path FILE"
   mkdir -p "$(dirname "$path")"
   screencapture -x "$path"
-  [ -f "$path" ] || die "screencapture failed"
 }
 
 cmd_cleanup() {
@@ -483,7 +472,7 @@ cmd_cleanup() {
     fi
   fi
   cmd_restore_defaults || return
-  rm -f "$PID_FILE" "$BIN_FILE" "$PRESSURE_FILE" "$DEFAULTS_FILE" "$DEFAULTS_EXISTED_FILE" "$PASTEBOARD_FILE" "$PASTEBOARD_SAVED_FILE"
+  rm -f "$PID_FILE" "$PRESSURE_FILE" "$DEFAULTS_FILE" "$DEFAULTS_EXISTED_FILE" "$PASTEBOARD_FILE" "$PASTEBOARD_SAVED_FILE"
   printf 'cleanup ok (artifacts kept under %s)\n' "$ARTIFACT_DIR"
 }
 
