@@ -121,10 +121,6 @@ pushing it. A `v*` tag publishes a public release immediately.
 
 - `scripts/build-app.sh` builds the release binary and assembles `rami.app`.
 - `scripts/release.sh` builds the release DMG.
-- `scripts/install.sh` is the `curl | bash` end-user installer (downloads
-  the latest GitHub release DMG, verifies it against its published `.sha256`,
-  copies into `/Applications`, ejects the DMG, launches). curl sets no
-  quarantine flag, so this copy skips the Open Anyway step.
 - `macos/Info.plist` configures accessory-app behavior with `LSUIElement`.
 - `scripts/generate-icon.swift` draws the app icon and emits the `.icns`.
 - `CFBundleShortVersionString` / `CFBundleVersion` are templated from
