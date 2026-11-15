@@ -25,7 +25,10 @@
 //! There is no clock port: every cadence is tick-counted and driven by events.
 
 use crate::login_item::LaunchAtLoginStatus;
-use crate::model::{CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemorySnapshot};
+use crate::model::{
+    classify_pressure, CpuModuleState, CpuSnapshot, GpuModuleState, GpuSnapshot, MemoryPressure,
+    MemorySnapshot,
+};
 use crate::settings::Settings;
 use crate::share::{SharedMac, SharedReading};
 use crate::trend::{MemoryTrend, MemoryTrendTracker};
@@ -40,6 +43,11 @@ pub(crate) const REFRESH_TICK_SECONDS: f64 = 5.0;
 /// A shared reading older than this many ticks (~60 s) shows as Loading
 /// when the menu opens, instead of as current.
 const SHARED_STALE_TICKS: u8 = 12;
+
+/// The pressure command can run again once Pressure has read Normal for this
+/// many ticks in a row (~60 s), so a reading that hovers at the Warning edge
+/// does not run it every tick.
+const PRESSURE_COMMAND_REARM_TICKS: u8 = 12;
 
 /// Everything the outside world can tell the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +107,8 @@ pub(crate) enum Effect {
     /// Arm the short one-shot that later delivers `ReopenMenuTimerFired`.
     ScheduleMenuReopen,
     PopUpMenu,
+    /// Pressure reached Warning: run the command the user set.
+    RunPressureCommand,
     /// Build the diagnostic report from this state and copy it.
     CopyDiagnostics {
         launch_at_login: LaunchAtLoginStatus,
@@ -188,6 +198,9 @@ pub(crate) struct RefreshEngine<S, R, L> {
     last_gpu_state: GpuModuleState,
     trend_tracker: MemoryTrendTracker,
     menu_reopen_for: Option<Setting>,
+    pressure_command_set: bool,
+    pressure_command_armed: bool,
+    normal_pressure_ticks: u8,
 }
 
 impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
@@ -212,7 +225,17 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
             last_gpu_state: GpuModuleState::Unavailable,
             trend_tracker: MemoryTrendTracker::new(),
             menu_reopen_for: None,
+            pressure_command_set: false,
+            pressure_command_armed: true,
+            normal_pressure_ticks: 0,
         }
+    }
+
+    /// The user set a pressure command, so the engine asks the shell to run
+    /// it when Pressure reaches Warning.
+    pub(crate) fn with_pressure_command(mut self) -> Self {
+        self.pressure_command_set = true;
+        self
     }
 
     /// The single entry point: feed one event, perform the returned effects
@@ -369,6 +392,9 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 self.last_snapshot = Some(snapshot);
                 let trend = self.update_trend(manual, snapshot.used_bytes);
                 out.push(Effect::Render(Render::Gauge { snapshot, trend }));
+                if !manual {
+                    self.check_pressure_command(snapshot.pressure_percent, out);
+                }
                 if self.menu_open {
                     self.drain_shared_fetch();
                     if self.shared_visible() && !self.shared_fetch_in_flight {
@@ -387,6 +413,28 @@ impl<S: Samplers, R: ScanRunner, L: LaunchAtLogin> RefreshEngine<S, R, L> {
                 eprintln!("memory sample failed: {err}");
                 self.last_snapshot = None;
                 out.push(Effect::Render(Render::Placeholder));
+            }
+        }
+    }
+
+    /// Run the pressure command once when a timer tick reads Warning or
+    /// Critical, then hold it until Pressure has stayed Normal for
+    /// `PRESSURE_COMMAND_REARM_TICKS`. Only ticks count: a menu open or a
+    /// toggle is no elapsed time, so it neither runs the command nor rearms it.
+    fn check_pressure_command(&mut self, pressure_percent: u8, out: &mut Vec<Effect>) {
+        if !self.pressure_command_set {
+            return;
+        }
+        if classify_pressure(pressure_percent) == MemoryPressure::Normal {
+            self.normal_pressure_ticks = self.normal_pressure_ticks.saturating_add(1);
+            if self.normal_pressure_ticks >= PRESSURE_COMMAND_REARM_TICKS {
+                self.pressure_command_armed = true;
+            }
+        } else {
+            self.normal_pressure_ticks = 0;
+            if self.pressure_command_armed {
+                self.pressure_command_armed = false;
+                out.push(Effect::RunPressureCommand);
             }
         }
     }

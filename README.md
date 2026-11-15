@@ -46,6 +46,18 @@ memory, pressure, swap, CPU, and GPU then appear after the CPU and GPU rows:
 defaults write com.nicomontero.rami sharedMacHost <tailscale-name>
 ```
 
+rami can also run a command when memory pressure reaches Warning (88%), so
+the Mac gives memory back before it runs out. Set it once and relaunch rami:
+
+```sh
+defaults write com.nicomontero.rami pressureCommand '/opt/homebrew/bin/ollama stop <model>'
+```
+
+rami runs it once with `/bin/sh -c`, and again only after pressure has been
+Normal for about a minute. It needs Auto-Refresh on. Write full paths: rami
+does not load your shell profile. `defaults delete com.nicomontero.rami
+pressureCommand` turns it off.
+
 ## Install
 
 rami needs an Apple Silicon Mac with macOS 14 or later.

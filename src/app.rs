@@ -145,6 +145,7 @@ struct AppState {
     menu_open_drain_timer: RefCell<Option<Retained<NSTimer>>>,
     refresh_timer: RefCell<Option<Retained<NSTimer>>>,
     share_server: RefCell<Option<ShareServer>>,
+    pressure_command: Option<String>,
 }
 
 impl AppState {
@@ -177,6 +178,7 @@ impl AppState {
                     );
                 },
                 Effect::PopUpMenu => self.tray.pop_up_menu(),
+                Effect::RunPressureCommand => self.run_pressure_command(),
                 Effect::CopyDiagnostics {
                     launch_at_login,
                     memory,
@@ -213,6 +215,30 @@ impl AppState {
                 launch_at_login,
             } => self.tray.set_settings_state(settings, launch_at_login),
             Render::Placeholder => self.tray.set_placeholder(mtm),
+        }
+    }
+
+    /// Start the user's pressure command with `/bin/sh -c` and return at
+    /// once: the command may take as long as it likes, and the main thread
+    /// must not wait on it. A worker reaps it and reports a failure.
+    fn run_pressure_command(&self) {
+        let Some(command) = self.pressure_command.clone() else {
+            return;
+        };
+        let child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&command)
+            .stdin(std::process::Stdio::null())
+            .spawn();
+        match child {
+            Ok(mut child) => {
+                thread::spawn(move || match child.wait() {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => eprintln!("pressure command ended with {status}"),
+                    Err(err) => eprintln!("pressure command could not be waited on: {err}"),
+                });
+            }
+            Err(err) => eprintln!("pressure command failed to start: {err}"),
         }
     }
 
@@ -422,6 +448,7 @@ impl App {
         let settings_store = SettingsStore::new();
         let settings = settings_store.load();
         let shared_host = settings_store.shared_mac_host();
+        let pressure_command = settings_store.pressure_command();
         let tray = TrayController::new(mtm, refresh_target.clone().into(), shared_host.is_some());
         // NSMenu holds its delegate weakly; `AppState` retains the target for
         // the app lifetime, so the delegate stays valid.
@@ -437,6 +464,11 @@ impl App {
             LoginItemPort(LaunchAtLoginController::new()),
             settings,
         );
+        let engine = if pressure_command.is_some() {
+            engine.with_pressure_command()
+        } else {
+            engine
+        };
         let state = Rc::new(AppState {
             engine: RefCell::new(engine),
             tray,
@@ -445,6 +477,7 @@ impl App {
             menu_open_drain_timer: RefCell::new(None),
             refresh_timer: RefCell::new(None),
             share_server: RefCell::new(None),
+            pressure_command,
         });
         APP_STATE.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&state)));
         app.finishLaunching();

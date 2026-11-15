@@ -48,3 +48,4 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Copy diagnostics](./copy-diagnostics.md) covers the pasteboard report from Settings.
 - [Share over Tailscale](./share-over-tailscale.md) covers the Settings toggle and the shared reading on port 47960.
 - [Shared Mac](./shared-mac.md) covers the section that shows another Mac's shared reading.
+- [Pressure command](./pressure-command.md) covers the command rami runs when Pressure reaches Warning.

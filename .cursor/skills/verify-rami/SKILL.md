@@ -88,7 +88,7 @@ Standards:
 - Exercise the real status item and menu. Do not treat `cargo test` or engine fixtures as UI proof.
 - Capture the action and the resulting state: status-label before open, AX dump + screenshot of the open menu, and a second read after a mutation.
 - Side effects: settings keys via `defaults read com.nicomontero.rami`; diagnostics via the pasteboard (`pbpaste` must start with `rami diagnostics`).
-- `RAMI_FORCE_PRESSURE` is a compiled-in preview hook, not a mock. It changes displayed pressure percent and the accent derived from it, nothing else. Warning is 88%, Critical is 95%. Confirm the Pressure AX value, not only the screenshot tint.
+- `RAMI_FORCE_PRESSURE` is a compiled-in preview hook, not a mock. It changes displayed pressure percent and the accent derived from it, and with `pressureCommand` set a forced `warning` or `critical` runs that command. Warning is 88%, Critical is 95%. Confirm the Pressure AX value, not only the screenshot tint.
 - Screenshots can include unrelated windows. Open the dump and the image before treating them as proof.
 
 ## Cleanup

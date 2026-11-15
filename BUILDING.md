@@ -64,7 +64,8 @@ RAMI_FORCE_PRESSURE=normal   ./target/release/rami
 
 Accepts those three names only, case-insensitively; anything else logs a warning
 and is ignored. Read once at startup, so changing it needs a relaunch. It affects
-the displayed pressure percent and the accent derived from it, nothing else.
+the displayed pressure percent, the accent derived from it, and the pressure
+command: with `pressureCommand` set, a forced `warning` or `critical` runs it.
 
 This is a development hook, but it is compiled into release builds deliberately —
 `build-app.sh` produces a release bundle, so gating it out would make it useless

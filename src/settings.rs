@@ -8,6 +8,7 @@ const KEY_SHOW_GPU: &str = "showGpu";
 const KEY_SHARE: &str = "shareOverTailscale";
 const KEY_SHOW_SHARED_MAC: &str = "showSharedMac";
 const KEY_SHARED_MAC_HOST: &str = "sharedMacHost";
+const KEY_PRESSURE_COMMAND: &str = "pressureCommand";
 
 /// User-toggleable settings that persist across launches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,12 +72,22 @@ impl SettingsStore {
     /// The tailnet host whose shared reading the dropdown shows, set once
     /// with `defaults write com.nicomontero.rami sharedMacHost <host>`.
     pub fn shared_mac_host(&self) -> Option<String> {
-        let host = self
+        self.read_string(KEY_SHARED_MAC_HOST)
+    }
+
+    /// The command rami runs when Pressure reaches Warning, set once with
+    /// `defaults write com.nicomontero.rami pressureCommand '<command>'`.
+    pub fn pressure_command(&self) -> Option<String> {
+        self.read_string(KEY_PRESSURE_COMMAND)
+    }
+
+    fn read_string(&self, key: &str) -> Option<String> {
+        let value = self
             .defaults
-            .stringForKey(&NSString::from_str(KEY_SHARED_MAC_HOST))?
+            .stringForKey(&NSString::from_str(key))?
             .to_string();
-        let host = host.trim();
-        (!host.is_empty()).then(|| host.to_string())
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
     }
 
     fn read_bool(&self, key: &str, default: bool) -> bool {

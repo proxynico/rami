@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::PressureSource;
+use crate::model::{PressureSource, CRITICAL_PRESSURE_PCT, WARNING_PRESSURE_PCT};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -14,6 +14,8 @@ struct FakeSamplers {
     cpu_resets: usize,
     memory_fails: bool,
     used_bytes: u64,
+    /// Pressure for the next samples; `None` reads the fixture's Normal 20%.
+    pressure_percent: Option<u8>,
     /// Mirrors `CpuTracker`: the first CPU sample after construction or
     /// `reset_cpu` has no delta baseline and reports `None`.
     cpu_has_baseline: bool,
@@ -34,7 +36,11 @@ impl Samplers for FakeSamplers {
         if self.memory_fails {
             Err(io::Error::other("no host stats"))
         } else {
-            Ok(snapshot(self.used_bytes))
+            let snapshot = snapshot(self.used_bytes);
+            Ok(MemorySnapshot {
+                pressure_percent: self.pressure_percent.unwrap_or(snapshot.pressure_percent),
+                ..snapshot
+            })
         }
     }
 
@@ -714,4 +720,67 @@ fn an_answer_from_before_the_menu_closed_is_never_shown() {
         Some(SharedMac::Loading { title: None })
     );
     assert_eq!(scans.shared_starts(), 2, "the reopen asks again");
+}
+
+// --- pressure command -------------------------------------------------
+
+fn pressure_command_engine() -> TestEngine {
+    let (engine, _) = engine_on();
+    let mut engine = engine.with_pressure_command();
+    engine.step(Event::Startup);
+    engine
+}
+
+fn runs_pressure_command(effects: &[Effect]) -> bool {
+    effects.contains(&Effect::RunPressureCommand)
+}
+
+#[test]
+fn the_pressure_command_runs_once_when_a_tick_reads_warning() {
+    let mut engine = pressure_command_engine();
+    assert!(!runs_pressure_command(&engine.step(Event::Tick)));
+
+    engine.samplers.pressure_percent = Some(WARNING_PRESSURE_PCT);
+    assert!(runs_pressure_command(&engine.step(Event::Tick)));
+    // Still at Warning, and on to Critical: it already ran.
+    assert!(!runs_pressure_command(&engine.step(Event::Tick)));
+    engine.samplers.pressure_percent = Some(CRITICAL_PRESSURE_PCT);
+    assert!(!runs_pressure_command(&engine.step(Event::Tick)));
+}
+
+#[test]
+fn the_pressure_command_can_run_again_after_a_minute_of_normal() {
+    let mut engine = pressure_command_engine();
+    engine.samplers.pressure_percent = Some(WARNING_PRESSURE_PCT);
+    assert!(runs_pressure_command(&engine.step(Event::Tick)));
+
+    // A reading that dips to Normal for less than a minute does not rearm it.
+    engine.samplers.pressure_percent = None;
+    for _ in 0..PRESSURE_COMMAND_REARM_TICKS - 1 {
+        engine.step(Event::Tick);
+    }
+    engine.samplers.pressure_percent = Some(WARNING_PRESSURE_PCT);
+    assert!(!runs_pressure_command(&engine.step(Event::Tick)));
+
+    engine.samplers.pressure_percent = None;
+    for _ in 0..PRESSURE_COMMAND_REARM_TICKS {
+        engine.step(Event::Tick);
+    }
+    engine.samplers.pressure_percent = Some(WARNING_PRESSURE_PCT);
+    assert!(runs_pressure_command(&engine.step(Event::Tick)));
+}
+
+#[test]
+fn only_a_tick_with_a_command_set_runs_the_pressure_command() {
+    // No command set: Critical pressure asks the shell for nothing.
+    let (mut engine, _) = engine_on();
+    engine.step(Event::Startup);
+    engine.samplers.pressure_percent = Some(CRITICAL_PRESSURE_PCT);
+    assert!(!runs_pressure_command(&engine.step(Event::Tick)));
+
+    // A menu open samples but is no tick, so it leaves the run to the tick.
+    let mut engine = pressure_command_engine();
+    engine.samplers.pressure_percent = Some(CRITICAL_PRESSURE_PCT);
+    assert!(!runs_pressure_command(&engine.step(Event::MenuWillOpen)));
+    assert!(runs_pressure_command(&engine.step(Event::Tick)));
 }

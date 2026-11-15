@@ -50,6 +50,12 @@ concept used for the pressure fallback; not shown in the breakdown legend.
 **Swap**:
 Bytes of swap in use. Shown conditionally, only when non-zero.
 
+**Pressure command**:
+The one command the user set, in the `pressureCommand` default, for rami to
+run when Pressure reaches Warning. It runs once, and again only after
+Pressure has read Normal for about a minute.
+_Avoid_: alert, hook, action
+
 ### CPU
 
 **CPU row**:

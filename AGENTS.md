@@ -145,6 +145,23 @@ ask fails. The section takes the shared Mac's own pressure accent. The
 status item and its icon stay this Mac's. Show Shared Mac in Settings
 hides the section; it appears only when a host is set.
 
+### Pressure command
+
+rami can run one command when Pressure reaches Warning, so a Mac short
+of memory can give some back, for example by unloading a local model.
+The user sets it with `defaults write com.nicomontero.rami
+pressureCommand '<command>'`, read at launch. There is no menu row for
+it, and with no command set nothing runs.
+
+A timer tick that reads Warning or Critical runs the command once, with
+`/bin/sh -c`, without waiting for it. It can run again after Pressure
+has read Normal for about a minute. Only ticks run it, so it needs
+Auto-Refresh on. `RAMI_FORCE_PRESSURE` runs it too.
+
+This is the one place rami acts on a reading. rami runs only the
+command the user wrote: it never chooses, pauses, or stops a process
+itself.
+
 ### Launch at login
 
 `SMAppService.mainAppService().status` is the only launch-at-login
