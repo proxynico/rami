@@ -238,7 +238,7 @@ fn local_address() -> SocketAddr {
 
 fn serve(listener: TcpListener, stop: &AtomicBool) {
     let mut memory = match MemorySampler::new() {
-        Ok(memory) => memory,
+        Ok(memory) => memory.reading_swap_every_sample(),
         Err(err) => {
             eprintln!("share: memory sampler failed: {err}");
             return;

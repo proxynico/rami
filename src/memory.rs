@@ -225,10 +225,12 @@ pub struct MemorySampler {
     total_bytes: u64,
     page_size: u64,
     cached_swap_used_bytes: u64,
+    swap_refresh_interval: u8,
     ticks_until_swap_refresh: u8,
 }
 
 impl MemorySampler {
+    /// Samples between swap reads for a caller on the 5 s tick: about 30 s.
     const SWAP_REFRESH_INTERVAL_TICKS: u8 = 6;
 
     pub fn new() -> io::Result<Self> {
@@ -241,8 +243,17 @@ impl MemorySampler {
             total_bytes,
             page_size,
             cached_swap_used_bytes: 0,
+            swap_refresh_interval: Self::SWAP_REFRESH_INTERVAL_TICKS,
             ticks_until_swap_refresh: 0,
         })
+    }
+
+    /// Read swap on every sample. For a caller that samples only when asked,
+    /// such as the share listener: counting its samples would let the swap
+    /// it reports age by however long the asks are apart.
+    pub fn reading_swap_every_sample(mut self) -> Self {
+        self.swap_refresh_interval = 1;
+        self
     }
 
     pub fn sample(&mut self) -> io::Result<MemorySnapshot> {
@@ -302,7 +313,7 @@ impl MemorySampler {
     fn swap_used_bytes(&mut self) -> io::Result<u64> {
         if self.ticks_until_swap_refresh == 0 {
             self.cached_swap_used_bytes = read_swap_used_bytes()?;
-            self.ticks_until_swap_refresh = Self::SWAP_REFRESH_INTERVAL_TICKS - 1;
+            self.ticks_until_swap_refresh = self.swap_refresh_interval - 1;
         } else {
             self.ticks_until_swap_refresh -= 1;
         }
@@ -353,8 +364,25 @@ fn total_memory_bytes() -> io::Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_stats_count, validate_sysctl_size, REQUIRED_STATS_COUNT};
+    use super::{validate_stats_count, validate_sysctl_size, MemorySampler, REQUIRED_STATS_COUNT};
     use libc::HOST_VM_INFO64_COUNT;
+
+    #[test]
+    fn swap_is_reread_on_the_sampler_s_own_cadence() {
+        let mut ticking = MemorySampler::new().expect("sampler");
+        ticking.sample().expect("sample");
+        assert_eq!(
+            ticking.ticks_until_swap_refresh,
+            MemorySampler::SWAP_REFRESH_INTERVAL_TICKS - 1
+        );
+
+        // The share listener: every answer carries swap read for that answer.
+        let mut asked = MemorySampler::new()
+            .expect("sampler")
+            .reading_swap_every_sample();
+        asked.sample().expect("sample");
+        assert_eq!(asked.ticks_until_swap_refresh, 0);
+    }
 
     #[test]
     fn validate_sysctl_size_rejects_mismatched_byte_count() {
