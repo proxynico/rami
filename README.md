@@ -50,7 +50,7 @@ rami can also run a command when memory pressure reaches Warning (88%), so
 the Mac gives memory back before it runs out. Set it once and relaunch rami:
 
 ```sh
-defaults write com.nicomontero.rami pressureCommand '/opt/homebrew/bin/ollama stop <model>'
+defaults write com.nicomontero.rami pressureCommand -string '/opt/homebrew/bin/ollama stop <model>'
 ```
 
 rami runs it once with `/bin/sh -c`, and again only after pressure has been

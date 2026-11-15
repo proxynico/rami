@@ -150,8 +150,8 @@ hides the section; it appears only when a host is set.
 rami can run one command when Pressure reaches Warning, so a Mac short
 of memory can give some back, for example by unloading a local model.
 The user sets it with `defaults write com.nicomontero.rami
-pressureCommand '<command>'`, read at launch. There is no menu row for
-it, and with no command set nothing runs.
+pressureCommand -string '<command>'`, read at launch. There is no menu
+row for it, and with no command set nothing runs.
 
 A timer tick that reads Warning or Critical runs the command once, with
 `/bin/sh -c`, without waiting for it. It can run again after Pressure

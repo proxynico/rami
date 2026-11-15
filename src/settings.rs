@@ -76,7 +76,7 @@ impl SettingsStore {
     }
 
     /// The command rami runs when Pressure reaches Warning, set once with
-    /// `defaults write com.nicomontero.rami pressureCommand '<command>'`.
+    /// `defaults write com.nicomontero.rami pressureCommand -string '<command>'`.
     pub fn pressure_command(&self) -> Option<String> {
         self.read_string(KEY_PRESSURE_COMMAND)
     }
